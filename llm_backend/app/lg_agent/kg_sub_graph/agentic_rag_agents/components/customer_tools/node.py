@@ -126,7 +126,7 @@ def create_vector_search_query_node(
             vector_store = VectorStoreQuery()
 
             # 1. 向量检索
-            vector_results = vector_store.search(query, top_k=10)
+            vector_results = vector_store.search(query, top_k=settings.VECTOR_SEARCH_TOP_K)
 
             # 2. 混合检索：用向量库的全部文档构建 HybridRetriever 语料库
             try:
@@ -136,7 +136,7 @@ def create_vector_search_query_node(
                         documents=all_docs,
                         text_key="text",
                     )
-                    hybrid_results = retriever.search(query, top_k=5, retrieval_top_n=20)
+                    hybrid_results = retriever.search(query, top_k=settings.HYBRID_RETRIEVAL_TOP_K, retrieval_top_n=settings.HYBRID_RETRIEVAL_TOP_N)
                     logger.info(f"混合检索补充了 {len(hybrid_results)} 条文档")
             except Exception as e:
                 logger.warning(f"混合检索失败，跳过: {e}")
@@ -156,13 +156,13 @@ def create_vector_search_query_node(
                     grader_llm = ChatDeepSeek(
                         api_key=settings.DEEPSEEK_API_KEY,
                         model=settings.DEEPSEEK_MODEL,
-                        temperature=0,
+                        temperature=settings.LLM_GRADER_TEMPERATURE,
                     )
                 else:
                     grader_llm = ChatOllama(
                         model=settings.OLLAMA_AGENT_MODEL,
                         base_url=settings.OLLAMA_BASE_URL,
-                        temperature=0,
+                        temperature=settings.LLM_GRADER_TEMPERATURE,
                     )
 
                 hybrid_results = await grade_relevance(

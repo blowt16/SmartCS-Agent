@@ -198,14 +198,14 @@ async def generate_testset(
         llm = ChatDeepSeek(
             api_key=settings.DEEPSEEK_API_KEY,
             model_name=settings.DEEPSEEK_MODEL,
-            temperature=0.8,
+            temperature=settings.LLM_GENERATION_TEMPERATURE,
         )
     else:
         from langchain_ollama import ChatOllama
         llm = ChatOllama(
             model=settings.OLLAMA_AGENT_MODEL,
             base_url=settings.OLLAMA_BASE_URL,
-            temperature=0.8,
+            temperature=settings.LLM_GENERATION_TEMPERATURE,
         )
 
     # 从 Neo4j 抽取数据

@@ -62,9 +62,9 @@ def create_cypher_query_node(
         # 使用大模型执行查询/多跳/并行查询计划
         # 1. 根据.env文件中AGENT_SERVICE的设置，选择使用DeepSeek或Ollama启动的模型服务
         if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-            model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["research_plan"])
+            model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
         else:
-            model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["research_plan"])
+            model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
 
         # 2. 获取Neo4j图数据库连接
         try:

@@ -186,13 +186,13 @@ async def evaluate(
         from langchain_deepseek import ChatDeepSeek
         judge_llm = ChatDeepSeek(
             api_key=settings.DEEPSEEK_API_KEY,
-            model_name=settings.DEEPSEEK_MODEL, temperature=0,
+            model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_GRADER_TEMPERATURE,
         )
     else:
         from langchain_ollama import ChatOllama
         judge_llm = ChatOllama(
             model=settings.OLLAMA_AGENT_MODEL,
-            base_url=settings.OLLAMA_BASE_URL, temperature=0,
+            base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_GRADER_TEMPERATURE,
         )
 
     # 逐条评估

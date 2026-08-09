@@ -73,7 +73,21 @@ class Settings(BaseSettings):
 
     # Relevance grading settings
     RELEVANCE_GRADING_ENABLED: bool = True                  # 是否启用相关性评分
-    
+
+    # Chunking settings
+    CHUNK_SIZE: int = 500                                   # 文本分块大小
+    CHUNK_OVERLAP: int = 50                                 # 分块重叠大小
+
+    # RAG retrieval settings
+    VECTOR_SEARCH_TOP_K: int = 10                           # 向量检索返回数
+    HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数
+    HYBRID_RETRIEVAL_TOP_N: int = 20                        # 混合检索候选数
+
+    # LLM temperature settings
+    LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
+    LLM_GRADER_TEMPERATURE: float = 0.0                     # 评分/评估 LLM 温度
+    LLM_GENERATION_TEMPERATURE: float = 0.8                 # 测试数据生成温度
+
     @property
     def DATABASE_URL(self) -> str:
         return f"mysql+aiomysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

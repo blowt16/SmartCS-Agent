@@ -26,8 +26,8 @@ class IndexingService:
     def __init__(self):
         # 文本分割器 — 复用 P0 智能分块的参数
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
+            chunk_size=settings.CHUNK_SIZE,
+            chunk_overlap=settings.CHUNK_OVERLAP,
             separators=["\n\n", "\n", "。", "！", "？", "，", " ", ""],
         )
 

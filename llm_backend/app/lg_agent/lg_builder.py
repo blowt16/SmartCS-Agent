@@ -83,10 +83,10 @@ async def analyze_and_route_query(
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["router"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
         logger.info(f"Using DeepSeek model: {settings.DEEPSEEK_MODEL}")
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["router"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
         logger.info(f"Using Ollama model: {settings.OLLAMA_AGENT_MODEL}")
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话）
@@ -159,9 +159,9 @@ async def respond_to_general_query(
     
     # 使用大模型生成回复
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["general_query"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"])
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["general_query"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"])
     
     system_prompt = GENERAL_QUERY_SYSTEM_PROMPT.format(
         logic=state.router["logic"]
@@ -196,9 +196,9 @@ async def get_additional_info(
     
     # 使用大模型生成回复
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["additional_info"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"])
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["additional_info"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"])
 
     # 如果用户的问题是电商相关，但与自己的业务无关，则需要返回"无关问题"
 
@@ -387,9 +387,9 @@ async def create_image_query(
                     
                     # 构建回复请求
                     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-                        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["image_query"])
+                        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"])
                     else:
-                        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["image_query"])
+                        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"])
                     # 使用专门的图片查询提示模板
                     system_prompt = GET_IMAGE_SYSTEM_PROMPT.format(
                         image_description=image_description
@@ -437,9 +437,9 @@ async def create_research_plan(
 
     # 使用大模型生成查询/多跳、并行查询计划
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["research_plan"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["research_plan"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
 
     # P1 新增：根据查询复杂度选择最优策略
     # 从路由阶段获取复杂度信息，使用 .get() 安全访问（兼容旧版本）
@@ -594,9 +594,9 @@ async def check_hallucinations(
         dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
     """
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["hallucinations"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["hallucinations"])
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["hallucinations"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["hallucinations"])
     
     system_prompt = CHECK_HALLUCINATIONS.format(
         documents=state.documents,
