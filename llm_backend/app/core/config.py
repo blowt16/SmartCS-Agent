@@ -73,7 +73,6 @@ class Settings(BaseSettings):
 
     # Relevance grading settings
     RELEVANCE_GRADING_ENABLED: bool = True                  # 是否启用相关性评分
-    RELEVANCE_THRESHOLD: int = 2                            # 相关结果最低条数（低于此值记录告警）
     
     @property
     def DATABASE_URL(self) -> str:

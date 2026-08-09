@@ -1,5 +1,4 @@
 from typing import Any, Callable, Coroutine, Dict, List
-import asyncio
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from pydantic import BaseModel, Field
