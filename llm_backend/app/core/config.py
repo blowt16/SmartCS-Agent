@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     # Embedding settings
     EMBEDDING_TYPE: str = "ollama"  # ollama 或 sentence_transformer
     EMBEDDING_MODEL: str = "bge-m3"  # ollama embedding模型
-    EMBEDDING_DIMENSION: int = 384  # 向量维度（MiniLM=384, bge-m3=1024）
+    EMBEDDING_DIMENSION: int = 1024  # 向量维度（MiniLM=384, bge-m3=1024）
     EMBEDDING_THRESHOLD: float = 0.90  # 语义相似度阈值
     
     # Vector DB settings (ChromaDB)
