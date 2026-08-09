@@ -2,8 +2,8 @@ from pydantic_settings import BaseSettings
 from enum import Enum
 from pathlib import Path
 
-# 获取项目根目录
-ROOT_DIR = Path(__file__).parent.parent.parent
+# 获取项目根目录（llm_backend 的父目录）
+ROOT_DIR = Path(__file__).parent.parent.parent.parent
 ENV_FILE = ROOT_DIR / ".env"
 
 class ServiceType(str, Enum):
