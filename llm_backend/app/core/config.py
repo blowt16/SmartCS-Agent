@@ -10,6 +10,12 @@ class ServiceType(str, Enum):
     DEEPSEEK = "deepseek"
     OLLAMA = "ollama"
 
+
+class EmbeddingServiceType(str, Enum):
+    LOCAL = "local"      # 本地 SentenceTransformer（离线）
+    OLLAMA = "ollama"    # Ollama HTTP API
+    QWEN = "qwen"        # 通义千问 API（OpenAI-compatible）
+
 class Settings(BaseSettings):
     # Deepseek settings
     DEEPSEEK_API_KEY: str
@@ -69,10 +75,15 @@ class Settings(BaseSettings):
     REDIS_CACHE_CLEANUP_INTERVAL: int = 3600                # 缓存清理间隔（秒）
     
     # Embedding settings
-    EMBEDDING_TYPE: str = "ollama"  # ollama 或 sentence_transformer
-    EMBEDDING_MODEL: str = "bge-m3"  # ollama embedding模型
-    EMBEDDING_DIMENSION: int = 1024  # 向量维度（MiniLM=384, bge-m3=1024）
-    EMBEDDING_THRESHOLD: float = 0.90  # 语义相似度阈值
+    EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen
+    EMBEDDING_MODEL: str = "bge-m3"                 # 本地/通用 Embedding 模型名
+    EMBEDDING_DIMENSION: int = 1024                 # 向量维度（bge-m3=1024）
+    EMBEDDING_THRESHOLD: float = 0.90               # 语义相似度阈值
+
+    # Qwen Embedding API（OpenAI-compatible / DashScope）
+    QWEN_EMBEDDING_API_KEY: str = ""
+    QWEN_EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    QWEN_EMBEDDING_MODEL: str = "text-embedding-v4"
     
     # Vector DB settings (ChromaDB)
     VECTOR_DB_PATH: str = str(ROOT_DIR / "vector_db")   # ChromaDB 持久化目录

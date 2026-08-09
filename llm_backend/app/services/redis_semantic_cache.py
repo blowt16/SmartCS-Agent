@@ -4,9 +4,9 @@ import hashlib
 import numpy as np
 import json
 import time
-import aiohttp
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.services.embedding_provider import get_embedding_provider
 import asyncio
 from datetime import datetime
 
@@ -14,56 +14,34 @@ logger = get_logger(service="redis_cache")
 
 class RedisSemanticCache:
     """基于语义的 Redis 缓存实现"""
-    
+
     def __init__(
         self,
         redis_url: str = None,
-        model_name: str = None,
         score_threshold: float = None,
         prefix: str = None,
-        user_id: Optional[int] = None,  # 添加用户ID
-        max_cache_size: int = None,  # 每个用户最大缓存条数
-        cleanup_interval: int = None  # 清理间隔(秒)
+        user_id: Optional[int] = None,
+        max_cache_size: int = None,
+        cleanup_interval: int = None
     ):
         self.redis = redis.from_url(redis_url or settings.REDIS_URL)
-        self.model_name = model_name or settings.OLLAMA_EMBEDDING_MODEL
         self.score_threshold = score_threshold or settings.REDIS_CACHE_THRESHOLD
         self.prefix = prefix if prefix is not None else settings.REDIS_CACHE_PREFIX
         self.max_cache_size = max_cache_size if max_cache_size is not None else settings.REDIS_CACHE_MAX_SIZE
         self.cleanup_interval = cleanup_interval if cleanup_interval is not None else settings.REDIS_CACHE_CLEANUP_INTERVAL
-        self.prefix = f"{prefix}:{user_id}" if user_id else prefix
-        self.max_cache_size = max_cache_size
-        self.cleanup_interval = cleanup_interval
-        
+        self.prefix = f"{self.prefix}:{user_id}" if user_id else self.prefix
+        self._embedding_provider = get_embedding_provider()
+
         # 启动自动清理任务
         asyncio.create_task(self._auto_cleanup())
-        
-    async def _get_ollama_embedding(self, text: str) -> List[float]:
-        """使用Ollama生成文本向量"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{settings.OLLAMA_BASE_URL}/api/embed",
-                    json={
-                        "model": self.model_name,
-                        "input": text  # 使用 input 而不是 prompt
-                    }
-                ) as response:
-                    result = await response.json()
-                    # Ollama embed API 返回格式为 {"embeddings": [[...], ...]}
-                    return result["embeddings"][0]  # 返回第一个向量
-        except Exception as e:
-            logger.error(f"Error getting Ollama embedding: {str(e)}", exc_info=True)
-            raise
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """获取文本向量"""
+        """使用统一 Embedding Provider 获取文本向量"""
         try:
-            # 直接使用 ollama 的 embedding 接口
-            embedding = await self._get_ollama_embedding(text)
-            if not embedding:
+            embeddings = await self._embedding_provider.embed([text])
+            if not embeddings or not embeddings[0]:
                 raise ValueError("Failed to get embedding")
-            return embedding
+            return embeddings[0]
         except Exception as e:
             logger.error(f"Error in get_embedding: {str(e)}", exc_info=True)
             raise
