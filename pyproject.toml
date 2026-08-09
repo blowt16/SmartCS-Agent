@@ -12,7 +12,8 @@ dependencies = [
     "faiss-cpu",
     "fastapi>=0.68.0",
     "gputil>=1.4.0",
-    "graphrag==2.1.0",
+    "chromadb>=0.4.0",
+    "langchain-text-splitters>=0.3.0",
     "httpx>=0.24.0",
     "ipython==9.1.0",
     "langchain-community==0.3.21",
@@ -41,9 +42,6 @@ dependencies = [
     "tenacity>=8.0.0",
     "uvicorn>=0.15.0",
 ]
-
-[tool.uv.extra-build-dependencies]
-pyarrow = ["setuptools<67"]
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"

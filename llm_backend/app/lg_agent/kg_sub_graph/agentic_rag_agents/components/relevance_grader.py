@@ -9,7 +9,7 @@
     做二值评分（relevant / irrelevant），只有通过评分的结果才会被
     传递给下游。
 
-    如果相关结果数量 < 阈值，会触发重新检索（切换 GraphRAG 搜索策略）。
+    如果相关结果数量 < 阈值，记录日志并返回已有结果。
 
 工作流程：
     检索结果 → LLM 逐条评分 → 过滤掉 irrelevant
@@ -154,26 +154,20 @@ async def grade_and_ensure_min_results(
     llm: BaseChatModel,
     query: str,
     documents: List[Dict[str, Any]],
-    graphrag_api=None,
     content_key: str = "text",
 ) -> List[Dict[str, Any]]:
     """
     相关性评分 + 自动重检索（如果相关结果不足）。
 
-    这是本模块的主入口函数。
-
     流程：
         1. 对检索结果做相关性评分
         2. 如果 relevant 结果 >= 阈值 -> 直接返回
-        3. 如果 relevant 结果 < 阈值 -> 切换 GraphRAG 策略重检索
-        4. 对重检索结果再次评分
-        5. 合并两次的 relevant 结果返回
+        3. 如果 relevant 结果 < 阈值 -> 直接返回已有结果（向量检索无多策略切换）
 
     Args:
         llm: 语言模型实例
         query: 用户查询
         documents: 初始检索结果
-        graphrag_api: GraphRAGAPI 实例（用于重检索）
         content_key: 文档文本字段名
 
     Returns:
@@ -187,93 +181,10 @@ async def grade_and_ensure_min_results(
     # 第二步：检查是否需要重检索
     if len(relevant_docs) >= threshold:
         logger.info(f"相关结果充足 ({len(relevant_docs)} >= {threshold})，无需重检索")
-        return relevant_docs
+    else:
+        logger.info(
+            f"相关结果不足 ({len(relevant_docs)} < {threshold})，"
+            f"向量检索无多策略切换，返回已有结果"
+        )
 
-    logger.info(
-        f"相关结果不足 ({len(relevant_docs)} < {threshold})，尝试切换策略重检索"
-    )
-
-    # 第三步：重检索
-    if graphrag_api is None:
-        logger.warning("未提供 GraphRAGAPI 实例，无法重检索")
-        return relevant_docs
-
-    retry_docs = await _retry_with_different_strategy(graphrag_api, query)
-
-    if not retry_docs:
-        logger.info("重检索未返回新结果")
-        return relevant_docs
-
-    # 第四步：对重检索结果评分
-    retry_relevant = await grade_relevance(llm, query, retry_docs, content_key)
-
-    # 第五步：合并（去重）
-    combined = _merge_and_deduplicate(relevant_docs, retry_relevant, content_key)
-
-    logger.info(
-        f"重检索后合并结果: 原始 {len(relevant_docs)} + 重检索 {len(retry_relevant)} "
-        f"-> 合并后 {len(combined)} 条"
-    )
-
-    return combined
-
-
-async def _retry_with_different_strategy(
-    graphrag_api,
-    query: str,
-) -> List[Dict[str, Any]]:
-    """
-    切换 GraphRAG 搜索策略进行重检索。
-
-    策略切换规则：
-        local  -> drift（local 只查局部，drift 能沿图谱关系扩展）
-        global -> local（global 太宏观，local 更精确）
-        drift  -> local（drift 没找到，退回 local）
-        basic  -> local（basic 最简单，升级到 local）
-    """
-    current_type = graphrag_api.query_type
-    strategy_map = {
-        "local": "drift",
-        "global": "local",
-        "drift": "local",
-        "basic": "local",
-    }
-    new_type = strategy_map.get(current_type, "local")
-
-    logger.info(f"重检索策略切换: {current_type} -> {new_type}")
-
-    # 临时修改查询类型
-    original_type = graphrag_api.query_type
-    graphrag_api.query_type = new_type
-
-    try:
-        result = await graphrag_api.query_graphrag(query)
-        response_text = result.get("response", "")
-
-        if response_text:
-            return [{"text": response_text, "source": f"graphrag_{new_type}_retry"}]
-        return []
-    except Exception as e:
-        logger.warning(f"重检索失败: {e}")
-        return []
-    finally:
-        # 恢复原始查询类型
-        graphrag_api.query_type = original_type
-
-
-def _merge_and_deduplicate(
-    docs_a: List[Dict[str, Any]],
-    docs_b: List[Dict[str, Any]],
-    text_key: str = "text",
-) -> List[Dict[str, Any]]:
-    """合并两组文档并按文本内容去重"""
-    seen = set()
-    merged = []
-
-    for doc in docs_a + docs_b:
-        text = doc.get(text_key, "")[:100] if isinstance(doc, dict) else str(doc)[:100]
-        if text not in seen:
-            seen.add(text)
-            merged.append(doc)
-
-    return merged
+    return relevant_docs

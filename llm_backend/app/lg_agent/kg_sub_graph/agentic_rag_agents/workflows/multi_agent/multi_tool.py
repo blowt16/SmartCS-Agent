@@ -25,7 +25,7 @@ from app.lg_agent.kg_sub_graph.agentic_rag_agents.retrievers.cypher_examples.bas
 # 导入预定义Cypher节点
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher import create_predefined_cypher_node
 # 导入自定义工具函数节点
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools import create_graphrag_query_node
+from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools import create_vector_search_query_node
 
 
 
@@ -65,7 +65,7 @@ def create_multi_tool_workflow(
     max_attempts: int = 3,
     attempt_cypher_execution_on_final_attempt: bool = False,
     default_to_text2cypher: bool = True,
-    tool_preference: Optional[str] = None,  # P1 新增：策略偏好，可选值为 "predefined_cypher", "cypher_query", "microsoft_graphrag_query"
+    tool_preference: Optional[str] = None,  # P1 新增：策略偏好，可选值为 "predefined_cypher", "cypher_query", "vector_search_query"
 ) -> CompiledStateGraph:
     """
     Create a multi tool Agent workflow using LangGraph.
@@ -118,7 +118,7 @@ def create_multi_tool_workflow(
         graph=graph, predefined_cypher_dict=predefined_cypher_dict
     )
 
-    customer_tools = create_graphrag_query_node()
+    customer_tools = create_vector_search_query_node()
 
     # 工具选择节点，根据用户的问题选择合适的工具
     # P1: 传入 tool_preference，当有明确策略偏好时直接走指定工具

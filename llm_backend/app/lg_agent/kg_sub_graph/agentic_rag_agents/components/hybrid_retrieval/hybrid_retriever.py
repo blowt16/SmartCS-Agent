@@ -49,7 +49,7 @@ class HybridRetriever:
     ):
         """
         Args:
-            documents: 文档语料列表（GraphRAG text_units）
+            documents: 文档语料列表（如向量库中的全部文档）
             text_key: 文档中用于检索的文本字段名
             embedding_model: 向量编码模型名称
         """

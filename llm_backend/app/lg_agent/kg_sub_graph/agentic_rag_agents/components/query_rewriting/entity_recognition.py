@@ -262,7 +262,7 @@ async def recognize_and_link_entities(
     流程：
         1. LLM 识别用户问题中的实体（产品名、类别名等）
         2. 在 Neo4j 中查找这些实体，获取节点 ID 和属性
-        3. 返回链接结果，供下游 Text2Cypher / GraphRAG 使用
+        3. 返回链接结果，供下游 Text2Cypher / 向量检索 使用
 
     Args:
         llm: 语言模型实例

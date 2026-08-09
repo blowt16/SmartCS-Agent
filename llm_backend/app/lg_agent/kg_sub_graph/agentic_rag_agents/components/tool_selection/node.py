@@ -45,7 +45,7 @@ def create_tool_selection_node(
     default_to_text2cypher : bool, optional
         Whether to attempt Text2Cypher if no tool calls are returned by the LLM, by default True
     tool_preference : Optional[str], optional
-        P1: 策略偏好，可选值为 "predefined_cypher", "cypher_query", "microsoft_graphrag_query"
+        P1: 策略偏好，可选值为 "predefined_cypher", "cypher_query", "vector_search_query"
         当有明确偏好时，直接走指定工具，跳过 LLM 选择，节省时间
 
     Returns
@@ -101,13 +101,13 @@ def create_tool_selection_node(
                     },
                 )
             )
-        elif tool_preference == "microsoft_graphrag_query":
+        elif tool_preference == "vector_search_query":
             return Command(
                 goto=Send(
                     "customer_tools",
                     {
                         "task": state.get("question", ""),
-                        "query_name": "microsoft_graphrag_query",
+                        "query_name": "vector_search_query",
                         "query_parameters": {},
                         "steps": ["tool_selection"],
                     },

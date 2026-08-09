@@ -450,13 +450,13 @@ async def create_research_plan(
     # 策略选择逻辑：
     # - 简单查询（complexity < 0.3 且不需要推理）→ 预定义 Cypher 模板（最快）
     # - 中等查询（0.3 <= complexity <= 0.7）→ Text2Cypher 动态生成
-    # - 复杂查询（complexity > 0.7 或需要推理）→ GraphRAG 检索（最强）
+    # - 复杂查询（complexity > 0.7 或需要推理）→ 向量检索（最强）
     if complexity < 0.3 and not reasoning_required:
         tool_preference = "predefined_cypher"
         logger.info(f"简单查询(complexity={complexity:.2f})，优先使用预定义 Cypher 策略")
     elif complexity > 0.7 or reasoning_required:
-        tool_preference = "microsoft_graphrag_query"
-        logger.info(f"复杂查询(complexity={complexity:.2f}, reasoning={reasoning_required})，使用 GraphRAG 策略")
+        tool_preference = "vector_search_query"
+        logger.info(f"复杂查询(complexity={complexity:.2f}, reasoning={reasoning_required})，使用向量检索策略")
     else:
         tool_preference = None  # 无偏好，让 LLM 自动选择
         logger.info(f"中等查询(complexity={complexity:.2f})，使用 LLM 自动选择工具策略")
@@ -474,8 +474,8 @@ async def create_research_plan(
     cypher_retriever = NorthwindCypherRetriever()
 
     # step 3. 定义工具模式列表    
-    from app.lg_agent.kg_sub_graph.kg_tools_list import cypher_query, predefined_cypher, microsoft_graphrag_query
-    tool_schemas: List[type[BaseModel]] = [cypher_query, predefined_cypher, microsoft_graphrag_query]
+    from app.lg_agent.kg_sub_graph.kg_tools_list import cypher_query, predefined_cypher, vector_search_query
+    tool_schemas: List[type[BaseModel]] = [cypher_query, predefined_cypher, vector_search_query]
 
     # 3. 预定义的Cypher查询 - 为电商场景定义有用的查询
     from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.cypher_dict import predefined_cypher_dict

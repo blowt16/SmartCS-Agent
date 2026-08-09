@@ -67,17 +67,9 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "bge-m3"  # ollama embedding模型
     EMBEDDING_THRESHOLD: float = 0.90  # 语义相似度阈值
     
-    # GraphRAG settings
-    GRAPHRAG_PROJECT_DIR: str = str(ROOT_DIR / "app" / "graphrag")  # GraphRAG项目目录（绝对路径）
-    GRAPHRAG_DATA_DIR: str = "data"                         # 数据目录名称
-    GRAPHRAG_QUERY_TYPE: str = "local"                      # 查询类型
-    GRAPHRAG_RESPONSE_TYPE: str = "text"                    # 响应类型
-    GRAPHRAG_COMMUNITY_LEVEL: int = 3                       # 社区级别
-    GRAPHRAG_DYNAMIC_COMMUNITY: bool = False                # 是否动态选择社区
-    # GraphRAG LLM 配置（settings.yaml 中 ${...} 引用）
-    GRAPHRAG_API_BASE: str = ""
-    GRAPHRAG_API_KEY: str = ""
-    GRAPHRAG_MODEL_NAME: str = ""
+    # Vector DB settings (ChromaDB)
+    VECTOR_DB_PATH: str = str(ROOT_DIR / "vector_db")   # ChromaDB 持久化目录
+    VECTOR_DB_COLLECTION: str = "smartcs_agent_docs"    # 集合名称
 
     # Relevance grading settings
     RELEVANCE_GRADING_ENABLED: bool = True                  # 是否启用相关性评分

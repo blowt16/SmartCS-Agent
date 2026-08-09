@@ -63,8 +63,8 @@ class predefined_cypher(BaseModel):
     query: str = Field(..., description="query the graph must include the question")
     parameters: dict = Field(..., description="parameters for the query to Neo4j")
 
-class microsoft_graphrag_query(BaseModel):
-    """如果用户问的问题是关于产品的故障、售后、保修、维修、退换货以及评价等，则使用这个工具"""
+class vector_search_query(BaseModel):
+    """如果用户问的问题是关于产品的故障、售后、保修、维修、退换货以及评价等，则使用这个工具进行向量检索"""
     query: str = Field(..., description="query the graph must include the question")
     
 
