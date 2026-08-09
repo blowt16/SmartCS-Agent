@@ -33,7 +33,7 @@ from .memory_compressor import ConversationSummary
 logger = get_logger(service="memory_cache")
 
 # 默认 TTL：24 小时
-DEFAULT_SUMMARY_TTL = 86400
+DEFAULT_SUMMARY_TTL = settings.MEMORY_CACHE_TTL
 
 
 class MemoryCache:

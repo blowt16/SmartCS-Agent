@@ -20,14 +20,17 @@ class RedisSemanticCache:
         redis_url: str = None,
         model_name: str = None,
         score_threshold: float = None,
-        prefix: str = "cache",
+        prefix: str = None,
         user_id: Optional[int] = None,  # 添加用户ID
-        max_cache_size: int = 1000,  # 每个用户最大缓存条数
-        cleanup_interval: int = 3600  # 清理间隔(秒)
+        max_cache_size: int = None,  # 每个用户最大缓存条数
+        cleanup_interval: int = None  # 清理间隔(秒)
     ):
         self.redis = redis.from_url(redis_url or settings.REDIS_URL)
         self.model_name = model_name or settings.OLLAMA_EMBEDDING_MODEL
         self.score_threshold = score_threshold or settings.REDIS_CACHE_THRESHOLD
+        self.prefix = prefix if prefix is not None else settings.REDIS_CACHE_PREFIX
+        self.max_cache_size = max_cache_size if max_cache_size is not None else settings.REDIS_CACHE_MAX_SIZE
+        self.cleanup_interval = cleanup_interval if cleanup_interval is not None else settings.REDIS_CACHE_CLEANUP_INTERVAL
         self.prefix = f"{prefix}:{user_id}" if user_id else prefix
         self.max_cache_size = max_cache_size
         self.cleanup_interval = cleanup_interval

@@ -25,6 +25,7 @@ from typing import List, Dict, Any, Optional
 from sentence_transformers import SentenceTransformer
 import numpy as np
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from .bm25_retriever import BM25Retriever
 from .rrf_fusion import rrf_fuse
@@ -45,7 +46,7 @@ class HybridRetriever:
         self,
         documents: List[Dict[str, Any]],
         text_key: str = "text",
-        embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2",
+        embedding_model: str = None,
     ):
         """
         Args:
@@ -53,6 +54,8 @@ class HybridRetriever:
             text_key: 文档中用于检索的文本字段名
             embedding_model: 向量编码模型名称
         """
+        if embedding_model is None:
+            embedding_model = settings.HYBRID_EMBEDDING_MODEL
         self.documents = documents
         self.text_key = text_key
         self.embedding_model_name = embedding_model

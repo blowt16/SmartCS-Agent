@@ -20,15 +20,16 @@ from typing import List, Dict, Any
 
 from sentence_transformers import CrossEncoder
 
+from app.core.config import settings
 from app.core.logger import get_logger
 
 logger = get_logger(service="reranker")
 
 # ==================== 默认配置 ====================
 
-DEFAULT_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
-DEFAULT_TOP_K = 5
-DEFAULT_MAX_LENGTH = 512
+DEFAULT_MODEL_NAME = settings.RERANKER_MODEL
+DEFAULT_TOP_K = settings.RERANKER_TOP_K
+DEFAULT_MAX_LENGTH = settings.RERANKER_MAX_LENGTH
 
 
 # ==================== 核心类 ====================

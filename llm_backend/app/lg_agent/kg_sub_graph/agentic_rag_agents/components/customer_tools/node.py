@@ -45,7 +45,7 @@ class VectorStoreQuery:
     def __init__(self):
         self.client = chromadb.PersistentClient(
             path=settings.VECTOR_DB_PATH,
-            settings=ChromaSettings(anonymized_telemetry=False),
+            settings=ChromaSettings(anonymized_telemetry=settings.CHROMADB_ANONYMIZED_TELEMETRY),
         )
 
         # Embedding 模型

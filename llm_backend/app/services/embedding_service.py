@@ -8,16 +8,17 @@ import os
 import hashlib
 import time
 import PyPDF2
+from app.core.config import settings
 
 class EmbeddingService:
     def __init__(self):
-        # 使用多语言模型以支持中文
-        self.model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        # 使用配置中的 Embedding 模型
+        self.model = SentenceTransformer(settings.EMBEDDING_MODEL)
         self.index_dir = Path("indexes")
         self.index_dir.mkdir(exist_ok=True)
-        
+
         # 初始化空索引和文档存储
-        self.dimension = 384  # 修改为与模型输出维度一致
+        self.dimension = settings.EMBEDDING_DIMENSION  # 修改为与模型输出维度一致
         self.current_index = None
         self.current_documents = {}
     

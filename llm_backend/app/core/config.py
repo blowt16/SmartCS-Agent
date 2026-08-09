@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     
     # Search settings
     SERPAPI_KEY: str
+    SERPAPI_BASE_URL: str = "https://serpapi.com/search"   # SerpAPI 端点
     SEARCH_RESULT_COUNT: int = 3
+    SEARCH_LANGUAGE: str = "zh-CN"                          # 搜索语言
+    SEARCH_REGION: str = "cn"                               # 搜索地区
     
     # Database settings
     DB_HOST: str
@@ -61,10 +64,14 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_CACHE_EXPIRE: int = 3600
     REDIS_CACHE_THRESHOLD: float = 0.8
+    REDIS_CACHE_PREFIX: str = "cache"                       # 缓存键前缀
+    REDIS_CACHE_MAX_SIZE: int = 1000                        # 最大缓存条目数
+    REDIS_CACHE_CLEANUP_INTERVAL: int = 3600                # 缓存清理间隔（秒）
     
-    # Embedding settings 
+    # Embedding settings
     EMBEDDING_TYPE: str = "ollama"  # ollama 或 sentence_transformer
     EMBEDDING_MODEL: str = "bge-m3"  # ollama embedding模型
+    EMBEDDING_DIMENSION: int = 384  # 向量维度（MiniLM=384, bge-m3=1024）
     EMBEDDING_THRESHOLD: float = 0.90  # 语义相似度阈值
     
     # Vector DB settings (ChromaDB)
@@ -87,6 +94,28 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
     LLM_GRADER_TEMPERATURE: float = 0.0                     # 评分/评估 LLM 温度
     LLM_GENERATION_TEMPERATURE: float = 0.8                 # 测试数据生成温度
+
+    # Streaming settings
+    STREAM_DELAY: float = 0.05                              # 流式响应延迟（秒）
+
+    # ChromaDB settings
+    CHROMADB_ANONYMIZED_TELEMETRY: bool = False             # ChromaDB 匿名遥测
+
+    # Reranker settings
+    RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"        # 重排序模型
+    RERANKER_TOP_K: int = 5                                  # 重排序返回数
+    RERANKER_MAX_LENGTH: int = 512                           # 重排序最大长度
+
+    # Hybrid retrieval settings
+    RRF_FUSION_K: int = 60                                   # RRF 融合参数
+    HYBRID_EMBEDDING_MODEL: str = "paraphrase-multilingual-MiniLM-L12-v2"  # 混合检索向量模型
+
+    # Predefined Cypher settings
+    PREDEFINED_CYPHER_SIMILARITY_THRESHOLD: float = 0.5     # 预定义 Cypher 向量匹配阈值
+
+    # Memory & Token settings
+    MEMORY_CACHE_TTL: int = 86400                            # 摘要缓存 TTL（秒）
+    CONVERSATION_HISTORY_MAX_RECORDS: int = 5                # 对话历史最大记录数
 
     @property
     def DATABASE_URL(self) -> str:

@@ -15,10 +15,11 @@ RRF（Reciprocal Rank Fusion）分数融合
 from typing import List, Dict, Any
 
 from app.core.logger import get_logger
+from app.core.config import settings
 
 logger = get_logger(service="rrf_fusion")
 
-DEFAULT_K = 60
+DEFAULT_K = settings.RRF_FUSION_K
 
 
 def rrf_fuse(

@@ -19,12 +19,12 @@ class SearchTool:
                 "q": query,
                 "api_key": self.api_key,
                 "num": num_results,
-                "hl": "zh-CN",
-                "gl": "cn"
+                "hl": settings.SEARCH_LANGUAGE,
+                "gl": settings.SEARCH_REGION,
             }
 
             response = requests.get(
-                "https://serpapi.com/search",
+                settings.SERPAPI_BASE_URL,
                 params=params,
                 timeout=15
             )

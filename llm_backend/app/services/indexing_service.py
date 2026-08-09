@@ -45,7 +45,7 @@ class IndexingService:
         os.makedirs(settings.VECTOR_DB_PATH, exist_ok=True)
         self.client = chromadb.PersistentClient(
             path=settings.VECTOR_DB_PATH,
-            settings=ChromaSettings(anonymized_telemetry=False),
+            settings=ChromaSettings(anonymized_telemetry=settings.CHROMADB_ANONYMIZED_TELEMETRY),
         )
         self.collection = self.client.get_or_create_collection(
             name=settings.VECTOR_DB_COLLECTION,

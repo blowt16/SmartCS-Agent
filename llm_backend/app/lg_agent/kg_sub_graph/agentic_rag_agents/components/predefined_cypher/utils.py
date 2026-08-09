@@ -14,11 +14,13 @@ class VectorQueryMatcher:
         self, 
         predefined_cypher_dict: Dict[str, str],
         query_descriptions: Dict[str, str],
-        similarity_threshold: float = 0.5
+        similarity_threshold: float = None,
     ):
+        if similarity_threshold is None:
+            similarity_threshold = settings.PREDEFINED_CYPHER_SIMILARITY_THRESHOLD
         """
         初始化查询匹配器
-        
+
         参数:
         predefined_cypher_dict: 预定义的Cypher查询字典
         query_descriptions: 每个查询的描述信息字典，用于增强匹配

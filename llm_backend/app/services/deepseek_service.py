@@ -21,9 +21,11 @@ class DeepseekService:
         )
         # 优先使用配置中的 DEEPSEEK_MODEL，其次使用传入的 model
         self.model = settings.DEEPSEEK_MODEL or model 
-        self.cache = RedisSemanticCache(prefix="deepseek")
+        self.cache = RedisSemanticCache(prefix=settings.REDIS_CACHE_PREFIX)
 
-    async def _stream_cached_response(self, response: str, delay: float = 0.05) -> AsyncGenerator[str, None]:
+    async def _stream_cached_response(self, response: str, delay: float = None) -> AsyncGenerator[str, None]:
+        if delay is None:
+            delay = settings.STREAM_DELAY
         """模拟流式返回缓存的响应"""
         # 每次返回4个字符
         chunks = [response[i:i + 4] for i in range(0, len(response), 4)]
@@ -41,7 +43,7 @@ class DeepseekService:
         """流式生成回复"""
         try:
             # 为每个用户创建独立的缓存实例
-            cache = RedisSemanticCache(prefix="deepseek", user_id=user_id)
+            cache = RedisSemanticCache(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
             
             start_time = time.time()
             

@@ -14,6 +14,7 @@ from operator import add
 # from ...components.predefined_cypher import create_predefined_cypher_node
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from app.core.config import settings
 
 from ...components.tool_selection import create_tool_selection_node
 from ...components.reranker import BGEReranker, DEFAULT_TOP_K
@@ -246,7 +247,7 @@ def update_history(
         A new List with the record added and old records removed to maintain size.
     """
 
-    SIZE: int = 5
+    SIZE: int = settings.CONVERSATION_HISTORY_MAX_RECORDS
 
     history.extend(new)
     return history[-SIZE:]
