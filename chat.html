@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartCS-Agent 智能客服</title>
+  <!-- Google Fonts - Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- Highlight.js - GitHub Dark 主题 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Tailwind 配置
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            primary: {
+              DEFAULT: '#16a34a',
+              light: '#22c55e',
+              dark: '#15803d',
+              bg: '#f0fdf4',
+            },
+            sidebar: {
+              bg: '#14532d',
+              hover: 'rgba(255,255,255,0.1)',
+              active: 'rgba(255,255,255,0.15)',
+            },
+            page: {
+              bg: '#fafbfc',
+            },
+            user: {
+              bubble: '#16a34a',
+            },
+            bot: {
+              bubble: '#f0fdf4',
+            }
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    /* ========== 基础样式 ========== */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background-color: #fafbfc;
+      color: #1e293b;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* 暗色模式 */
+    .dark body {
+      background-color: #0f172a;
+      color: #e2e8f0;
+    }
+
+    /* 滚动条样式 */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+
+    .dark ::-webkit-scrollbar-thumb {
+      background: #475569;
+    }
+
+    /* ========== 动画 ========== */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes typingBounce {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .animate-fade-in {
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    .animate-slide-in {
+      animation: slideIn 0.3s ease-out;
+    }
+
+    /* ========== 侧边栏导航项动画 ========== */
+    .nav-item {
+      transition: all 0.2s ease;
+    }
+
+    .nav-item:hover {
+      transform: translateX(4px);
+    }
+
+    .nav-item.active {
+      border-left: 3px solid #22c55e;
+    }
+
+    /* ========== 卡片悬浮效果 ========== */
+    .card-hover {
+      transition: all 0.2s ease;
+    }
+
+    .card-hover:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+
+    /* ========== Markdown 渲染样式 ========== */
+    .markdown-content p {
+      margin-bottom: 0.75rem;
+    }
+
+    .markdown-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .markdown-content code:not(pre code) {
+      background: rgba(0, 0, 0, 0.05);
+      padding: 0.125rem 0.375rem;
+      border-radius: 0.25rem;
+      font-family: ui-monospace, monospace;
+      font-size: 0.875em;
+    }
+
+    .dark .markdown-content code:not(pre code) {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .markdown-content pre {
+      background: #1e293b;
+      padding: 1rem;
+      border-radius: 0.75rem;
+      overflow-x: auto;
+      margin: 0.75rem 0;
+    }
+
+    .markdown-content pre code {
+      background: none;
+      padding: 0;
+      color: #e2e8f0;
+      font-size: 0.875rem;
+    }
+
+    .markdown-content ul,
+    .markdown-content ol {
+      margin: 0.5rem 0;
+      padding-left: 1.5rem;
+    }
+
+    .markdown-content li {
+      margin: 0.25rem 0;
+    }
+
+    .markdown-content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.75rem 0;
+    }
+
+    .markdown-content th,
+    .markdown-content td {
+      border: 1px solid #e2e8f0;
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+
+    .dark .markdown-content th,
+    .dark .markdown-content td {
+      border-color: #475569;
+    }
+
+    .markdown-content th {
+      background: #f1f5f9;
+    }
+
+    .dark .markdown-content th {
+      background: #334155;
+    }
+
+    /* 用户消息中的代码样式 */
+    .user-message .markdown-content code:not(pre code) {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* ========== 正在输入指示器 ========== */
+    .typing-dot {
+      animation: typingBounce 1.4s infinite ease-in-out;
+    }
+
+    .typing-dot:nth-child(1) { animation-delay: 0s; }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    /* ========== 输入框自动调整高度 ========== */
+    .auto-resize {
+      resize: none;
+      overflow-y: hidden;
+    }
+
+    /* ========== 移动端侧边栏遮罩 ========== */
+    .sidebar-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 40;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    .sidebar-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* ========== 文档面板滑入动画 ========== */
+    .docs-panel {
+      transition: all 0.3s ease;
+    }
+
+    .docs-panel.collapsed {
+      width: 0;
+      padding: 0;
+      overflow: hidden;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- 移动端侧边栏遮罩 -->
+    <div 
+      class="sidebar-overlay"
+      :class="{ active: sidebarOpen && isMobile }"
+      @click="sidebarOpen = false"
+    ></div>
+
+    <div class="flex h-screen">
+      <!-- ========== 左侧侧边栏 ========== -->
+      <aside 
+        class="fixed lg:relative z-50 h-full w-[280px] flex flex-col transition-transform duration-300 lg:translate-x-0"
+        :class="[
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+          isDark ? 'bg-gray-900' : 'bg-sidebar-bg'
+        ]"
+      >
+        <!-- 品牌区 -->
+        <div class="p-6 border-b border-white/10">
+          <div class="flex items-center gap-3 mb-2">
+            <!-- 叶子 Logo -->
+            <div class="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+              <svg class="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3c-4.5 0-9 4.5-9 9 0 0 4.5 9 9 9s9-9 9-9c0-4.5-4.5-9-9-9z" />
+                <path d="M12 3v18" />
+                <path d="M12 8c-2 2-3 4-3 7" />
+                <path d="M12 8c2 2 3 4 3 7" />
+              </svg>
+            </div>
+            <div>
+              <h1 class="text-white text-lg font-semibold">SmartCS-Agent</h1>
+              <p class="text-green-300 text-xs">智能客服助手</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 搜索框 -->
+        <div class="px-4 py-3">
+          <div class="relative">
+            <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-white/40 text-sm"></i>
+            <input 
+              type="text"
+              v-model="searchQuery"
+              placeholder="搜索对话..."
+              class="w-full bg-white/10 text-white placeholder-white/40 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-green-400/50"
+            >
+          </div>
+        </div>
+
+        <!-- 新建对话按钮 -->
+        <div class="px-4 pb-3">
+          <button 
+            @click="createNewConversation"
+            class="w-full bg-primary hover:bg-primary-light text-white rounded-xl py-3 px-4 font-medium text-sm flex items-center justify-center gap-2 transition-all duration-200 hover:-translate-y-0.5 shadow-lg shadow-green-900/30"
+          >
+            <i class="fas fa-plus"></i>
+            新建对话
+          </button>
+        </div>
+
+        <!-- 对话历史列表 -->
+        <div class="flex-1 overflow-y-auto px-3 py-2">
+          <div 
+            v-for="conv in filteredConversations" 
+            :key="conv.id"
+            @click="selectConversation(conv)"
+            class="nav-item group relative rounded-xl px-4 py-3 mb-2 cursor-pointer"
+            :class="[
+              currentConversation?.id === conv.id 
+                ? 'bg-sidebar-active active' 
+                : 'hover:bg-sidebar-hover'
+            ]"
+          >
+            <div class="flex items-start justify-between">
+              <div class="flex-1 min-w-0 pr-8">
+                <p class="text-white text-sm font-medium truncate">{{ conv.name }}</p>
+                <p class="text-green-300/60 text-xs mt-1">{{ formatTime(conv.updatedAt) }}</p>
+              </div>
+              <!-- 删除按钮 -->
+              <button 
+                @click.stop="deleteConversation(conv.id)"
+                class="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-white/10 hover:bg-red-500 text-white/60 hover:text-white flex items-center justify-center transition-all duration-200"
+              >
+                <i class="fas fa-trash text-xs"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 空状态 -->
+          <div v-if="filteredConversations.length === 0" class="text-center py-8">
+            <i class="fas fa-comments text-3xl text-white/20 mb-3"></i>
+            <p class="text-white/40 text-sm">暂无对话记录</p>
+          </div>
+        </div>
+
+        <!-- 底部用户信息 -->
+        <div class="p-4 border-t border-white/10">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white font-semibold">
+              {{ user.name.charAt(0) }}
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-white text-sm font-medium truncate">{{ user.name }}</p>
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-green-400"></span>
+                <span class="text-green-300/60 text-xs">在线</span>
+              </div>
+            </div>
+            <button 
+              @click="logout"
+              class="w-9 h-9 rounded-lg bg-white/10 hover:bg-red-500 text-white/60 hover:text-white flex items-center justify-center transition-all duration-200"
+            >
+              <i class="fas fa-sign-out-alt"></i>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ========== 中间主聊天区 ========== -->
+      <main class="flex-1 flex flex-col min-w-0" :class="isDark ? 'bg-gray-800' : 'bg-page-bg'">
+        <!-- 顶部 Header -->
+        <header class="sticky top-0 z-30 px-6 py-4 border-b" :class="isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <!-- 移动端菜单按钮 -->
+              <button 
+                @click="sidebarOpen = !sidebarOpen"
+                class="lg:hidden w-10 h-10 rounded-xl flex items-center justify-center transition-colors"
+                :class="isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+              >
+                <i class="fas fa-bars"></i>
+              </button>
+
+              <!-- 对话标题 -->
+              <div>
+                <div 
+                  v-if="!editingTitle"
+                  @dblclick="startEditTitle"
+                  class="text-lg font-semibold cursor-pointer"
+                  :class="isDark ? 'text-white' : 'text-gray-800'"
+                >
+                  {{ currentConversation?.name || '新对话' }}
+                </div>
+                <input 
+                  v-else
+                  ref="titleInput"
+                  v-model="editTitleValue"
+                  @blur="saveTitle"
+                  @keyup.enter="saveTitle"
+                  @keyup.escape="cancelEditTitle"
+                  class="text-lg font-semibold bg-transparent border-b-2 border-primary focus:outline-none"
+                  :class="isDark ? 'text-white' : 'text-gray-800'"
+                >
+              </div>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <!-- 模型标签 -->
+              <span class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-100 text-green-700">
+                <i class="fas fa-robot"></i>
+                DeepSeek
+              </span>
+
+              <!-- 文档管理按钮 -->
+              <button 
+                @click="docsPanelOpen = !docsPanelOpen"
+                class="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200"
+                :class="[
+                  docsPanelOpen 
+                    ? 'bg-primary text-white' 
+                    : isDark 
+                      ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' 
+                      : 'bg-gray-100 text-gray-600 hover:bg-primary hover:text-white'
+                ]"
+              >
+                <i class="fas fa-folder"></i>
+              </button>
+
+              <!-- 暗色模式切换 -->
+              <button 
+                @click="toggleDarkMode"
+                class="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200"
+                :class="isDark ? 'bg-gray-700 text-yellow-400 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+              >
+                <i :class="isDark ? 'fas fa-sun' : 'fas fa-moon'"></i>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <!-- 消息区域 / 欢迎页 -->
+        <div class="flex-1 overflow-y-auto" ref="messagesContainer">
+          <!-- 欢迎页 -->
+          <div v-if="!currentConversation || messages.length === 0" class="h-full flex flex-col">
+            <!-- 统计卡片区 -->
+            <div class="p-6">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div 
+                  v-for="stat in stats" 
+                  :key="stat.label"
+                  class="card-hover rounded-2xl p-5 shadow-sm"
+                  :class="isDark ? 'bg-gray-700' : 'bg-white'"
+                >
+                  <div class="flex items-center justify-between mb-3">
+                    <div 
+                      class="w-10 h-10 rounded-xl flex items-center justify-center"
+                      :class="stat.iconBg"
+                    >
+                      <i :class="[stat.icon, stat.iconColor]"></i>
+                    </div>
+                    <span 
+                      class="text-xs font-medium px-2 py-1 rounded-full"
+                      :class="stat.change > 0 ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'"
+                    >
+                      <i :class="stat.change > 0 ? 'fas fa-arrow-up' : 'fas fa-arrow-down'"></i>
+                      {{ Math.abs(stat.change) }}%
+                    </span>
+                  </div>
+                  <p class="text-2xl font-bold mb-1" :class="isDark ? 'text-white' : 'text-gray-800'">
+                    {{ stat.value }}
+                  </p>
+                  <p class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                    {{ stat.label }}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 欢迎内容 -->
+            <div class="flex-1 flex flex-col items-center justify-center px-6 pb-20">
+              <!-- 叶子 SVG 插图 -->
+              <div class="w-32 h-32 mb-6 opacity-80">
+                <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M60 10C40 10 20 30 20 60C20 90 40 110 60 110C80 110 100 90 100 60C100 30 80 10 60 10Z" stroke="#16a34a" stroke-width="2" fill="none"/>
+                  <path d="M60 20V100" stroke="#16a34a" stroke-width="2"/>
+                  <path d="M60 35C45 45 35 60 35 80" stroke="#22c55e" stroke-width="2"/>
+                  <path d="M60 35C75 45 85 60 85 80" stroke="#22c55e" stroke-width="2"/>
+                  <path d="M60 50C50 55 45 65 45 75" stroke="#22c55e" stroke-width="1.5"/>
+                  <path d="M60 50C70 55 75 65 75 75" stroke="#22c55e" stroke-width="1.5"/>
+                  <circle cx="60" cy="60" r="5" fill="#16a34a"/>
+                </svg>
+              </div>
+              <h2 class="text-2xl font-bold mb-3" :class="isDark ? 'text-white' : 'text-gray-800'">
+                欢迎使用 SmartCS-Agent
+              </h2>
+              <p class="text-center max-w-md leading-relaxed" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                我是您的智能客服助手，可以回答问题、提供建议、帮助您解决各种问题。开始对话吧！
+              </p>
+            </div>
+          </div>
+
+          <!-- 消息列表 -->
+          <div v-else class="p-6 space-y-4">
+            <div 
+              v-for="(msg, index) in messages" 
+              :key="index"
+              class="flex gap-3 animate-fade-in"
+              :class="msg.role === 'user' ? 'flex-row-reverse' : ''"
+            >
+              <!-- 头像 -->
+              <div 
+                class="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center"
+                :class="msg.role === 'user' ? 'bg-primary text-white' : 'bg-primary-bg text-primary'"
+              >
+                <i :class="msg.role === 'user' ? 'fas fa-user text-sm' : 'fas fa-leaf text-sm'"></i>
+              </div>
+
+              <!-- 消息内容 -->
+              <div 
+                class="max-w-[70%] flex flex-col"
+                :class="msg.role === 'user' ? 'items-end' : 'items-start'"
+              >
+                <!-- 消息气泡 -->
+                <div 
+                  class="px-4 py-3 rounded-2xl markdown-content"
+                  :class="[
+                    msg.role === 'user' 
+                      ? 'bg-primary text-white rounded-br-sm user-message' 
+                      : isDark 
+                        ? 'bg-gray-700 text-gray-100 rounded-bl-sm' 
+                        : 'bg-bot-bubble text-gray-800 rounded-bl-sm'
+                  ]"
+                  v-html="renderMarkdown(msg.content)"
+                ></div>
+
+                <!-- 图片附件 -->
+                <img 
+                  v-if="msg.image"
+                  :src="msg.image"
+                  class="mt-2 max-w-[200px] rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
+                  @click="openImagePreview(msg.image)"
+                >
+
+                <!-- 时间戳和来源 -->
+                <div class="flex items-center gap-2 mt-1.5 px-1">
+                  <span class="text-xs" :class="isDark ? 'text-gray-500' : 'text-gray-400'">
+                    {{ formatMessageTime(msg.timestamp) }}
+                  </span>
+                  <span 
+                    v-if="msg.role === 'assistant' && msg.source"
+                    class="text-xs px-2 py-0.5 rounded-full"
+                    :class="isDark ? 'bg-gray-700 text-gray-400' : 'bg-gray-100 text-gray-500'"
+                  >
+                    来源: {{ msg.source }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 正在输入指示器 -->
+            <div v-if="isTyping" class="flex gap-3 animate-fade-in">
+              <div class="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center bg-primary-bg text-primary">
+                <i class="fas fa-leaf text-sm"></i>
+              </div>
+              <div 
+                class="px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-1.5"
+                :class="isDark ? 'bg-gray-700' : 'bg-bot-bubble'"
+              >
+                <div class="typing-dot w-2 h-2 rounded-full bg-primary"></div>
+                <div class="typing-dot w-2 h-2 rounded-full bg-primary"></div>
+                <div class="typing-dot w-2 h-2 rounded-full bg-primary"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部输入区 -->
+        <div class="p-4 border-t" :class="isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'">
+          <!-- 图片预览 -->
+          <div v-if="selectedImages.length > 0" class="flex gap-2 mb-3 flex-wrap">
+            <div 
+              v-for="(img, index) in selectedImages" 
+              :key="index"
+              class="relative w-16 h-16 rounded-xl overflow-hidden"
+            >
+              <img :src="img.preview" class="w-full h-full object-cover">
+              <button 
+                @click="removeImage(index)"
+                class="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-500 transition-colors"
+              >
+                <i class="fas fa-times text-xs"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 输入框容器 -->
+          <div 
+            class="flex items-end gap-3 p-3 rounded-2xl shadow-sm border-2 transition-all duration-200"
+            :class="[
+              inputFocused 
+                ? 'border-primary ring-4 ring-primary/10' 
+                : isDark 
+                  ? 'border-gray-600 bg-gray-700' 
+                  : 'border-gray-200 bg-white',
+              isDark ? 'bg-gray-700' : 'bg-white'
+            ]"
+          >
+            <!-- 附件按钮 -->
+            <input 
+              type="file" 
+              ref="imageInput" 
+              accept="image/*" 
+              multiple 
+              class="hidden"
+              @change="handleImageSelect"
+            >
+            <button 
+              @click="$refs.imageInput.click()"
+              class="w-10 h-10 rounded-xl flex items-center justify-center transition-colors flex-shrink-0"
+              :class="isDark ? 'bg-gray-600 text-gray-300 hover:bg-primary hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-primary hover:text-white'"
+            >
+              <i class="fas fa-image"></i>
+            </button>
+
+            <!-- 文档上传按钮 -->
+            <button 
+              @click="docsPanelOpen = true"
+              class="w-10 h-10 rounded-xl flex items-center justify-center transition-colors flex-shrink-0"
+              :class="isDark ? 'bg-gray-600 text-gray-300 hover:bg-primary hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-primary hover:text-white'"
+            >
+              <i class="fas fa-file-alt"></i>
+            </button>
+
+            <!-- 文本输入框 -->
+            <textarea 
+              ref="messageInput"
+              v-model="inputMessage"
+              @focus="inputFocused = true"
+              @blur="inputFocused = false"
+              @keydown="handleKeyDown"
+              @input="autoResize"
+              placeholder="输入你的问题..."
+              rows="1"
+              class="flex-1 bg-transparent border-none focus:outline-none text-base leading-relaxed auto-resize max-h-32"
+              :class="isDark ? 'text-white placeholder-gray-400' : 'text-gray-800 placeholder-gray-400'"
+            ></textarea>
+
+            <!-- 发送按钮 -->
+            <button 
+              @click="sendMessage"
+              :disabled="!canSend"
+              class="w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-200 flex-shrink-0"
+              :class="[
+                canSend 
+                  ? 'bg-primary hover:bg-primary-dark text-white hover:scale-105 hover:rotate-12' 
+                  : isDark 
+                    ? 'bg-gray-600 text-gray-400 cursor-not-allowed' 
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              ]"
+            >
+              <i class="fas fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+      </main>
+
+      <!-- ========== 右侧文档面板 ========== -->
+      <aside 
+        class="docs-panel hidden lg:flex flex-col border-l"
+        :class="[
+          docsPanelOpen ? 'w-80' : 'collapsed',
+          isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-100'
+        ]"
+      >
+        <!-- 标题栏 -->
+        <div class="p-5 border-b flex items-center justify-between" :class="isDark ? 'border-gray-700' : 'border-gray-100'">
+          <div class="flex items-center gap-2">
+            <i class="fas fa-book text-primary"></i>
+            <span class="font-semibold" :class="isDark ? 'text-white' : 'text-gray-800'">知识库</span>
+          </div>
+          <button 
+            @click="docsPanelOpen = false"
+            class="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
+            :class="isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+          >
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="p-5">
+          <div 
+            @click="$refs.docInput.click()"
+            @dragover.prevent="dragOver = true"
+            @dragleave="dragOver = false"
+            @drop.prevent="handleDocDrop"
+            class="border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all duration-200"
+            :class="[
+              dragOver 
+                ? 'border-primary bg-primary-bg' 
+                : isDark 
+                  ? 'border-gray-600 hover:border-primary hover:bg-gray-700' 
+                  : 'border-gray-200 hover:border-primary hover:bg-primary-bg/50'
+            ]"
+          >
+            <input 
+              type="file" 
+              ref="docInput" 
+              accept=".pdf,.doc,.docx,.txt" 
+              multiple 
+              class="hidden"
+              @change="handleDocSelect"
+            >
+            <i class="fas fa-cloud-upload-alt text-3xl text-primary mb-3"></i>
+            <p class="text-sm font-medium mb-1" :class="isDark ? 'text-white' : 'text-gray-700'">
+              拖拽文件到此处或点击上传
+            </p>
+            <p class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+              支持 PDF / Word / TXT
+            </p>
+          </div>
+        </div>
+
+        <!-- 上传进度 -->
+        <div v-if="uploadProgress > 0 && uploadProgress < 100" class="px-5 pb-5">
+          <div class="rounded-full overflow-hidden" :class="isDark ? 'bg-gray-700' : 'bg-gray-100'">
+            <div 
+              class="h-1.5 bg-gradient-to-r from-primary to-primary-light transition-all duration-300"
+              :style="{ width: uploadProgress + '%' }"
+            ></div>
+          </div>
+          <p class="text-xs text-center mt-2" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+            上传中... {{ uploadProgress }}%
+          </p>
+        </div>
+
+        <!-- 文档列表 -->
+        <div class="flex-1 overflow-y-auto px-5 pb-5">
+          <div 
+            v-for="doc in documents" 
+            :key="doc.id"
+            class="group flex items-center gap-3 p-3 rounded-xl mb-2 transition-colors"
+            :class="isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-50 hover:bg-gray-100'"
+          >
+            <!-- 文件图标 -->
+            <div 
+              class="w-10 h-10 rounded-xl flex items-center justify-center"
+              :class="getDocIconBg(doc.type)"
+            >
+              <i :class="[getDocIcon(doc.type), 'text-lg']"></i>
+            </div>
+
+            <!-- 文件信息 -->
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate" :class="isDark ? 'text-white' : 'text-gray-800'">
+                {{ doc.name }}
+              </p>
+              <div class="flex items-center gap-2">
+                <span class="text-xs" :class="isDark ? 'text-gray-400' : 'text-gray-500'">
+                  {{ formatFileSize(doc.size) }}
+                </span>
+                <span v-if="doc.processing" class="text-xs text-amber-500 flex items-center gap-1">
+                  <i class="fas fa-spinner animate-spin"></i>
+                  处理中...
+                </span>
+              </div>
+            </div>
+
+            <!-- 删除按钮 -->
+            <button 
+              @click="deleteDocument(doc.id)"
+              class="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-lg flex items-center justify-center transition-all"
+              :class="isDark ? 'bg-gray-600 text-gray-300 hover:bg-red-500 hover:text-white' : 'bg-gray-200 text-gray-500 hover:bg-red-500 hover:text-white'"
+            >
+              <i class="fas fa-trash text-xs"></i>
+            </button>
+          </div>
+
+          <!-- 空状态 -->
+          <div v-if="documents.length === 0" class="text-center py-8">
+            <i class="fas fa-file-alt text-3xl mb-3" :class="isDark ? 'text-gray-600' : 'text-gray-300'"></i>
+            <p class="text-sm" :class="isDark ? 'text-gray-500' : 'text-gray-400'">暂无文档</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 图片预览弹窗 -->
+    <div 
+      v-if="previewImage"
+      @click="previewImage = null"
+      class="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"
+    >
+      <img :src="previewImage" class="max-w-full max-h-full rounded-lg">
+    </div>
+  </div>
+
+  <!-- Vue 3 CDN -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <!-- Marked.js for Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Highlight.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <script>
+    const { createApp, ref, computed, watch, nextTick, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        // ========== 状态管理 ==========
+        const isDark = ref(false);
+        const sidebarOpen = ref(false);
+        const docsPanelOpen = ref(true);
+        const inputFocused = ref(false);
+        const dragOver = ref(false);
+        const isTyping = ref(false);
+        const previewImage = ref(null);
+        const editingTitle = ref(false);
+        const editTitleValue = ref('');
+
+        // 用户信息（后续可对接登录接口）
+        const user = ref({
+          id: 1,
+          name: '访客用户'
+        });
+
+        // 统计数据（从本地计算）
+        const stats = computed(() => [
+          {
+            label: '总对话数',
+            value: conversations.value.length,
+            change: 0,
+            icon: 'fas fa-comments',
+            iconBg: 'bg-green-100',
+            iconColor: 'text-green-600'
+          },
+          {
+            label: '今日提问',
+            value: messages.value.filter(m => m.role === 'user').length,
+            change: 0,
+            icon: 'fas fa-question-circle',
+            iconBg: 'bg-blue-100',
+            iconColor: 'text-blue-600'
+          },
+          {
+            label: '知识库文档',
+            value: documents.value.filter(d => !d.processing).length,
+            change: 0,
+            icon: 'fas fa-file-alt',
+            iconBg: 'bg-purple-100',
+            iconColor: 'text-purple-600'
+          }
+        ]);
+
+        // 对话列表（从 API 加载）
+        const conversations = ref([]);
+        const currentConversation = ref(null);
+        const searchQuery = ref('');
+
+        // 消息列表
+        const messages = ref([]);
+        const inputMessage = ref('');
+        const selectedImages = ref([]);
+
+        // 文档列表（从实际上传结果填充）
+        const documents = ref([]);
+        const uploadProgress = ref(0);
+
+        // LangGraph 会话 ID（UUID 字符串，与数字型 conversation_id 不同）
+        const langgraphConversationId = ref(null);
+
+        // DOM 引用
+        const messagesContainer = ref(null);
+        const messageInput = ref(null);
+        const titleInput = ref(null);
+
+        // ========== 计算属性 ==========
+        const filteredConversations = computed(() => {
+          if (!searchQuery.value) return conversations.value;
+          return conversations.value.filter(c => 
+            c.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+          );
+        });
+
+        const canSend = computed(() => {
+          return inputMessage.value.trim() || selectedImages.value.length > 0;
+        });
+
+        const isMobile = computed(() => {
+          return window.innerWidth < 1024;
+        });
+
+        // ========== 方法 ==========
+        
+        // 暗色模式切换
+        function toggleDarkMode() {
+          isDark.value = !isDark.value;
+          document.documentElement.classList.toggle('dark', isDark.value);
+        }
+
+        // 创建新对话
+        async function createNewConversation() {
+          try {
+            const res = await fetch('/api/conversations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: user.value.id })
+            });
+            const data = await res.json();
+            const newConv = {
+              id: data.conversation_id,
+              name: '新对话',
+              updatedAt: new Date()
+            };
+            conversations.value.unshift(newConv);
+            currentConversation.value = newConv;
+            messages.value = [];
+            langgraphConversationId.value = null;
+            sidebarOpen.value = false;
+          } catch (e) {
+            console.error('创建对话失败:', e);
+          }
+        }
+
+        // 选择对话
+        async function selectConversation(conv) {
+          currentConversation.value = conv;
+          langgraphConversationId.value = conv.langgraphId || null;
+          await loadMessages(conv.id);
+          sidebarOpen.value = false;
+        }
+
+        // 从后端加载历史消息
+        async function loadMessages(conversationId) {
+          try {
+            const res = await fetch(`/api/conversations/${conversationId}/messages?user_id=${user.value.id}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            messages.value = data.map(msg => ({
+              role: msg.sender,
+              content: msg.content,
+              timestamp: new Date(msg.created_at)
+            }));
+            await nextTick();
+            scrollToBottom();
+          } catch (e) {
+            console.error('加载消息失败:', e);
+            messages.value = [];
+          }
+        }
+
+        // 删除对话
+        async function deleteConversation(id) {
+          if (!confirm('确定要删除这个对话吗？')) return;
+          try {
+            await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+            conversations.value = conversations.value.filter(c => c.id !== id);
+            if (currentConversation.value?.id === id) {
+              currentConversation.value = null;
+              messages.value = [];
+              langgraphConversationId.value = null;
+            }
+          } catch (e) {
+            console.error('删除对话失败:', e);
+          }
+        }
+
+        // 编辑标题
+        function startEditTitle() {
+          if (!currentConversation.value) return;
+          editingTitle.value = true;
+          editTitleValue.value = currentConversation.value.name;
+          nextTick(() => {
+            titleInput.value?.focus();
+          });
+        }
+
+        async function saveTitle() {
+          if (currentConversation.value && editTitleValue.value.trim()) {
+            try {
+              await fetch(`/api/conversations/${currentConversation.value.id}/name`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: editTitleValue.value.trim() })
+              });
+              currentConversation.value.name = editTitleValue.value.trim();
+            } catch (e) {
+              console.error('重命名失败:', e);
+            }
+          }
+          editingTitle.value = false;
+        }
+
+        function cancelEditTitle() {
+          editingTitle.value = false;
+        }
+
+        // 发送消息（对接 LangGraph SSE 流）
+        async function sendMessage() {
+          if (!canSend.value || isTyping.value) return;
+
+          // 确保有对话
+          if (!currentConversation.value) {
+            await createNewConversation();
+          }
+
+          const content = inputMessage.value.trim();
+          const images = [...selectedImages.value];
+
+          // 添加用户消息到界面
+          messages.value.push({
+            role: 'user',
+            content: content,
+            image: images.length > 0 ? images[0].preview : null,
+            timestamp: new Date()
+          });
+
+          // 清空输入
+          inputMessage.value = '';
+          selectedImages.value = [];
+          await nextTick();
+          scrollToBottom();
+          autoResize();
+
+          // 显示正在输入（直到收到第一个内容才关闭）
+          isTyping.value = true;
+
+          // 调用 LangGraph 接口
+          try {
+            const formData = new FormData();
+            formData.append('query', content);
+            formData.append('user_id', user.value.id);
+            if (langgraphConversationId.value) {
+              formData.append('conversation_id', langgraphConversationId.value);
+            }
+            if (images.length > 0 && images[0].file) {
+              formData.append('image', images[0].file);
+            }
+
+            const response = await fetch('/api/langgraph/query', {
+              method: 'POST',
+              body: formData
+            });
+
+            if (!response.ok) {
+              throw new Error(`API 错误: ${response.status}`);
+            }
+
+            // 从响应头获取 LangGraph 会话 ID
+            const newConvId = response.headers.get('X-Conversation-ID');
+            if (newConvId) {
+              langgraphConversationId.value = newConvId;
+            }
+
+            // AI 消息占位
+            let aiContent = '';
+            let firstChunk = true;
+            const aiMsg = {
+              role: 'assistant',
+              content: '',
+              timestamp: new Date(),
+              source: 'LangGraph'
+            };
+            messages.value.push(aiMsg);
+            const msgIndex = messages.value.length - 1;
+
+            // 读取 SSE 流
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              // 兼容 \r\n 和 \n 换行
+              const lines = buffer.split(/\r?\n/);
+              buffer = lines.pop();
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const jsonStr = trimmed.slice(5).trim();
+                if (!jsonStr) continue;
+
+                try {
+                  const parsed = JSON.parse(jsonStr);
+                  if (parsed && parsed.interruption) {
+                    langgraphConversationId.value = parsed.conversation_id;
+                    aiContent += '\n\n*等待您的确认...*';
+                    messages.value[msgIndex] = { ...messages.value[msgIndex], content: aiContent };
+                    continue;
+                  }
+                  if (typeof parsed === 'string') {
+                    aiContent += parsed;
+                  } else if (Array.isArray(parsed)) {
+                    for (const part of parsed) {
+                      if (typeof part === 'string') aiContent += part;
+                      else if (part && part.type === 'text') aiContent += part.text;
+                    }
+                  }
+                } catch (e) {
+                  aiContent += jsonStr;
+                }
+
+                if (firstChunk && aiContent) {
+                  firstChunk = false;
+                  isTyping.value = false;
+                }
+                // 替换整个对象以触发 Vue 响应式
+                messages.value[msgIndex] = { ...messages.value[msgIndex], content: aiContent };
+                scrollToBottom();
+              }
+            }
+
+            isTyping.value = false;
+            messages.value[msgIndex] = { ...messages.value[msgIndex], content: aiContent };
+            scrollToBottom();
+
+            // 流结束后，保存这轮对话到 MySQL
+            if (currentConversation.value && aiContent && content) {
+              try {
+                await fetch('/api/conversations/save-messages', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    conversation_id: currentConversation.value.id,
+                    user_message: content,
+                    assistant_message: aiContent
+                  })
+                });
+              } catch (saveErr) {
+                console.error('保存消息失败:', saveErr);
+              }
+            }
+
+          } catch (e) {
+            isTyping.value = false;
+            messages.value.push({
+              role: 'assistant',
+              content: `抱歉，请求出错了：${e.message}`,
+              timestamp: new Date()
+            });
+            scrollToBottom();
+          }
+        }
+
+        // 处理键盘事件
+        function handleKeyDown(e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+          }
+        }
+
+        // 自动��整输入框高度
+        function autoResize() {
+          const el = messageInput.value;
+          if (el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+          }
+        }
+
+        // 滚动到底部
+        function scrollToBottom() {
+          nextTick(() => {
+            if (messagesContainer.value) {
+              messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+            }
+          });
+        }
+
+        // 图片处理
+        function handleImageSelect(e) {
+          const files = Array.from(e.target.files);
+          files.forEach(file => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              selectedImages.value.push({
+                file: file,
+                preview: ev.target.result
+              });
+            };
+            reader.readAsDataURL(file);
+          });
+          e.target.value = '';
+        }
+
+        function removeImage(index) {
+          selectedImages.value.splice(index, 1);
+        }
+
+        function openImagePreview(src) {
+          previewImage.value = src;
+        }
+
+        // 文档处理
+        function handleDocSelect(e) {
+          const files = Array.from(e.target.files);
+          uploadDocuments(files);
+          e.target.value = '';
+        }
+
+        function handleDocDrop(e) {
+          dragOver.value = false;
+          const files = Array.from(e.dataTransfer.files);
+          uploadDocuments(files);
+        }
+
+        async function uploadDocuments(files) {
+          for (const file of files) {
+            uploadProgress.value = 0;
+            try {
+              const formData = new FormData();
+              formData.append('file', file);
+              formData.append('user_id', user.value.id);
+
+              // 使用 XMLHttpRequest 以获取上传进度
+              await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/upload');
+                xhr.upload.onprogress = (e) => {
+                  if (e.lengthComputable) {
+                    uploadProgress.value = Math.round((e.loaded / e.total) * 100);
+                  }
+                };
+                xhr.onload = () => {
+                  if (xhr.status >= 200 && xhr.status < 300) {
+                    const result = JSON.parse(xhr.responseText);
+                    documents.value.push({
+                      id: result.filename || Date.now().toString(),
+                      name: result.original_name || file.name,
+                      type: file.name.split('.').pop(),
+                      size: file.size,
+                      processing: false
+                    });
+                    resolve();
+                  } else {
+                    reject(new Error(`上传失败: ${xhr.status}`));
+                  }
+                };
+                xhr.onerror = () => reject(new Error('网络错误'));
+                xhr.send(formData);
+              });
+            } catch (e) {
+              console.error('上传文档失败:', e);
+            }
+            uploadProgress.value = 0;
+          }
+        }
+
+        function deleteDocument(id) {
+          documents.value = documents.value.filter(d => d.id !== id);
+        }
+
+        // 渲染 Markdown
+        function renderMarkdown(text) {
+          if (!text) return '';
+          marked.setOptions({
+            highlight: function(code, lang) {
+              if (lang && hljs.getLanguage(lang)) {
+                return hljs.highlight(code, { language: lang }).value;
+              }
+              return hljs.highlightAuto(code).value;
+            },
+            breaks: true
+          });
+          return marked.parse(text);
+        }
+
+        // 格式化时间
+        function formatTime(date) {
+          const now = new Date();
+          const diff = now - new Date(date);
+          const minutes = Math.floor(diff / 60000);
+          const hours = Math.floor(diff / 3600000);
+          const days = Math.floor(diff / 86400000);
+
+          if (minutes < 1) return '刚刚';
+          if (minutes < 60) return `${minutes} 分钟前`;
+          if (hours < 24) return `${hours} 小时前`;
+          return `${days} 天前`;
+        }
+
+        function formatMessageTime(date) {
+          return new Date(date).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        }
+
+        function formatFileSize(bytes) {
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+          return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // 文档图标
+        function getDocIcon(type) {
+          const icons = {
+            pdf: 'fas fa-file-pdf text-red-500',
+            doc: 'fas fa-file-word text-blue-500',
+            docx: 'fas fa-file-word text-blue-500',
+            txt: 'fas fa-file-alt text-gray-500'
+          };
+          return icons[type] || 'fas fa-file text-gray-500';
+        }
+
+        function getDocIconBg(type) {
+          const bgs = {
+            pdf: 'bg-red-100',
+            doc: 'bg-blue-100',
+            docx: 'bg-blue-100',
+            txt: 'bg-gray-100'
+          };
+          return bgs[type] || 'bg-gray-100';
+        }
+
+        // 退出登录
+        function logout() {
+          if (confirm('确定要退出登录吗？')) {
+            // 清空状态
+            currentConversation.value = null;
+            messages.value = [];
+          }
+        }
+
+        // 初始化：从后端加载会话列表
+        onMounted(async () => {
+          // 检查系统暗色模式偏好
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            isDark.value = true;
+            document.documentElement.classList.add('dark');
+          }
+
+          // 加载会话列表
+          try {
+            const res = await fetch(`/api/conversations/user/${user.value.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              conversations.value = data.map(conv => ({
+                id: conv.id,
+                name: conv.title,
+                updatedAt: new Date(conv.created_at),
+                dialogue_type: conv.dialogue_type
+              }));
+            }
+          } catch (e) {
+            console.error('加载会话列表失败:', e);
+          }
+        });
+
+        return {
+          // 状态
+          isDark,
+          sidebarOpen,
+          docsPanelOpen,
+          inputFocused,
+          dragOver,
+          isTyping,
+          previewImage,
+          editingTitle,
+          editTitleValue,
+          user,
+          stats,
+          conversations,
+          currentConversation,
+          searchQuery,
+          messages,
+          inputMessage,
+          selectedImages,
+          documents,
+          uploadProgress,
+          
+          // DOM 引用
+          messagesContainer,
+          messageInput,
+          titleInput,
+          
+          // 计算属性
+          filteredConversations,
+          canSend,
+          isMobile,
+          
+          // 方法
+          toggleDarkMode,
+          createNewConversation,
+          selectConversation,
+          deleteConversation,
+          startEditTitle,
+          saveTitle,
+          cancelEditTitle,
+          sendMessage,
+          handleKeyDown,
+          autoResize,
+          handleImageSelect,
+          removeImage,
+          openImagePreview,
+          handleDocSelect,
+          handleDocDrop,
+          deleteDocument,
+          renderMarkdown,
+          formatTime,
+          formatMessageTime,
+          formatFileSize,
+          getDocIcon,
+          getDocIconBg,
+          logout
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

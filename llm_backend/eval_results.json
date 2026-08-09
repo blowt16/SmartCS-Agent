@@ -1,0 +1,302 @@
+{
+  "results": [
+    {
+      "id": "Q1",
+      "question": "牛奶的价格是多少",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (p:Product {productName: '牛奶'}) RETURN p.productName AS name, p.unitPrice AS price",
+      "answer": "[{\"name\": \"牛奶\", \"price\": 19.0}]",
+      "elapsed": 0.2,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "19"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "牛奶"
+      ],
+      "miss_items": [],
+      "difficulty": "简单",
+      "category": "产品查询",
+      "error": null
+    },
+    {
+      "id": "Q2",
+      "question": "有哪些饮料类产品",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (p:Product)-[:BELONGS_TO]->(c:Category {categoryName: '饮料'}) RETURN p.productName AS name",
+      "answer": "[{\"name\": \"牛奶\"}, {\"name\": \"果汁\"}, {\"name\": \"咖啡豆\"}, {\"name\": \"绿茶\"}, {\"name\": \"啤酒\"}]",
+      "elapsed": 0.21,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "牛奶",
+        "果汁",
+        "咖啡",
+        "绿茶",
+        "啤酒"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "牛奶",
+        "果汁",
+        "咖啡豆",
+        "绿茶",
+        "啤酒"
+      ],
+      "miss_items": [],
+      "difficulty": "简单",
+      "category": "产品查询",
+      "error": null
+    },
+    {
+      "id": "Q3",
+      "question": "哪些产品库存不足，库存少于20",
+      "expected_tool": "predefined_cypher",
+      "cypher": "MATCH (p:Product) WHERE p.unitsInStock < 20 RETURN p.productName AS name, p.unitsInStock AS stock ORDER BY p.unitsInStock",
+      "answer": "[{\"name\": \"橄榄油\", \"stock\": 0}, {\"name\": \"奶酪\", \"stock\": 9}, {\"name\": \"辣椒酱\", \"stock\": 13}, {\"name\": \"果汁\", \"stock\": 14}, {\"name\": \"牛奶\", \"stock\": 17}, {\"name\": \"巧克力\", \"stock\": 18}]",
+      "elapsed": 0.22,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "橄榄油",
+        "辣椒酱",
+        "果汁",
+        "牛奶"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "橄榄油",
+        "辣椒酱",
+        "果汁",
+        "牛奶"
+      ],
+      "miss_items": [],
+      "difficulty": "简单",
+      "category": "产品查询",
+      "error": null
+    },
+    {
+      "id": "Q4",
+      "question": "三和贸易下过哪些订单",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (cu:Customer {companyName: '三和贸易'})-[:PLACED]->(o:Order) RETURN o.orderID AS orderID, o.orderDate AS date",
+      "answer": "[{\"orderID\": \"10248\", \"date\": \"2024-01-15\"}, {\"orderID\": \"10253\", \"date\": \"2024-03-01\"}]",
+      "elapsed": 0.21,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "10248",
+        "10253"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "10248",
+        "10253"
+      ],
+      "miss_items": [],
+      "difficulty": "中等",
+      "category": "订单查询",
+      "error": null
+    },
+    {
+      "id": "Q5",
+      "question": "新鲜食品公司供应了哪些产品",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (s:Supplier {companyName: '新鲜食品公司'})-[:SUPPLIES]->(p:Product) RETURN p.productName AS name",
+      "answer": "[{\"name\": \"牛奶\"}, {\"name\": \"奶酪\"}]",
+      "elapsed": 0.21,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "牛奶",
+        "奶酪"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "牛奶",
+        "奶酪"
+      ],
+      "miss_items": [],
+      "difficulty": "中等",
+      "category": "供应商查询",
+      "error": null
+    },
+    {
+      "id": "Q6",
+      "question": "哪个客户购买的总金额最多",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (cu:Customer)-[:PLACED]->(o:Order)-[c:CONTAINS]->(p:Product) WITH cu, sum(c.unitPrice * c.quantity) AS total RETURN cu.companyName AS customer, total ORDER BY total DESC LIMIT 1",
+      "answer": "[{\"customer\": \"安通物流\", \"total\": 252.0}]",
+      "elapsed": 0.24,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 0.0,
+      "completeness": 1.0,
+      "hit_keywords": [],
+      "miss_keywords": [
+        "客户",
+        "金额"
+      ],
+      "hit_items": [],
+      "miss_items": [],
+      "difficulty": "中等",
+      "category": "聚合查询",
+      "error": null
+    },
+    {
+      "id": "Q7",
+      "question": "展示供应商和产品的供应关系",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (s:Supplier)-[:SUPPLIES]->(p:Product) RETURN s.companyName AS supplier, collect(p.productName) AS products",
+      "answer": "[{\"supplier\": \"新鲜食品公司\", \"products\": [\"牛奶\", \"奶酪\"]}, {\"supplier\": \"海洋贸易\", \"products\": [\"三文鱼\", \"豆腐\"]}, {\"supplier\": \"田园农场\", \"products\": [\"核桃\", \"牛肉干\", \"饼干\"]}, {\"supplier\": \"全球饮品\", \"products\": [\"咖啡豆\", \"绿茶\", \"啤酒\"]}]",
+      "elapsed": 0.21,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "新鲜食品",
+        "海洋贸易",
+        "田园农场",
+        "全球饮品"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "新鲜食品公司",
+        "海洋贸易",
+        "田园农场",
+        "全球饮品"
+      ],
+      "miss_items": [],
+      "difficulty": "中等",
+      "category": "关系查询",
+      "error": null
+    },
+    {
+      "id": "Q8",
+      "question": "牛奶属于哪个类别，有哪些同类产品",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (p:Product {productName: '牛奶'})-[:BELONGS_TO]->(c:Category)<-[:BELONGS_TO]-(p2:Product) RETURN c.categoryName AS category, collect(p2.productName) AS products",
+      "answer": "[{\"category\": \"饮料\", \"products\": [\"果汁\", \"咖啡豆\", \"绿茶\", \"啤酒\"]}]",
+      "elapsed": 0.23,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "饮料",
+        "果汁",
+        "咖啡",
+        "绿茶",
+        "啤酒"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "饮料",
+        "果汁",
+        "咖啡豆",
+        "绿茶",
+        "啤酒"
+      ],
+      "miss_items": [],
+      "difficulty": "中等",
+      "category": "关联查询",
+      "error": null
+    },
+    {
+      "id": "Q9",
+      "question": "订单10250包含哪些产品，总价是多少",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (o:Order {orderID: '10250'})-[c:CONTAINS]->(p:Product) RETURN p.productName AS product, c.quantity AS qty, c.unitPrice AS price, c.unitPrice * c.quantity AS subtotal",
+      "answer": "[{\"product\": \"咖啡豆\", \"qty\": 2, \"price\": 46.0, \"subtotal\": 92.0}, {\"product\": \"巧克力\", \"qty\": 5, \"price\": 32.0, \"subtotal\": 160.0}]",
+      "elapsed": 0.22,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 0.75,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "巧克力",
+        "咖啡",
+        "92"
+      ],
+      "miss_keywords": [
+        "232"
+      ],
+      "hit_items": [
+        "巧克力",
+        "咖啡豆"
+      ],
+      "miss_items": [],
+      "difficulty": "较难",
+      "category": "订单明细",
+      "error": null
+    },
+    {
+      "id": "Q10",
+      "question": "哪些员工处理了三和贸易的订单",
+      "expected_tool": "cypher_query",
+      "cypher": "MATCH (e:Employee)-[:PROCESSED]->(o:Order)<-[:PLACED]-(cu:Customer {companyName: '三和贸易'}) RETURN e.firstName + e.lastName AS employee, o.orderID AS orderID",
+      "answer": "[{\"employee\": \"张伟\", \"orderID\": \"10248\"}, {\"employee\": \"王磊\", \"orderID\": \"10253\"}]",
+      "elapsed": 0.23,
+      "tool_correct": true,
+      "cypher_success": true,
+      "relevance": 1.0,
+      "completeness": 1.0,
+      "hit_keywords": [
+        "张伟",
+        "王磊"
+      ],
+      "miss_keywords": [],
+      "hit_items": [
+        "张伟",
+        "王磊"
+      ],
+      "miss_items": [],
+      "difficulty": "较难",
+      "category": "多跳查询",
+      "error": null
+    }
+  ],
+  "metrics": {
+    "total_questions": 10,
+    "tool_accuracy": 1.0,
+    "avg_relevance": 0.88,
+    "avg_completeness": 1.0,
+    "success_rate": 0.9,
+    "by_difficulty": {
+      "简单": {
+        "count": 3,
+        "relevance_sum": 3.0,
+        "completeness_sum": 3.0,
+        "avg_relevance": 1.0,
+        "avg_completeness": 1.0
+      },
+      "中等": {
+        "count": 5,
+        "relevance_sum": 4.0,
+        "completeness_sum": 5.0,
+        "avg_relevance": 0.8,
+        "avg_completeness": 1.0
+      },
+      "较难": {
+        "count": 2,
+        "relevance_sum": 1.75,
+        "completeness_sum": 2.0,
+        "avg_relevance": 0.88,
+        "avg_completeness": 1.0
+      }
+    }
+  }
+}

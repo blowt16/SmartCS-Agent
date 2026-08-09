@@ -1,0 +1,9 @@
+{
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://aiproxy.xin/cosphere",
+      "ANTHROPIC_AUTH_TOKEN": "sk-eTiRPVNOoEVQX6J6XTtR5rA1LuqQQ4ruvKRG7YnrUpeF8OHk",
+      "ANTHROPIC_MODEL": "glm-5.1",
+      "ANTHROPIC_SMALL_FAST_MODEL": "glm-4.5-air",
+      "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS":1
+    }
+}

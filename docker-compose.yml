@@ -1,0 +1,90 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: smartcs-agent-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: smartcs_agent_root_pwd
+      MYSQL_DATABASE: smartcs_agent
+      MYSQL_USER: smartcs-agent
+      MYSQL_PASSWORD: smartcs_agent_pwd
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: smartcs-agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: smartcs-agent-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/smartcs_agent_neo4j_pwd
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  app:
+    build: .
+    container_name: smartcs-agent-app
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: smartcs-agent
+      DB_PASSWORD: smartcs_agent_pwd
+      DB_NAME: smartcs_agent
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      REDIS_PASSWORD: ""
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: smartcs_agent_neo4j_pwd
+      NEO4J_DATABASE: neo4j
+    env_file:
+      - .env.docker
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - app_logs:/app/llm_backend/logs
+      - app_uploads:/app/llm_backend/uploads
+      - ./llm_backend/app/graphrag:/app/llm_backend/app/graphrag:ro
+
+volumes:
+  mysql_data:
+  redis_data:
+  neo4j_data:
+  neo4j_logs:
+  app_logs:
+  app_uploads:

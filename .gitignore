@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+log/
+
+# Local development
+.env.local
+.env.*.local
+
+# other
+doc/
+
+# claude
+claude/
+CLAUDE.md
+
+# GraphRAG generated data
+llm_backend/app/graphrag/data/output/
+llm_backend/app/graphrag/data/cache/
+llm_backend/app/graphrag/data/logs/
+llm_backend/app/graphrag/data/text_cache/
+llm_backend/app/graphrag/data/text_logs/
+llm_backend/app/graphrag/data/text_output/
+llm_backend/app/graphrag/data/lancedb/
+llm_backend/app/graphrag/data/logs.json
+llm_backend/app/graphrag/data/pdf_csv_exports/
+llm_backend/app/graphrag/dev/
+
+# GraphRAG source (installed via pip, not needed in repo)
+llm_backend/app/graphrag/tests/
+llm_backend/app/graphrag/docs/
+llm_backend/app/graphrag/examples_notebooks/
+llm_backend/app/graphrag/course/
+llm_backend/app/graphrag/test_data/
+llm_backend/app/graphrag/origin_data/
+llm_backend/app/graphrag/graphrag/
+llm_backend/app/graphrag/.github/
+llm_backend/app/graphrag/text_logs/
+llm_backend/app/graphrag/*.md
+llm_backend/app/graphrag/*.yaml
+llm_backend/app/graphrag/dictionary.txt
+llm_backend/app/graphrag/CODEOWNERS
+llm_backend/app/graphrag/.vsts-ci.yml
+llm_backend/app/graphrag/.gitattributes
+llm_backend/app/graphrag/.gitignore
+!llm_backend/app/graphrag/settings.yaml
+llm_backend/app/graphrag/data/pdf_outputs/
+
+# Scripts cache
+scripts/.cache_jddc/
+
+# Uploads
+uploads/.claude/
