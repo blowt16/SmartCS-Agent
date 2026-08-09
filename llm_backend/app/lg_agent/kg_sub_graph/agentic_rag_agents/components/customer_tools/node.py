@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.hybrid_retrieval import HybridRetriever
 
 # 导入相关性评分模块
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.relevance_grader import grade_and_ensure_min_results
+from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.relevance_grader import grade_relevance
 
 # 导入 LLM 模块（用于相关性评分）
 from langchain_deepseek import ChatDeepSeek
@@ -166,7 +166,7 @@ def create_vector_search_query_node(
                         temperature=0,
                     )
 
-                hybrid_results = await grade_and_ensure_min_results(
+                hybrid_results = await grade_relevance(
                     llm=grader_llm,
                     query=query,
                     documents=hybrid_results,
