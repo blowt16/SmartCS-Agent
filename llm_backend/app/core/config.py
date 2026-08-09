@@ -108,7 +108,7 @@ class Settings(BaseSettings):
 
     # Hybrid retrieval settings
     RRF_FUSION_K: int = 60                                   # RRF 融合参数
-    HYBRID_EMBEDDING_MODEL: str = "paraphrase-multilingual-MiniLM-L12-v2"  # 混合检索向量模型
+    HYBRID_EMBEDDING_MODEL: str = "bge-m3"  # 混合检索向量模型
 
     # Predefined Cypher settings
     PREDEFINED_CYPHER_SIMILARITY_THRESHOLD: float = 0.5     # 预定义 Cypher 向量匹配阈值
