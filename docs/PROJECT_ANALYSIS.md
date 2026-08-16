@@ -25,7 +25,7 @@
 
 SmartCS-Agent 是一个**基于 FastAPI + LangGraph 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、混合检索、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
-**核心能力**: 5 路智能意图路由 → 多工具编排 → 混合检索 → 幻觉检测 → 流式响应
+**核心能力**: 4 路智能意图路由 → 多工具编排 → 混合检索 → 幻觉检测 → 流式响应
 
 ---
 
@@ -44,13 +44,13 @@ graph TB
     end
 
     subgraph "Agent 编排层 Orchestration"
-        C[LangGraph StateGraph<br/>5 路意图路由 + 子图工作流]
+        C[LangGraph StateGraph<br/>4 路意图路由 + 子图工作流]
     end
 
     subgraph "LLM 服务层"
         D1[DeepSeek V3<br/>主对话/推理/路由]
-        D2[SiliconFlow BGE-M3<br/>Embedding 向量生成]
-        D3[GPT-4o 兼容 API<br/>图片分析 Vision]
+        D2[EmbeddingProvider<br/>local/ollama/qwen 三后端<br/>bge-m3 1024 维]
+        D3[Qwen-VL (qwen-vl-max)<br/>图片分析 Vision]
     end
 
     subgraph "知识检索层"
@@ -87,8 +87,8 @@ graph TB
 | **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理、相关性评分 |
 | **本地 LLM** | Ollama | - | 可切换的本地 LLM 替代方案 |
 | **文档检索** | pgvector | 0.5+ | 向量表 document_chunks（HNSW 索引），标准 RAG 索引管道 |
-| **Embedding** | SiliconFlow BAAI/bge-m3 | - | 语义向量生成，免费 API |
-| **本地 Embedding** | sentence-transformers | paraphrase-multilingual-MiniLM-L12-v2 | 混合检索的本地向量编码 |
+| **Embedding** | EmbeddingProvider | local/ollama/qwen | 统一向量接口（bge-m3，1024 维），后端可切换 |
+| **本地 Embedding** | sentence-transformers | bge-m3 | 混合检索与向量入库的本地向量编码 |
 | **向量缓存** | Redis | 7 Alpine | 语义缓存（余弦相似度 ≥ 0.90 命中） |
 | **关系数据库** | PostgreSQL | 16（pgvector 镜像） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | **LLM SDK** | OpenAI SDK (AsyncOpenAI) | - | 兼容 DeepSeek API |
@@ -132,11 +132,10 @@ flowchart TB
 
     subgraph Agent["🤖 LangGraph Agent 层"]
         direction TB
-        ROUTER["意图路由器<br/>5 路分类 + 复杂度评估"]
+        ROUTER["意图路由器<br/>4 路分类 + 复杂度评估"]
         GEN["闲聊节点"]
         ADD["追问节点<br/>护栏检查"]
         IMG["图片分析节点<br/>Vision API"]
-        FILE["文件处理节点"]
         KG["知识库查询子图<br/>Multi-Tool Workflow"]
     end
 
@@ -154,7 +153,7 @@ flowchart TB
     Browser --> FastAPI
     FastAPI --> Factory
     Factory --> Agent
-    AGENT_ROUTER --> GEN & ADD & IMG & FILE & KG
+    AGENT_ROUTER --> GEN & ADD & IMG & KG
     KG --> KGTools
     KGTools --> Redis
     LLMF --> PostgreSQL
@@ -190,7 +189,7 @@ SmartCS-Agent/
 │       │   ├── lg_builder.py            # StateGraph 构建 + 路由 + 5 节点
 │       │   ├── lg_states.py             # 状态定义（Router/AgentState）
 │       │   ├── lg_prompts.py            # 15+ 提示词模板
-│       │   └── kg_sub_graph/            # 知识图谱子图
+│       │   └── kg_sub_graph/            # 知识库检索子图
 │       │       ├── kg_tools_list.py     # 工具 Schema 定义
 │       │       └── agentic_rag_agents/
 │       │           ├── workflows/       # 多工具工作流
@@ -222,7 +221,7 @@ SmartCS-Agent/
 ├── Dockerfile                         # Python 3.13-slim 镜像（uv 安装锁定依赖）
 ├── pyproject.toml                     # Python 依赖清单（uv 管理）
 ├── uv.lock                            # 依赖锁定文件
-├── .env.example                       # 环境变量模板（34 项配置）
+├── .env.example                       # 环境变量模板（60+ 项配置）
 └── .env.docker                        # Docker 环境变量
 ```
 
@@ -240,7 +239,7 @@ SmartCS-Agent/
 - **相关性评分配置**: 阈值、重试次数等可调参
 
 ```python
-# 配置项结构（34 项环境变量）
+# 配置项结构（60+ 项配置，含默认值）
 class Settings(BaseSettings):
     # DeepSeek: API_KEY, BASE_URL, MODEL
     # Ollama: BASE_URL, CHAT/REASON/EMBEDDING/AGENT_MODEL
@@ -272,7 +271,7 @@ sequenceDiagram
     participant User as 用户请求
     participant Service as DeepseekService
     participant Cache as RedisSemanticCache
-    participant Embed as Ollama Embedding
+    participant Embed as EmbeddingProvider
     participant LLM as DeepSeek API
 
     User->>Service: 发送消息
@@ -294,14 +293,14 @@ sequenceDiagram
 
 **核心机制**:
 
-- **向量存储**: 用户消息 → Ollama BGE-M3 Embedding → Redis 存储 `{prefix}:vec:{md5}`
+- **向量存储**: 用户消息 → EmbeddingProvider（bge-m3，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`
 - **相似度计算**: 余弦相似度 `cos(θ) = A·B / (|A|·|B|)`
 - **自动清理**: 异步任务按 LRU 策略清理超量缓存
 - **元数据追踪**: 访问次数、创建时间、最后访问时间
 
 ### 4.4 LangGraph Agent 路由器 (`app/lg_agent/lg_builder.py`)
 
-5 路意图路由是系统核心调度器：
+4 路意图路由是系统核心调度器：
 
 ```mermaid
 stateDiagram-v2
@@ -310,13 +309,11 @@ stateDiagram-v2
     analyze_and_route_query --> get_additional_info: additional-query
     analyze_and_route_query --> create_research_plan: graphrag-query
     analyze_and_route_query --> create_image_query: image-query
-    analyze_and_route_query --> create_file_query: file-query
 
     respond_to_general_query --> [*]: 纯 LLM 闲聊
     get_additional_info --> [*]: 追问引导
     create_research_plan --> [*]: 知识库查询子图
-    create_image_query --> [*]: Vision API 分析
-    create_file_query --> [*]: 文件处理(待实现)
+    create_image_query --> [*]: Qwen-VL 视觉分析
 
     state create_research_plan {
         [*] --> QueryPreprocess: 查询预处理
@@ -349,8 +346,7 @@ stateDiagram-v2
 | `general-query` | 闲聊、非业务问题 | - | 纯 LLM 回复 |
 | `additional-query` | 信息不足需追问 | - | 护栏检查 + 追问 |
 | `graphrag-query` | 产品/知识库查询 | 0.0-1.0 | 知识检索子图 |
-| `image-query` | 用户上传图片 | - | Vision API + LLM |
-| `file-query` | 用户上传文件 | - | (待实现) |
+| `image-query` | 用户上传图片 | - | Qwen-VL 视觉分析 + LLM |
 
 ### 4.5 Multi-Tool 工作流 (`workflows/multi_agent/multi_tool.py`)
 
@@ -462,7 +458,7 @@ sequenceDiagram
 
     Note over Agent: 2. 意图路由
     Agent->>Agent: ScopeGuard 经营范围预检
-    Agent->>LLM: Router 结构化输出<br/>5 路分类 + 复杂度评估
+    Agent->>LLM: Router 结构化输出<br/>4 路分类 + 复杂度评估
     LLM-->>Agent: {type, logic, complexity, ...}
 
     alt general-query
@@ -507,15 +503,14 @@ flowchart TD
     Q["用户输入"]
     SG["ScopeGuard<br/>关键词预检"]
     SG -->|不通过| GEN["general-query<br/>回复: 超出经营范围"]
-    SG -->|通过| ROUTER["LLM 路由器<br/>5路分类+复杂度评估"]
+    SG -->|通过| ROUTER["LLM 路由器<br/>4路分类+复杂度评估"]
 
     ROUTER -->|"闲聊/非业务"| GEN2["general-query<br/>纯 LLM 电商客服风格回复"]
     ROUTER -->|"信息不足"| ADD["additional-query<br/>护栏: 业务范围判断"]
     ADD -->|"范围外"| REJECT["回复: 暂无此商品"]
     ADD -->|"范围内"| ASK["友好追问引导"]
     ROUTER -->|"知识库查询"| KG["graphrag-query"]
-    ROUTER -->|"图片分析"| IMG["image-query<br/>Vision API + LLM"]
-    ROUTER -->|"文件处理"| FILE["file-query<br/>待实现"]
+    ROUTER -->|"图片分析"| IMG["image-query<br/>Qwen-VL + LLM"]
 
     KG --> GRAG["向量检索 vector_search_query<br/>pgvector + 混合检索 + 相关性评分"]
 ```
@@ -552,7 +547,7 @@ flowchart TD
 ### 7.2 语义缓存存储
 
 ```
-用户问题 → Ollama Embedding → Redis:
+用户问题 → EmbeddingProvider → Redis:
   {prefix}:vec:{md5}  → JSON 向量
   {prefix}:resp:{md5} → 回复文本
   {prefix}:meta:{md5} → 访问元数据
@@ -573,20 +568,20 @@ flowchart TD
 
 ## 8. 项目亮点深度分析
 
-### 8.1 🌟 5 路智能意图路由 + 复杂度量化评估
+### 8.1 🌟 4 路智能意图路由 + 复杂度量化评估
 
 **创新点**: 不是简单的关键词匹配，而是让 LLM 同时完成**分类 + 复杂度量化 + 推理需求判断**。
 
 ```python
 class Router(TypedDict):
-    type: Literal["general-query", "additional-query", "graphrag-query", "image-query", "file-query"]
+    type: Literal["general-query", "additional-query", "graphrag-query", "image-query"]
     complexity: float              # 0-1 查询复杂度
     relationship_intensity: float  # 0-1 关系密集度
     reasoning_required: bool       # 是否需要多跳推理
     entity_count: int              # 实体数量
 ```
 
-**技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息，为下游检索策略提供了**量化决策依据**。相比简单分类器，复杂度信息可用于检索流程的动态调节。
+**技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息。复杂度四元组当前作为路由元信息记录（早期曾驱动 Text2Cypher/预定义模板/向量检索的三分策略，该分支已随 Neo4j 退役移除），可继续用于检索流程的动态调节与效果评估。
 
 ### 8.2 🌟 混合检索 + RRF 融合 + 相关性评分过滤
 
@@ -693,7 +688,7 @@ app:
 
 | 优点 | 说明 |
 |------|------|
-| **配置管理规范** | Pydantic Settings 类型安全，34 项配置集中管理 |
+| **配置管理规范** | Pydantic Settings 类型安全，60+ 项配置集中管理 |
 | **日志系统完善** | 结构化日志，按服务分级，请求追踪 |
 | **Docker 部署完善** | Multi-service + healthcheck + 数据持久化 |
 | **文档规范** | README 清晰，API 端点完整列举 |
@@ -705,27 +700,7 @@ app:
 
 ### 10.1 严重问题 🔴
 
-#### 10.1.1 缺失的依赖模块
-
-`lg_builder.py` 第 44 行导入了不存在的模块路径：
-
-```python
-# 当前代码（错误路径）
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.agent_safety import (
-    ScopeGuard, TimeoutGuard, BudgetGuard, HallucinationGuard,
-)
-
-# 实际文件位于子目录
-# components/agent_safety/scope_guard.py
-# components/agent_safety/budget_guard.py
-# ...
-```
-
-**影响**: 系统启动时会抛出 `ImportError`，导致整个 LangGraph Agent 无法工作。
-
-**建议**: 修正导入路径为正确的子模块路径。
-
-#### 10.1.2 硬编码的凭据信息
+#### 10.1.1 硬编码的凭据信息
 
 `docker-compose.yml` 中包含明文数据库密码：
 
@@ -737,19 +712,11 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 **建议**: 使用 Docker Secrets 或 `.env` 文件管理敏感信息，在 docker-compose 中通过 `${VAR}` 引用。
 
-#### 10.1.3 `file-query` 路由未实现
-
-`lg_builder.py` 中 `create_file_query` 函数只有 TODO 注释，没有实际逻辑。
-
-**影响**: `file-query` 路由不会返回任何内容。
-
-**建议**: 实现文件处理逻辑或暂时从路由中移除。
-
 ### 10.2 中等问题 🟡
 
 #### 10.2.1 缺少单元测试
 
-项目中**没有任何测试文件**。对于一个包含 200+ Python 文件的复杂系统，缺乏测试覆盖是高风险问题。
+项目中**没有 pytest 单元测试体系**（`app/test/` 仅有少量手写冒烟/基准脚本），对于生产级质量保障是高风险问题。
 
 **建议**:
 
