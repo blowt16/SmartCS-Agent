@@ -15,10 +15,6 @@
 
 ---
 
-## 项目来源
-
-本项目基于原项目 [wang219416/GraphRAG-](https://github.com/wang219416/GraphRAG-) 二次开发，在此向原作者 [wang219416](https://github.com/wang219416) 的开源贡献表示感谢。
-
 ## 项目亮点
 
 | 特性 | 说明 |
@@ -216,7 +212,8 @@ MIT License
 
 ## 致谢
 
-- [wang219416/GraphRAG-](https://github.com/wang219416/GraphRAG-) - 原作者的开源项目，本系统基于其二次开发
+本项目基于原项目 [wang219416/GraphRAG-](https://github.com/wang219416/GraphRAG-) 二次开发，在此向原作者 [wang219416](https://github.com/wang219416) 的开源贡献表示感谢。
+
 - [Microsoft GraphRAG](https://github.com/microsoft/graphrag) - 文档索引与检索
 - [LangGraph](https://github.com/langchain-ai/langgraph) - Agent 编排框架
 - [JDDC](https://jddc.jd.com/) - 京东客服对话数据集
