@@ -442,59 +442,38 @@ flowchart LR
 ### 5.1 完整请求生命周期
 
 ```mermaid
-sequenceDiagram
-    participant Client as 客户端
-    participant API as FastAPI
-    participant Cache as Redis 语义缓存
-    participant Agent as LangGraph Agent
-    participant LLM as DeepSeek
-    participant VS as pgvector 向量检索引擎
-    participant PostgreSQL as PostgreSQL
+flowchart TD
+    C["客户端请求<br/>POST /api/langgraph/query"]
+    C --> API["FastAPI 入口<br/>检查 thread_id"]
+    API -->|"无 thread_id"| NEW["新会话<br/>生成 thread_id + InputState"]
+    API -->|"已有 thread_id"| CTD["多轮会话<br/>PostgresSaver 加载检查点"]
+    API -->|"存在中断"| RSM["中断恢复<br/>Command(resume) 继续人工确认"]
+    NEW --> STREAM["graph.astream<br/>stream_mode=messages"]
+    CTD --> STREAM
+    RSM --> STREAM
 
-    Client->>API: POST /api/langgraph/query
-    Note over API: 1. 请求入口
-    API->>API: 检查 thread_id<br/>判断新会话/继续/中断恢复
-    API->>Agent: graph.astream(input_state, config)
+    STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
+    SG -->|"不通过"| GQ["兜底回复<br/>提示超出经营范围"]
+    SG -->|"通过"| RT["LLM 路由器<br/>4 路分类 + 复杂度评估"]
 
-    Note over Agent: 2. 意图路由
-    Agent->>Agent: ScopeGuard 经营范围预检
-    Agent->>LLM: Router 结构化输出<br/>4 路分类 + 复杂度评估
-    LLM-->>Agent: {type, logic, complexity, ...}
+    RT -->|"闲聊/非业务"| GEN["5.3 general-query<br/>纯 LLM 闲聊"]
+    RT -->|"信息不足"| ADD["5.4 additional-query<br/>护栏 + 追问"]
+    RT -->|"知识库查询"| KG["5.5 graphrag-query<br/>预处理 + 向量检索子图"]
+    RT -->|"图片分析"| IMG["5.6 image-query<br/>Qwen-VL + LLM"]
 
-    alt general-query
-        Agent->>LLM: 生成闲聊回复
-        LLM-->>Agent: 回复
-    else additional-query
-        Agent->>LLM: 护栏判断 + 追问生成
-        LLM-->>Agent: 回复
-    else graphrag-query
-        Note over Agent: 3. 查询预处理
-        Agent->>LLM: 上下文改写
-        Agent->>LLM: 查询纠错
-        Agent->>LLM: 查询扩展 + Multi-Query/HyDE
-
-        Note over Agent: 4. Multi-Tool 工作流
-        Agent->>LLM: Guardrails 护栏
-        Agent->>LLM: Planner 任务分解
-        Agent->>LLM: 工具选择
-
-        Agent->>VS: VectorStoreQuery 向量查询
-        Agent->>Agent: 混合检索 BM25+向量+RRF
-        Agent->>LLM: 相关性评分过滤
-
-        Agent->>LLM: Summarize 结果汇总
-        Agent->>LLM: FinalAnswer 生成回答
-        Agent->>LLM: Hallucination 幻觉检测
-    else image-query
-        Agent->>Agent: 图片压缩+Base64
-        Agent->>LLM: Vision API 分析
-        Agent->>LLM: 结合分析生成回复
-    end
-
-    Agent-->>API: SSE 流式返回 AIMessage
-    API-->>Client: data: {"content": "..."}\n\n
-    API->>PostgreSQL: 回调保存消息(可选)
+    GEN --> SSE["SSE 流式返回<br/>逐 chunk 推送 data: {content}"]
+    ADD --> SSE
+    KG --> SSE
+    IMG --> SSE
+    GQ --> SSE
 ```
+
+**关键说明**:
+
+1. **入口三态**：同一端点根据 thread_id 区分新会话 / 多轮续聊 / 中断恢复（human-in-the-loop）
+2. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
+3. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
+4. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
 
 ### 5.2 意图路由决策流程
 
@@ -513,6 +492,89 @@ flowchart TD
     ROUTER -->|"图片分析"| IMG["image-query<br/>Qwen-VL + LLM"]
 
     KG --> GRAG["向量检索 vector_search_query<br/>pgvector + 混合检索 + 相关性评分"]
+```
+
+### 5.3 general-query 闲聊意图运行流程
+
+节点 `respond_to_general_query`：纯 LLM 对话，不调用任何外部检索；历史消息经 MemoryManager 压缩（Redis 摘要缓存）后注入提示词。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>respond_to_general_query"] --> B["模型选择<br/>AGENT_SERVICE: DeepSeek / Ollama"]
+    B --> C["系统提示词<br/>GENERAL_QUERY_SYSTEM_PROMPT<br/>注入路由 logic（分类理由）"]
+    C --> D["历史管理<br/>MemoryManager 三层压缩<br/>最近 5 轮原文 + 旧消息摘要<br/>（摘要 Redis 缓存）"]
+    D --> E["LLM 生成闲聊回复"]
+    E --> F["返回 {messages: [AIMessage]}"]
+    F --> G["SSE 流式返回前端"]
+```
+
+### 5.4 additional-query 追问意图运行流程
+
+节点 `get_additional_info`：先做经营范围护栏检查（结构化输出 decision），范围内才生成友好追问。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>get_additional_info"] --> B["模型选择<br/>AGENT_SERVICE: DeepSeek / Ollama"]
+    B --> C["护栏提示词<br/>GUARDRAILS_SYSTEM_PROMPT<br/>+ 经营范围描述（智能家居品类白名单）"]
+    C --> D["LLM 结构化输出<br/>decision: continue / end"]
+    D -->|"end 范围外"| E["直接回复<br/>「抱歉，我家暂时没有这方面的商品，<br/>可以在别家看看哦~」"]
+    D -->|"continue 范围内"| F["追问提示词<br/>GET_ADDITIONAL_SYSTEM_PROMPT<br/>注入路由 logic"]
+    F --> G["历史管理<br/>MemoryManager + Redis 摘要缓存"]
+    G --> H["LLM 生成友好追问"]
+    E --> I["返回 {messages: [AIMessage]}"]
+    H --> I
+    I --> J["SSE 流式返回前端"]
+```
+
+### 5.5 graphrag-query 知识库查询意图运行流程
+
+节点 `create_research_plan`：先跑 4 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>create_research_plan"] --> B["构建 Multi-Tool 子图<br/>Guardrails → Planner → 向量检索<br/>→ Summarize → FinalAnswer"]
+    A --> P["查询预处理管道<br/>（BudgetGuard 预算控制）"]
+    P --> P1["① 上下文改写（必要）<br/>多轮代词消解 / 主语补全"]
+    P1 --> P2["② 查询纠错（非必要）<br/>错别字修正"]
+    P2 --> P3["③ 查询扩展（非必要）<br/>同义词补充"]
+    P3 --> P4["④ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
+    P4 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
+    R --> S1["Guardrails 范围检查"]
+    S1 -->|"end"| S1A["直接返回「暂无此商品」"]
+    S1 -->|"planner"| S2["Planner 任务分解<br/>Send 并发派发子任务"]
+    S2 --> S3["向量检索（每子任务）<br/>pgvector 余弦 Top-K"]
+    S3 --> S4["混合检索<br/>BM25 + 向量 RRF 融合"]
+    S4 --> S5["LLM 相关性评分过滤"]
+    S5 --> S6["Summarize 结果汇总<br/>客服风格生成"]
+    S6 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
+    R -->|"超时"| S1B["降级回答<br/>「抱歉，系统处理超时，请稍后再试」"]
+    S1A --> OUT["返回 {messages: [AIMessage(answer)]}"]
+    S1B --> OUT
+    S7 --> OUT
+    OUT --> END["SSE 流式返回前端"]
+```
+
+### 5.6 image-query 图片分析意图运行流程
+
+节点 `create_image_query`：PIL 压缩 → base64 → Qwen-VL 视觉分析 → 结合图片描述由 LLM 生成客服回复。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>create_image_query"] --> B{"image_path 存在?"}
+    B -->|"否"| B1["返回道歉<br/>「我无法查看这张图片，请重新上传」"]
+    B -->|"是"| C{"VISION_API_KEY / BASE_URL<br/>/ MODEL 配置完整?"}
+    C -->|"否"| C1["返回道歉<br/>视觉模型配置不完整"]
+    C -->|"是"| D["PIL 图片压缩<br/>最长边 1024px，JPEG 85%"]
+    D --> E["base64 编码"]
+    E --> F["Qwen-VL API 分析<br/>POST /chat/completions<br/>返回图片描述"]
+    F -->|"非 200"| F1["返回道歉<br/>视觉接口调用失败"]
+    F -->|"200"| G["GET_IMAGE_SYSTEM_PROMPT<br/>注入图片描述"]
+    G --> H["LLM 生成客服风格回复<br/>（DeepSeek / Ollama）"]
+    B1 --> I["返回 {messages: [AIMessage]}"]
+    C1 --> I
+    F1 --> I
+    H --> I
+    I --> J["SSE 流式返回前端"]
 ```
 
 ---
