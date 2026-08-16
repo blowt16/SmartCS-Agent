@@ -5,6 +5,9 @@ from typing import Dict, List, Tuple, Any, Optional
 from sklearn.metrics.pairwise import cosine_similarity
 from app.core.config import settings
 from app.services.embedding_provider import get_embedding_provider
+from app.core.logger import get_logger
+
+logger = get_logger(service="predefined_cypher_utils")
 
 
 class VectorQueryMatcher:
@@ -32,7 +35,7 @@ class VectorQueryMatcher:
         try:
             return self._provider.embed_sync(texts)
         except Exception as e:
-            print(f"生成embedding时出错: {str(e)}")
+            logger.error(f"生成embedding时出错: {str(e)}")
             return [[0.0] * self._provider.dimension] * len(texts)
 
     def _compute_query_vectors(self) -> Dict[str, np.ndarray]:
@@ -132,7 +135,7 @@ class VectorQueryMatcher:
             if json_match:
                 return json.loads(json_match.group(0))
         except Exception as e:
-            print(f"无法解析LLM响应为JSON: {str(e)}")
+            logger.error(f"无法解析LLM响应为JSON: {str(e)}")
 
         return {}
 

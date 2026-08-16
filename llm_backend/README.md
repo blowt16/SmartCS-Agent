@@ -7,7 +7,7 @@ SmartCS-Agent 智能客服系统的后端服务核心模块
 ![FastAPI](https://img.shields.io/badge/FastAPI-005571?logo=fastapi&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
-![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-brightgreen)
+![pgvector](https://img.shields.io/badge/pgvector-Vector%20Store-brightgreen)
 ![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
 
 ## 🏗️ 架构设计
@@ -32,10 +32,10 @@ flowchart TB
     end
     
     subgraph "📊 Data Layer"
-        I[(MySQL<br/>Conversations)]
+        I[(PostgreSQL+pgvector<br/>Conversations/向量)]
         J[(Neo4j<br/>Knowledge Graph)]
         K[(Redis<br/>Cache)]
-        L[ChromaDB<br/>Vector Store]
+        L[pgvector<br/>Vector Store]
     end
     
     A --> B
@@ -90,11 +90,11 @@ SERPAPI_KEY=xxxxx              # SerpAPI搜索密钥
 VISION_API_KEY=xxxxx           # 视觉模型密钥
 
 # 🗄️ 数据库连接
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=root
-MYSQL_PASSWORD=your_password
-MYSQL_DATABASE=smartcs_agent
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_NAME=smartcs_agent
 
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -187,7 +187,7 @@ llm_backend/
 │   │   ├── middleware.py         # 中间件
 │   │   └── security.py           # 安全配置
 │   ├── 🗃️ services/              # 业务服务层
-│   │   └── indexing_service.py   # 文档解析 → 向量入库（ChromaDB）
+│   │   └── indexing_service.py   # 文档解析 → 向量入库（pgvector）
 │   ├── 🤖 lg_agent/              # LangGraph智能体
 │   │   ├── main.py               # Agent入口
 │   │   ├── lg_states.py          # 状态定义
@@ -388,6 +388,6 @@ CMD ["sh", "-c", "python -m scripts.init_db && uvicorn main:app --host 0.0.0.0 -
 
 **🔧 LLM Backend - SmartCS-Agent 核心服务**
 
-*基于 FastAPI + LangGraph + ChromaDB 构建*
+*基于 FastAPI + LangGraph + pgvector 构建*
 
 </div>

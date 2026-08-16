@@ -12,7 +12,6 @@ llm_backend/__pycache__/
 llm_backend/logs/
 llm_backend/uploads/
 llm_backend/eval_results.json
-llm_backend/vector_db/
 llm_backend/knowledge_data/
 .claude/
 .codegraph/

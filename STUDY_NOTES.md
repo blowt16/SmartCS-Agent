@@ -32,9 +32,9 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 智能体 | LangGraph | 多路由 Agent 编排（StateGraph） |
 | LLM | DeepSeek / Ollama | 大语言模型对话、推理（工厂模式切换） |
 | 知识图谱 | Neo4j | 电商数据（商品、订单、客户） |
-| 文档检索 | 标准 RAG（ChromaDB） | 文档解析→分块→Embedding→向量库，混合检索（BM25+向量 RRF） |
+| 文档检索 | 标准 RAG（pgvector） | 文档解析→分块→Embedding→pgvector 表（HNSW），混合检索（BM25+向量 RRF） |
 | 向量缓存 | Redis | 语义缓存（基于 Embedding 向量相似度） |
-| 数据库 | MySQL | 用户、会话、消息持久化 |
+| 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | 前端 | Vue（静态打包 dist） | 聊天界面 |
 
 ### 与同类项目的定位差异
@@ -57,7 +57,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 - Python 3.8+
 - Neo4j 4.0+
 - Redis 6.0+
-- MySQL 8.0+
+- PostgreSQL 16+（pgvector 镜像，Docker 部署）
 
 ### 安装部署
 
@@ -75,9 +75,9 @@ uv sync
 cp llm_backend/.env llm_backend/.env
 # 编辑 .env 填入 API 密钥和数据库连接信息
 
-# 5. 初始化数据库
-cd scripts
-python init_db.py
+# 5. 初始化数据库（建表 + pgvector 扩展 + HNSW 索引）
+cd llm_backend
+python -m scripts.init_db
 
 # 6. 启动服务
 cd llm_backend
@@ -88,7 +88,7 @@ python run.py
 
 ### Docker Compose 一键部署
 
-如果不想手动安装 MySQL、Redis、Neo4j，可以用 Docker Compose 一键启动：
+如果不想手动安装 PostgreSQL、Redis、Neo4j，可以用 Docker Compose 一键启动：
 
 ```bash
 # 1. 编辑 .env.docker 填入真实 API Key
@@ -106,7 +106,7 @@ docker compose down
 
 | 服务 | 镜像 | 端口 | 作用 |
 |------|------|------|------|
-| mysql | mysql:8.0 | 3306 | 用户/会话/消息持久化 |
+| postgres | pgvector/pgvector:pg16 | 5432 | 用户/会话/消息持久化 + 向量检索 + LangGraph 检查点 |
 | redis | redis:7-alpine | 6379 | 语义缓存 |
 | neo4j | neo4j:5-community | 7474/7687 | 知识图谱 |
 | app | 自构建 | 8000 | FastAPI 应用 |
@@ -114,7 +114,7 @@ docker compose down
 关键设计：
 - **healthcheck**：每个数据库服务都有健康检查，app 用 `depends_on: condition: service_healthy` 确保数据库就绪后才启动
 - **.env.docker**：数据库连接配置在 `docker-compose.yml` 的 `environment` 中（使用容器内网络主机名），LLM API Key 等从 `.env.docker` 读取
-- **向量库数据**：ChromaDB 持久化在容器内 `/app/llm_backend/vector_db`（`VECTOR_DB_PATH` 配置，集合 `smartcs_agent_docs`）
+- **向量库数据**：pgvector 表 `document_chunks`（与业务库共用 PostgreSQL 实例，HNSW 索引，`VECTOR_TABLE_NAME` 配置）
 - **Ollama 访问**：容器内用 `host.docker.internal` 访问宿主机的 Ollama 服务
 
 ### 配置文件说明（`.env` 关键项）
@@ -129,10 +129,10 @@ AGENT_SERVICE=deepseek
 DEEPSEEK_API_KEY=sk-xxxxx
 SERPAPI_KEY=xxxxx
 
-# MySQL
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_DATABASE=smartcs_agent
+# PostgreSQL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=smartcs_agent
 
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
@@ -160,13 +160,13 @@ REDIS_PORT=6379
 │                   服务层（app/services/）              │
 │   LLMFactory → DeepSeekService / OllamaService       │
 │   SearchService → SerpAPI                            │
-│   ConversationService → MySQL                        │
-│   IndexingService → ChromaDB                         │
+│   ConversationService → PostgreSQL                  │
+│   IndexingService → pgvector                         │
 │   RedisSemanticCache → Redis + Ollama Embedding      │
 ├─────────────────────────────────────────────────────┤
 │                   数据层                              │
-│   MySQL（用户/会话/消息）  Neo4j（知识图谱）           │
-│   Redis（语义缓存）       ChromaDB（向量库）          │
+│   PostgreSQL（用户/会话/消息/向量/检查点） Neo4j（知识图谱） │
+│   Redis（语义缓存）                              │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -192,13 +192,13 @@ REDIS_PORT=6379
   │    │    ├─ graphrag-query → Multi-Tool Workflow
   │    │    │    ├─ Text2Cypher（NL → Cypher 查询）
   │    │    │    ├─ PredefinedCypher（预定义查询模板）
-  │    │    │    └─ 向量检索（ChromaDB）＋混合检索（BM25+向量 RRF）
+  │    │    │    └─ 向量检索（pgvector）＋混合检索（BM25+向量 RRF）
   │    │    ├─ image-query → GPT-4o 图片分析
   │    │    └─ file-query → 文件处理
   │    │
   │    └─ check_hallucinations（幻觉检测）
   │
-  └─ /api/upload ──→ IndexingService → 解析→分块→Embedding→ChromaDB 入库
+  └─ /api/upload ──→ IndexingService → 解析→分块→Embedding→pgvector 入库
 ```
 
 ### 目录结构与模块映射
@@ -259,7 +259,7 @@ REDIS_PORT=6379
 5种路由类型：
 - `general-query` — 闲聊，不查数据库
 - `additional-query` — 问题不明确，需要追问
-- `graphrag-query` — 查知识库（Neo4j / ChromaDB 文档检索）
+- `graphrag-query` — 查知识库（Neo4j / pgvector 文档检索）
 - `image-query` — 图片分析
 - `file-query` — 文件处理（未实现）
 
@@ -386,7 +386,7 @@ Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（�
   ├── Text2Cypher: 自然语言→Cypher查询语言
   │   └── 生成→校验→修正→执行 四步闭环
   ├── PredefinedCypher: 预定义查询模板 + 向量匹配
-  └── 向量检索: ChromaDB 文档检索（向量 + BM25 混合检索）
+  └── 向量检索: pgvector 文档检索（向量 + BM25 混合检索）
 → Summarize（汇总）→ Final Answer（最终回答）→ Validate（完整性验证）
 ```
 
@@ -520,7 +520,7 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 │    → RecursiveCharacterTextSplitter 分块                      │
 │       chunk_size=500, overlap=50（分隔符含中文标点）             │
 │    → Embedding（统一 EmbeddingProvider，bge-m3 1024 维）       │
-│    → ChromaDB 入库（PersistentClient，集合 smartcs_agent_docs）│
+│    → pgvector 入库（document_chunks 表，HNSW 索引）             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -533,12 +533,12 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
   → create_research_plan → Multi-Tool Workflow → Tool Selection
   → LLM 选择工具 "vector_search_query"（原 microsoft_graphrag_query）
   → customer_tools/node.py 的 VectorStoreQuery 类（替代原 GraphRAGAPI）
-  → ChromaDB 向量检索 + HybridRetriever（BM25 + 向量 RRF 融合）
+  → pgvector 向量检索 + HybridRetriever（BM25 + 向量 RRF 融合）
   → RelevanceGrader（LLM 相关性评分过滤）→ 生成回答
 ```
 
 关键代码在 `lg_agent/kg_sub_graph/agentic_rag_agents/components/`：
-- `customer_tools/node.py`：`VectorStoreQuery` 类封装 ChromaDB 客户端（PersistentClient），`search()` 方法执行向量检索
+- `customer_tools/node.py`：`VectorStoreQuery` 类封装 pgvector 查询（SQLAlchemy AsyncSession），`search()` 方法执行余弦 Top-K 检索
 - `hybrid_retrieval/`：HybridRetriever（BM25 + 向量 RRF 融合）
 - `relevance_grader.py`：LLM 相关性评分，过滤不相关结果
 - `kg_tools_list.py` 与 `tool_selection/node.py`：工具名已由 `microsoft_graphrag_query` 改为 `vector_search_query`
@@ -547,7 +547,7 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 
 | 文件 | 作用 |
 |------|------|
-| `app/services/indexing_service.py` | IndexingService：解析→清洗→分块→Embedding→ChromaDB 入库 |
+| `app/services/indexing_service.py` | IndexingService：解析→清洗→分块→Embedding→pgvector 入库 |
 | `app/services/embedding_provider.py` | 统一 Embedding 提供器（local / ollama / qwen 后端可切换） |
 
 ### 索引构建流程
@@ -565,7 +565,7 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 4. _clean_text() 清洗：统一换行符、压缩连续空行、去首尾空白
 5. RecursiveCharacterTextSplitter 分块（chunk_size=500, overlap=50）
 6. bge-m3 向量化（1024 维）
-7. 写入 ChromaDB 集合 smartcs_agent_docs（带 source/file_path/user_id 元数据）
+7. 写入 pgvector 表 document_chunks（带 source/file_path/user_id 元数据列）
 ```
 
 | 步骤 | 做什么 | 是否调用 LLM |
@@ -574,7 +574,7 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 | 2 | _clean_text 文本清洗 | 否 |
 | 3 | 递归分块（分隔符含中文标点） | 否 |
 | 4 | Embedding 向量化（bge-m3，1024 维） | 否 |
-| 5 | ChromaDB 入库（秒级完成） | 否 |
+| 5 | pgvector 入库（秒级完成） | 否 |
 
 **关键代码**（indexing_service.py）：
 ```python
@@ -584,12 +584,13 @@ text_splitter = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", "。", "！", "？", "，", " ", ""],  # 含中文标点
 )
 
-# ChromaDB 持久化客户端
-client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
-collection = client.get_or_create_collection(
-    name=settings.VECTOR_DB_COLLECTION,   # smartcs_agent_docs
-    embedding_function=embedding_fn,      # bge-m3 向量化
-)
+# pgvector 文档块模型（与业务库共用 PostgreSQL）
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"     # settings.VECTOR_TABLE_NAME
+    id = Column(Integer, primary_key=True)
+    content = Column(Text, nullable=False)             # 分块文本
+    embedding = Column(Vector(1024), nullable=False)   # bge-m3 向量化
+    # source / file_path / user_id / chunk_index 元数据列
 ```
 
 ### 数据准备脚本
@@ -602,18 +603,18 @@ collection = client.get_or_create_collection(
 | `scripts/download_datasets.py` | 电商 FAQ 数据集 | `knowledge_data/ecommerce_faq/` |
 | `scripts/download_jddc.py` | 京东客服对话语料 | `knowledge_data/` |
 
-### ChromaDB 集合结构
+### pgvector 表结构
 
-标准 RAG 只用一张集合（`smartcs_agent_docs`）存所有分块，每条记录由四部分组成：
+标准 RAG 只用一张表（`document_chunks`）存所有分块，每条记录字段：
 
 | 字段 | 内容 | 用途 |
 |------|------|------|
-| `ids` | `user_{user_id}_{随机8位}_{序号}` | 分块唯一标识 |
-| `documents` | 分块后的文本片段 | 检索返回的原始证据文本 |
-| `metadatas` | `source`（文件名）、`file_path`、`user_id`、`chunk_index` | 按用户隔离、溯源原文 |
-| `embeddings` | bge-m3 生成的 1024 维向量 | 向量相似度检索 |
+| `id` | 自增主键 | 分块唯一标识 |
+| `content` | 分块后的文本片段 | 检索返回的原始证据文本 |
+| `source` / `file_path` / `user_id` / `chunk_index` | 元数据列 | 按用户隔离、溯源原文 |
+| `embedding` | bge-m3 生成的 1024 维 `vector` 列 | 向量相似度检索（HNSW 索引） |
 
-对比 GraphRAG 时代需要维护 6 张 parquet 表（entities/relationships/text_units/communities/community_reports/covariates），迁移后只需一张集合，数据加载和更新逻辑大幅简化。
+对比 GraphRAG 时代需要维护 6 张 parquet 表（entities/relationships/text_units/communities/community_reports/covariates），迁移后只需一张表，数据加载和更新逻辑大幅简化。
 
 ### 查询时的数据加载流程
 
@@ -622,27 +623,24 @@ collection = client.get_or_create_collection(
 ```python
 class VectorStoreQuery:
     def __init__(self):
-        # 打开持久化向量库（与索引写入端共用同一目录）
-        self.client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
-        self.collection = self.client.get_or_create_collection(
-            name=settings.VECTOR_DB_COLLECTION,
-            embedding_function=embedding_fn,
-        )
+        self.encoder = SentenceTransformer(settings.EMBEDDING_MODEL)
 
-    def search(self, query: str, top_k: int = 10):
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
+    async def search(self, query: str, top_k: int = 10):
+        query_vec = self.encoder.encode([query], normalize_embeddings=True).tolist()[0]
+        distance = DocumentChunk.embedding.cosine_distance(query_vec)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(DocumentChunk, distance.label("distance"))
+                .order_by(distance).limit(top_k)
+            )
         ...
 ```
 
-**更新后查询自动可见**：ChromaDB 是持久化数据库，新文档写入后查询即可命中，无需重新加载索引（对比 GraphRAG 时代需要把 parquet 读入内存、索引更新后重新实例化刷新缓存）。
+**更新后查询自动可见**：pgvector 表持久化在 PostgreSQL 中，新文档写入后查询即可命中，无需重新加载索引（对比 GraphRAG 时代需要把 parquet 读入内存、索引更新后重新实例化刷新缓存）。
 
 ### 增量更新机制
 
-- ChromaDB 按 `ids` 和 `metadatas` 管理分块，新上传的文件只会 `add` 新分块，不影响已有数据
+- pgvector 按行管理分块，新上传的文件只会插入新行，不影响已有数据
 - 更新方式：
   - **Web API**：`POST /api/upload`（自动触发解析入库）
   - **批量脚本**：`IndexingService.process_directory()` 处理整个目录（如 `knowledge_data/` 下的全部文档）
@@ -651,8 +649,7 @@ class VectorStoreQuery:
 
 ```bash
 # ---- 向量库配置 ----
-VECTOR_DB_PATH=../vector_db              # ChromaDB 持久化目录（项目根）
-VECTOR_DB_COLLECTION=smartcs_agent_docs  # 集合名称
+VECTOR_TABLE_NAME=document_chunks        # pgvector 表名（与业务库共用 PostgreSQL）
 
 # ---- Embedding 配置 ----
 EMBEDDING_TYPE=ollama                    # local / ollama / qwen 可切换
@@ -682,7 +679,7 @@ RELEVANCE_GRADING_ENABLED=true           # 相关性评分开关
 
 ```
 用户问题
-  → 向量检索（ChromaDB）
+  → 向量检索（pgvector）
   → 混合检索（BM25 + 向量检索 + RRF 融合）
   → 相关性评分（LLM 逐条评分，过滤不相关结果）
   → 相关结果不足时如实返回，不强行补足
@@ -852,7 +849,7 @@ cos(A,B) = A·B / (||A|| × ||B||)
 ```
 前端: 用户输入密码 → SHA256 哈希（保护明文不在网络传输中暴露）
 后端: SHA256 结果 → bcrypt 哈希（防止数据库泄露后被彩虹表攻击）
-存储: bcrypt 哈希值存入 MySQL
+存储: bcrypt 哈希值存入 PostgreSQL
 ```
 
 **为什么前端也要做一次 SHA256？** HTTPS 已经加密了传输内容，但 SHA256 是额外一层保护。即使 SSL 被中间人攻击，攻击者拿到的也是 SHA256 哈希值，不是原始密码。
@@ -1032,8 +1029,8 @@ async function sendAgentQuery(query, conversationId, imageFile) {
 │  /api/chat → LLMFactory → DeepSeek/Ollama → SSE 流式响应        │
 │  /api/search → SearchService → SerpAPI + LLM → SSE 流式响应     │
 │  /api/langgraph/query → LangGraph Agent → SSE 流式响应          │
-│  /api/upload → IndexingService → ChromaDB 向量库入库           │
-│  /api/conversations → MySQL → JSON 响应                         │
+│  /api/upload → IndexingService → pgvector 向量库入库           │
+│  /api/conversations → PostgreSQL → JSON 响应                    │
 │  /api/register, /api/token → bcrypt + JWT → JSON 响应           │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -1080,15 +1077,15 @@ Pydantic 做了三件事：
 | 前端操作 | 前端调用 | 后端端点 | 后端处理 |
 |---------|---------|---------|---------|
 | 登录 | `axios.post("/api/token")` | `POST /api/token` | 验证密码→返回 JWT |
-| 注册 | `axios.post("/api/register")` | `POST /api/register` | bcrypt 哈希→存 MySQL |
-| 新建会话 | `fetch("/api/conversations")` | `POST /api/conversations` | MySQL 插入记录 |
-| 获取历史会话 | `fetch("/api/conversations/user/{id}")` | `GET /api/conversations/user/{id}` | MySQL 查询 |
-| 获取历史消息 | `fetch("/api/conversations/{id}/messages")` | `GET /api/conversations/{id}/messages` | MySQL 查询 |
+| 注册 | `axios.post("/api/register")` | `POST /api/register` | bcrypt 哈希→存 PostgreSQL |
+| 新建会话 | `fetch("/api/conversations")` | `POST /api/conversations` | PostgreSQL 插入记录 |
+| 获取历史会话 | `fetch("/api/conversations/user/{id}")` | `GET /api/conversations/user/{id}` | PostgreSQL 查询 |
+| 获取历史消息 | `fetch("/api/conversations/{id}/messages")` | `GET /api/conversations/{id}/messages` | PostgreSQL 查询 |
 | 普通聊天 | `fetch("/api/chat")` | `POST /api/chat` | LLM 流式→SSE |
 | 深度思考 | `fetch("/api/reason")` | `POST /api/reason` | LLM 推理→SSE |
 | 联网搜索 | `fetch("/api/search")` | `POST /api/search` | SerpAPI+LLM→SSE |
 | Agent 对话 | `fetch("/api/langgraph/query")` | `POST /api/langgraph/query` | LangGraph→SSE |
-| 上传文件 | `fetch("/api/upload")` | `POST /api/upload` | FormData→ChromaDB 入库 |
+| 上传文件 | `fetch("/api/upload")` | `POST /api/upload` | FormData→pgvector 入库 |
 
 ### 一次完整对话的前后端流程
 
@@ -1119,7 +1116,7 @@ Pydantic 做了三件事：
 11. TextDecoder 把二进制转成文字
 12. 解析 "data: " 前缀，提取 JSON 内容
 13. 通过 Vue 的响应式数据更新页面，文字一个字一个字出现
-14. 流结束后，触发 on_complete 回调→后端保存消息到 MySQL
+14. 流结束后，触发 on_complete 回调→后端保存消息到 PostgreSQL
 ```
 
 > 参见：[9. LLM 服务层](#9-llm-服务层) 了解 LLM 调用的详细实现。
@@ -1184,7 +1181,7 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 
 ### Q2: 你的 LangGraph Agent 是怎么设计的？
 
-> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow，支持 Text2Cypher 自动生成图查询、预定义 Cypher 模板匹配、以及基于 ChromaDB 的标准 RAG 文档检索三种工具。
+> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow，支持 Text2Cypher 自动生成图查询、预定义 Cypher 模板匹配、以及基于 pgvector 的标准 RAG 文档检索三种工具。
 
 ### Q3: 语义缓存是怎么实现的？
 
@@ -1207,11 +1204,11 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 > - **FastAPI**：原生异步支持，适合 LLM 流式输出场景
 > - **LangGraph**：比纯 LangChain 更适合复杂的多步骤工作流编排，支持状态持久化和中断恢复
 > - **Neo4j**：电商数据天然适合图结构（商品-分类-供应商-订单关系）
-> - **标准 RAG（ChromaDB）**：文档管道简单可靠，混合检索（BM25+向量 RRF）兼顾关键词与语义，事实查询效果与 GraphRAG 持平但成本低一个量级
+> - **标准 RAG（pgvector）**：文档管道简单可靠，混合检索（BM25+向量 RRF）兼顾关键词与语义，事实查询效果与 GraphRAG 持平但成本低一个量级
 
 ### Q7: 为什么从 GraphRAG 迁移到标准 RAG？
 
-> GraphRAG 建索引需要 LLM 抽取实体和关系，一次要 5-30 分钟、API 成本高；80+ 内嵌源码维护困难；而且电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理；实体关系已经由 Neo4j 管理，再抽一份是冗余。迁移到标准 RAG（ChromaDB）后索引秒级完成，事实查询效果持平。核心经验：**选型要看场景**——GraphRAG 适合跨文档归纳、多跳推理的宏观分析，事实查询用标准 RAG 足矣。
+> GraphRAG 建索引需要 LLM 抽取实体和关系，一次要 5-30 分钟、API 成本高；80+ 内嵌源码维护困难；而且电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理；实体关系已经由 Neo4j 管理，再抽一份是冗余。迁移到标准 RAG（pgvector）后索引秒级完成，事实查询效果持平。核心经验：**选型要看场景**——GraphRAG 适合跨文档归纳、多跳推理的宏观分析，事实查询用标准 RAG 足矣。
 
 ### Q8: 你的混合检索（BM25 + 向量 RRF）是怎么设计的？
 
@@ -1221,13 +1218,41 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 
 ## 15. 踩坑记录
 
-### 1. aiomysql 在 Windows 上 Event Loop 关闭报错
+### 1. psycopg 在 Windows 上 ProactorEventLoop 报错
+
+**现象：** 运行 `init_db.py` 或启动 uvicorn 时报 `Psycopg cannot use the 'ProactorEventLoop' to run in async mode`
+
+**原因：** Windows 上 Python 默认事件循环是 ProactorEventLoop（uvicorn 的 `--loop auto` 也会显式选择它），psycopg 异步模式明确不支持该循环
+
+**修复（两层）：**
+
+1. `app/core/database.py` 顶部全局设置 SelectorEventLoop 策略（覆盖 `asyncio.run` 脚本场景）：
+
+```python
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+```
+
+2. `run.py` 启动前给 uvicorn 的 loop 工厂打补丁（uvicorn 会在创建事件循环时延迟导入该工厂）：
+
+```python
+import uvicorn.loops.asyncio as _uv_asyncio_loop
+
+def _selector_loop_factory(use_subprocess: bool = False):
+    return asyncio.SelectorEventLoop
+
+_uv_asyncio_loop.asyncio_loop_factory = _selector_loop_factory
+```
+
+Docker/Linux 环境无此问题（默认 SelectorEventLoop）。
+
+### 1.1（历史）aiomysql 在 Windows 上 Event Loop 关闭报错
 
 **现象：** 运行 `init_db.py` 时报 `RuntimeError: Event loop is closed`
 
 **原因：** `asyncio.run()` 关闭事件循环后，aiomysql 连接池的 `__del__` 方法尝试清理连接，但事件循环已不存在
 
-**修复：** 在 `init_db.py` 的 `finally` 块中加 `await engine.dispose()` 主动释放连接
+**修复：** 在 `init_db.py` 的 `finally` 块中加 `await engine.dispose()` 主动释放连接（该模式沿用至今）
 
 ```python
 async def init_db():

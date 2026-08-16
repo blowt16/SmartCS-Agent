@@ -105,5 +105,5 @@ class DeepseekService:
             )
             return response.choices[0].message.content
         except Exception as e:
-            print(f"Generation error: {str(e)}")
+            logger.error(f"Generation error: {str(e)}")
             raise 

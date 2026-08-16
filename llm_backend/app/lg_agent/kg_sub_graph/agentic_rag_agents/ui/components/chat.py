@@ -8,6 +8,9 @@ import streamlit as st
 from neo4j.exceptions import SessionExpired
 
 from ...components.state import OutputState
+from app.core.logger import get_logger
+
+logger = get_logger(service="ui_chat")
 
 
 def append_user_question(question: str) -> None:
@@ -19,7 +22,7 @@ async def append_llm_response(question: str) -> None:
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         message_placeholder.status("thinking...")
-        print("question: ", question)
+        logger.debug(f"question: {question}")
 
         agent = st.session_state.get("agent")
 
@@ -130,6 +133,4 @@ def download_csv_button(cypher_results: List[List[Dict[str, Any]]]) -> None:
                 key=str(uuid4()),
             )
     except Exception as e:
-        print(
-            f"Unable to generate Download Button for most recent question. Error: {e}"
-        )
+        logger.error(f"Download Button 生成失败: {e}")

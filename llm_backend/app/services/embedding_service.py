@@ -9,6 +9,9 @@ import hashlib
 import time
 import PyPDF2
 from app.core.config import settings
+from app.core.logger import get_logger
+
+logger = get_logger(service="embedding")
 
 class EmbeddingService:
     def __init__(self):
@@ -139,7 +142,7 @@ class EmbeddingService:
             if not self.current_documents:
                 raise ValueError("文档数据为空")
             
-            print(f"成功加载索引 {index_id}: {self.current_index.ntotal} 个向量, {len(self.current_documents)} 个文档")
+            logger.info(f"成功加载索引 {index_id}: {self.current_index.ntotal} 个向量, {len(self.current_documents)} 个文档")
             
         except Exception as e:
             self.current_index = None

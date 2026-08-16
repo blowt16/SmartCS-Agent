@@ -1,6 +1,9 @@
 import requests
 from typing import List, Dict
 from app.core.config import settings
+from app.core.logger import get_logger
+
+logger = get_logger(service="search_tool")
 
 class SearchTool:
     def __init__(self):
@@ -33,7 +36,7 @@ class SearchTool:
             return self._parse_results(response.json())
             
         except Exception as e:
-            print(f"搜索失败: {str(e)}")
+            logger.error(f"搜索失败: {str(e)}")
             return []
     
     def _parse_results(self, data: dict) -> List[Dict]:

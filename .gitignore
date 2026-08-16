@@ -50,9 +50,6 @@ doc/
 claude/
 CLAUDE.md
 
-# ChromaDB 向量库数据（由索引管道生成）
-vector_db/
-llm_backend/vector_db/
 
 # 知识库数据（由 scripts/ 生成）
 llm_backend/knowledge_data/

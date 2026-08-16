@@ -1,49 +1,102 @@
 from loguru import logger
 import sys
 from pathlib import Path
-import json
+import os
+import contextvars
 
-# 创建日志目录， Path 指的是当前工作目录下的 logs 目录。如果你在不同的目录中运行脚本，logs 目录的位置也会相应变化。
-# 也就是说：logs 目录的位置取决于运行 Python 程序时的当前工作目录。不同的组件或模块在不同的工作目录下运行时，logs 目录也会位于不同的位置。
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
+# ============================================================================
+# 日志目录：基于项目根目录的绝对路径，不受 CWD 影响
+# logger.py 位于 llm_backend/app/core/logger.py → parent×4 = 项目根目录
+# ============================================================================
+LOG_DIR = Path(__file__).parent.parent.parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+# ============================================================================
+# 动态日志级别：通过环境变量 LOG_LEVEL 控制，默认 INFO
+# 用法：LOG_LEVEL=DEBUG python run.py
+# ============================================================================
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# ============================================================================
+# 请求追踪 ID：基于 contextvars 实现全链路自动注入
+# 所有模块的日志无需任何修改，自动携带当前请求的 request_id
+# ============================================================================
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default="-"
+)
 
 # 移除默认的控制台输出
 logger.remove()
 
-# 添加控制台输出
+# --------------------------------------------------------------------------
+# 控制台输出（人类可读，带颜色）
+# --------------------------------------------------------------------------
 logger.add(
     sys.stdout,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="INFO"
+    format=(
+        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+        "<level>{level: <8}</level> | "
+        "<yellow>{extra[request_id]}</yellow> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level>"
+    ),
+    level=LOG_LEVEL,
 )
 
-# 添加文件输出
+# --------------------------------------------------------------------------
+# 文件输出（JSON 结构化，便于 ELK / Loki 等日志系统索引）
+# --------------------------------------------------------------------------
 logger.add(
-    "logs/app.log",  # 普通日志文件
-    rotation="500 MB",  # 日志文件大小超过500MB时轮转
-    retention="10 days",  # 保留10天的日志
-    compression="zip",  # 压缩旧的日志文件
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="INFO",
-    encoding="utf-8"
+    LOG_DIR / "app.log",
+    rotation="500 MB",
+    retention="10 days",
+    compression="zip",
+    format=(
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+        "{level: <8} | "
+        "{extra[request_id]} | "
+        "{name}:{function}:{line} - "
+        "{message}"
+    ),
+    level=LOG_LEVEL,
+    encoding="utf-8",
+    serialize=True,  # JSON 结构化输出，便于机器解析
 )
 
-# 错误日志单独存储
+# --------------------------------------------------------------------------
+# 错误日志（人类可读格式，便于快速排查，仅记录 ERROR）
+# --------------------------------------------------------------------------
 logger.add(
-    "logs/error.log",  # 错误日志文件
+    LOG_DIR / "error.log",
     rotation="100 MB",
     retention="30 days",
     compression="zip",
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    format=(
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+        "{level: <8} | "
+        "{extra[request_id]} | "
+        "{name}:{function}:{line} - "
+        "{message}"
+    ),
     level="ERROR",
-    encoding="utf-8"
+    encoding="utf-8",
 )
+
+# ============================================================================
+# Patcher：自动注入 request_id 到每条日志记录的 extra 字段
+# 关键：patcher 在日志写入时执行（而非 logger 创建时），因此 contextvars
+#       中当前请求的 request_id 会被正确读取
+# ============================================================================
+logger.configure(patcher=lambda record: record["extra"].update(
+    request_id=request_id_var.get()
+))
+
 
 def get_logger(service: str):
     """获取带有服务名称的 logger"""
     return logger.bind(service=service)
 
+
 def log_structured(event_type: str, data: dict):
-    """结构化日志记录"""
-    logger.info({"event_type": event_type, "data": data}) 
+    """结构化日志记录 — 自动附加 request_id 和服务信息"""
+    logger.bind(event_type=event_type).info(data)

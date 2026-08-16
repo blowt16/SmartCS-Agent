@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from .text2cypher.state import CypherOutputState
+from app.lg_agent.kg_sub_graph.kg_states import CypherOutputState
 from .visualize.state import VisualizationOutputState
 
 

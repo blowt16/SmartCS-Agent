@@ -32,9 +32,9 @@
 | Web | FastAPI + SSE（`llm_backend/main.py:105`） | FastAPI + SSE + WebSocket |
 | Agent | LangGraph 0.3.25 StateGraph，双图嵌套 | LangGraph 1.x，单图 6 节点 |
 | LLM | DeepSeek/Ollama 工厂切换，独立 Vision API | DeepSeek（chat/intent 分组），通义千问 Embedding |
-| 检索 | ChromaDB（BM25+向量 RRF）+ Neo4j Text2Cypher | PostgreSQL 16 + pgvector（HNSW）余弦 Top5 |
+| 检索 | pgvector（BM25+向量 RRF）+ Neo4j Text2Cypher | PostgreSQL 16 + pgvector（HNSW）余弦 Top5 |
 | 缓存/队列 | Redis 语义缓存 + 摘要缓存（**同步客户端**） | Redis 7（redis-stack）+ Celery 5.6 |
-| 业务库 | MySQL 8（aiomysql + SQLAlchemy async） | PostgreSQL（SQLModel + asyncpg） |
+| 业务库 | PostgreSQL 16（psycopg + SQLAlchemy async） | PostgreSQL（SQLModel + asyncpg） |
 | 迁移 | ❌ 无 | ✅ Alembic 异步迁移（6 个版本） |
 | 状态持久化 | MemorySaver（进程内存，重启丢失） | AsyncRedisSaver（thread_id 维度持久化） |
 | 认证 | JWT（无 refresh/撤销），大部分端点免鉴权 | JWT 双角色 + 三级认证依赖 |
@@ -188,7 +188,7 @@ JWT → app_graph.astream_events(v2) → intent_router（LLM 四分类，白名�
 **E1. Alembic 异步迁移 + URL 自动注入** 🟢
 - 证据：`D:\ShopSage\migrations\env.py:32-41,74-85`（get_url 从 Settings 取、`postgresql://`→`postgresql+asyncpg://` 自动替换、在线迁移）
 - 解决了什么：迁移无需手传 URL，兼容同步/异步驱动。
-- SmartCS 借鉴：本项目 `init_db.py:24-27` 每次启动 `drop_all` + Dockerfile CMD 每次启动执行 → **重启即清库**（`llm_backend/scripts/init_db.py`、`Dockerfile:31`）。应改为：init_db 仅建表当不存在（或只建扩展），表结构演进交给 Alembic。可直接照抄 ShopSage 的 env.py（改为 aiomysql 协议）。
+- SmartCS 借鉴：本项目 `init_db.py:24-27` 每次启动 `drop_all` + Dockerfile CMD 每次启动执行 → **重启即清库**（`llm_backend/scripts/init_db.py`、`Dockerfile:31`）。应改为：init_db 仅建表当不存在（或只建扩展），表结构演进交给 Alembic。可直接照抄 ShopSage 的 env.py（改为 psycopg 协议）。
 
 **E2. env.py 显式导入全部模型 + compare_type=True** 🟢
 - 证据：`migrations/env.py:14-19,66`
@@ -262,7 +262,7 @@ JWT → app_graph.astream_events(v2) → intent_router（LLM 四分类，白名�
 ### P1 — 工程闭环补课（按 ShopSage 模式，逐项对应亮点编号）
 1. **状态持久化**：MemorySaver → AsyncRedisSaver（对应 ShopSage 会话持久化模式；本项目 spec_plan/SPEC_CONTEXT_ENGINEERING.md 已有规划，落地即可）。
 2. **多租户安全**：JWT 强制注入 user_id + thread_id 前缀 + 数据层作用域（亮点 D1）——最高性价比的安全改造。
-3. **数据库迁移**：引入 Alembic 异步 env（照抄 E1/E2，MySQL 改 aiomysql 协议），废除 drop_all。
+3. **数据库迁移**：引入 Alembic 异步 env（照抄 E1/E2，MySQL 改 psycopg 协议），废除 drop_all。
 4. **异步任务队列**：Celery 接管 `/api/upload` 索引与耗时操作（C1/C2/C3），LLM 调用配 time_limit。
 5. **SSE 事件过滤重构**：按节点白名单 + 兜底补发（A3），顺带修复 main.py:417。
 6. **测试起步**：pytest + 版本里程碑测试（I1），先补关键链路冒烟与 P0 bug 回归。

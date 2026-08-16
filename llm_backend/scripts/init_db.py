@@ -11,8 +11,9 @@ print(f"Current directory: {Path.cwd()}")
 print(f"Root directory: {ROOT_DIR}")
 
 import asyncio
+from sqlalchemy import text
 from app.core.database import engine, Base
-from app.models import User, Conversation, Message
+from app.models import User, Conversation, Message, DocumentChunk
 from app.core.logger import get_logger
 
 logger = get_logger(service="init_db")
@@ -21,16 +22,23 @@ async def init_db():
     try:
         logger.info("Initializing database...")
         async with engine.begin() as conn:
+            # 启用 pgvector 扩展（需先于建表，document_chunks 使用 vector 类型）
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             # 删除所有表（如果存在）
             await conn.run_sync(Base.metadata.drop_all)
             # 创建所有表
             await conn.run_sync(Base.metadata.create_all)
+            # 向量检索索引（HNSW，余弦距离）
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding "
+                "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
+            ))
         logger.info("Database initialization completed successfully!")
     except Exception as e:
         logger.error(f"Database initialization failed: {str(e)}")
         raise
     finally:
-        # 在事件循环关闭前显式释放引擎，避免 aiomysql 在 Windows 上的清理报错
+        # 在事件循环关闭前显式释放引擎，避免连接池在 Windows 上的清理报错
         await engine.dispose()
 
 def main():

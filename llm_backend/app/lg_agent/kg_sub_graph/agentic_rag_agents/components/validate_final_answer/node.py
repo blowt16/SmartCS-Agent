@@ -12,7 +12,7 @@ from .prompts import create_validate_final_answer_prompt_template
 
 
 def create_validate_final_answer_node(
-    llm: BaseChatModel, graph: Neo4jGraph, loop_back_node: str = "text2cypher"
+    llm: BaseChatModel, graph: Neo4jGraph, loop_back_node: str = "customer_tools"
 ) -> Callable[[OverallState], Coroutine[Any, Any, dict[str, Any]]]:
     """
     Create a Validate Final Answer node for a LangGraph workflow.
@@ -24,7 +24,7 @@ def create_validate_final_answer_node(
     graph : Neo4jGraph
         The Neo4j graph wrapper.
     loop_back_node : str, optional
-            The name of the node or subgraph to return to with follow up questions, by default "text2cypher"
+            The name of the node or subgraph to return to with follow up questions, by default "customer_tools"
 
     Returns
     -------

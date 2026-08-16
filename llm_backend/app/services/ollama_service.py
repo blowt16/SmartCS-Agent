@@ -84,5 +84,5 @@ class OllamaService:
                     return result["message"]["content"]
 
         except Exception as e:
-            print(f"Generation error: {str(e)}")
+            logger.error(f"Generation error: {str(e)}")
             raise 

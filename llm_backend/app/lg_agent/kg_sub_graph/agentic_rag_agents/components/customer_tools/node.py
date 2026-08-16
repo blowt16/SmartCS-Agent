@@ -1,8 +1,10 @@
 from typing import Any, Callable, Coroutine, Dict, List
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
+from sqlalchemy import select
+
+from app.core.database import AsyncSessionLocal
+from app.models.document_chunk import DocumentChunk
 
 # 导入混合检索模块
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.hybrid_retrieval import HybridRetriever
@@ -40,58 +42,55 @@ class VectorSearchOutputState(BaseModel):
 # ==================== 向量查询封装 ====================
 
 class VectorStoreQuery:
-    """向量库查询封装，替代原 GraphRAGAPI"""
+    """向量库查询封装（pgvector），替代原 GraphRAGAPI"""
 
     def __init__(self):
-        self.client = chromadb.PersistentClient(
-            path=settings.VECTOR_DB_PATH,
-            settings=ChromaSettings(anonymized_telemetry=settings.CHROMADB_ANONYMIZED_TELEMETRY),
-        )
-
         # Embedding 模型
         model_name = getattr(settings, "EMBEDDING_MODEL", "bge-m3")
         self.encoder = SentenceTransformer(model_name)
 
-        def embedding_fn(texts):
-            return self.encoder.encode(texts, normalize_embeddings=True).tolist()
+    @staticmethod
+    def _to_doc(chunk: DocumentChunk, score: float | None = None) -> Dict[str, Any]:
+        doc = {
+            "text": chunk.content,
+            "id": chunk.id,
+            "source": chunk.source,
+            "file_path": chunk.file_path,
+            "user_id": chunk.user_id,
+            "chunk_index": chunk.chunk_index,
+        }
+        if score is not None:
+            # 归一化向量下 cosine_distance = 1 - 余弦相似度，score 取相似度（越大越相关）
+            doc["score"] = 1.0 - float(score)
+        return doc
 
-        self.collection = self.client.get_or_create_collection(
-            name=settings.VECTOR_DB_COLLECTION,
-            embedding_function=embedding_fn,
-        )
+    async def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """执行 pgvector 向量检索（余弦距离 Top-K），返回文档列表"""
+        query_vec = self.encoder.encode(
+            [query], normalize_embeddings=True
+        ).tolist()[0]
 
-    def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """执行向量检索，返回文档列表"""
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
+        distance = DocumentChunk.embedding.cosine_distance(query_vec)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(DocumentChunk, distance.label("distance"))
+                .order_by(distance)
+                .limit(top_k)
+            )
+            rows = result.all()
 
-        docs = []
-        if results["documents"] and results["documents"][0]:
-            for i, text in enumerate(results["documents"][0]):
-                doc = {"text": text, "id": results["ids"][0][i]}
-                if results["metadatas"] and results["metadatas"][0]:
-                    doc.update(results["metadatas"][0][i] or {})
-                if results["distances"] and results["distances"][0]:
-                    doc["score"] = results["distances"][0][i]
-                docs.append(doc)
+        docs = [self._to_doc(chunk, score=dist) for chunk, dist in rows]
 
         logger.info(f"向量检索完成: 返回 {len(docs)} 条结果")
         return docs
 
-    def get_all_documents(self) -> List[Dict[str, Any]]:
-        """获取集合中所有文档（用于 HybridRetriever 构建语料库）"""
-        results = self.collection.get(include=["documents", "metadatas"])
-        docs = []
-        if results["documents"]:
-            for i, text in enumerate(results["documents"]):
-                doc = {"text": text, "id": results["ids"][i]}
-                if results["metadatas"] and results["metadatas"][i]:
-                    doc.update(results["metadatas"][i] or {})
-                docs.append(doc)
-        return docs
+    async def get_all_documents(self) -> List[Dict[str, Any]]:
+        """获取表中所有文档块（用于 HybridRetriever 构建语料库）"""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(DocumentChunk).order_by(DocumentChunk.id))
+            chunks = result.scalars().all()
+
+        return [self._to_doc(chunk) for chunk in chunks]
 
 
 # ==================== LangGraph 节点工厂 ====================
@@ -126,11 +125,11 @@ def create_vector_search_query_node(
             vector_store = VectorStoreQuery()
 
             # 1. 向量检索
-            vector_results = vector_store.search(query, top_k=settings.VECTOR_SEARCH_TOP_K)
+            vector_results = await vector_store.search(query, top_k=settings.VECTOR_SEARCH_TOP_K)
 
             # 2. 混合检索：用向量库的全部文档构建 HybridRetriever 语料库
             try:
-                all_docs = vector_store.get_all_documents()
+                all_docs = await vector_store.get_all_documents()
                 if all_docs and len(all_docs) > 0:
                     retriever = HybridRetriever(
                         documents=all_docs,

@@ -8,6 +8,7 @@ from app.services.search_service import SearchService
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from app.core.logger import get_logger, log_structured
 from app.core.middleware import LoggingMiddleware
@@ -24,7 +25,7 @@ from app.services.indexing_service import IndexingService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
-from app.lg_agent.lg_builder import graph
+from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
 from langgraph.types import Command
 import json
 
@@ -37,8 +38,16 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # 之后，便可以在当前文件中直接使用 logger.info()、logger.error() 等方法来记录日志，而不需要进行其他操作。
 logger = get_logger(service="main")
 
+# 启动时初始化 LangGraph Postgres 检查点（连接池 + 检查点表 + 编译 graph）
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
 # 创建 FastAPI 应用实例
-app = FastAPI(title="SmartCS-Agent REST API")
+app = FastAPI(title="SmartCS-Agent REST API", lifespan=lifespan)
 
 # 添加日志中间件， 使用 LoggingMiddleware 来统一处理日志记录，从而替代 FastAPI 的原生打印日志。
 app.add_middleware(LoggingMiddleware)
@@ -95,7 +104,11 @@ async def health_check():
 async def chat_endpoint(request: ChatMessage):
     """聊天接口"""
     try:
-        logger.info(f"Processing chat request for user {request.user_id} in conversation {request.conversation_id}")
+        log_structured("chat_request", {
+            "user_id": request.user_id,
+            "conversation_id": request.conversation_id,
+            "message_count": len(request.messages),
+        })
         chat_service = LLMFactory.create_chat_service()
         
         return StreamingResponse(
@@ -137,8 +150,11 @@ async def reason_endpoint(request: ReasonRequest):
 async def search_endpoint(request: ChatMessage):
     """带搜索功能的聊天接口"""
     try:
-        logger.info(f"Processing search request for user {request.user_id} in conversation {request.conversation_id}")
-        logger.info(f"Request: {request}")
+        log_structured("search_request", {
+            "user_id": request.user_id,
+            "conversation_id": request.conversation_id,
+            "query": request.messages[0]["content"][:200],
+        })
         search_service = LLMFactory.create_search_service()
         return StreamingResponse(
             search_service.generate_stream(
@@ -160,8 +176,12 @@ async def upload_file(
 ):
     """上传文件并准备 RAG 处理"""
     try:
-        logger.info(f"Uploading file for user {user_id}: {file.filename}")
-        
+        log_structured("file_upload", {
+            "user_id": user_id,
+            "filename": file.filename,
+            "content_type": file.content_type,
+        })
+
         # 1. 创建基于UUID的一级目录
         user_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"user_{user_id}"))
         first_level_dir = UPLOAD_DIR / user_uuid
@@ -311,8 +331,13 @@ async def langgraph_query(
 ):
     """使用LangGraph处理用户查询，支持图片上传"""
     try:
-        logger.info(f"Processing LangGraph query for user {user_id} and conversation {conversation_id}")
-        
+        log_structured("langgraph_query", {
+            "user_id": user_id,
+            "conversation_id": conversation_id or "new",
+            "query": query[:200],
+            "has_image": image is not None,
+        })
+
         # 处理图片上传
         image_path = None
         if image:
@@ -348,7 +373,7 @@ async def langgraph_query(
         has_pending_interrupt = False
         try:
             if thread_id:
-                state_history = graph.get_state(thread_config)
+                state_history = await graph.aget_state(thread_config)
                 if state_history:
                     logger.info(f"Found existing conversation state for thread_id: {thread_id}")
                     # 检查是否有未处理的中断（human-in-the-loop）
@@ -397,7 +422,7 @@ async def langgraph_query(
                         logger.debug(f"Tool call: {tool_data}")
 
                 # 处理中断情况
-                state = graph.get_state(thread_config)
+                state = await graph.aget_state(thread_config)
                 if len(state) > 0 and len(state[-1]) > 0:
                     if len(state[-1][0].interrupts) > 0:
                         interrupt_json = json.dumps({"interruption": True, "conversation_id": thread_id})
@@ -421,7 +446,11 @@ async def langgraph_query(
 async def langgraph_resume(request: LangGraphResumeRequest):
     """继续执行LangGraph流程"""
     try:
-        logger.info(f"Resuming LangGraph query for user {request.user_id} with conversation {request.conversation_id}")
+        log_structured("langgraph_resume", {
+            "user_id": request.user_id,
+            "conversation_id": request.conversation_id,
+            "query": request.query[:200],
+        })
         
         # 使用会话ID作为线程ID
         thread_config = {"configurable": {"thread_id": request.conversation_id}}

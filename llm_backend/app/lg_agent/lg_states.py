@@ -8,7 +8,7 @@ from langgraph.graph import add_messages
 class Router(TypedDict):
     """Classify user query."""
     logic: str
-    type: Literal["general-query", "additional-query", "graphrag-query", "image-query", "file-query"]
+    type: Literal["general-query", "additional-query", "graphrag-query", "image-query"]
     question: str = field(default_factory=str)
     # P1 新增：查询复杂度量化字段
     complexity: float  # 0-1，查询复杂度：0.0-0.3简单，0.4-0.7中等，0.8-1.0复杂

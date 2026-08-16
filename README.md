@@ -9,7 +9,7 @@
 ![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-*基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统，集成向量知识检索（ChromaDB）与多轮对话管理*
+*基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统，集成向量知识检索（pgvector）与多轮对话管理*
 
 </div>
 
@@ -22,10 +22,10 @@
 | **5 路意图路由** | LangGraph StateGraph 实现：闲聊 / 追问 / 知识库查询 / 图片分析 / 文件处理，自动识别用户意图并路由 |
 | **Text2Cypher 闭环** | 自然语言 → Cypher 查询 → 正则 + LLM 双重校验 → 自动修正 → 执行，实现图数据库的自然语言查询 |
 | **混合检索 + 相关性评分** | BM25 + 向量检索 RRF 融合，LLM 逐条评分过滤不相关结果，不足时自动切换策略重检索 |
-| **文档向量检索管道** | 解析 → 清洗 → 语义分块 → Embedding → ChromaDB 入库，秒级索引，配合混合检索增强召回 |
+| **文档向量检索管道** | 解析 → 清洗 → 语义分块 → Embedding → pgvector 入库（HNSW 索引），秒级索引，配合混合检索增强召回 |
 | **语义缓存** | 基于 Embedding 向量余弦相似度（阈值 0.90），相同语义问题直接返回缓存，降低 LLM 调用成本 |
 | **幻觉检测** | LLM 校验生成回答是否基于事实数据，为回答质量提供最后保障 |
-| **Docker Compose 一键部署** | MySQL + Redis + Neo4j + App，healthcheck 保障启动顺序，开箱即用 |
+| **Docker Compose 一键部署** | PostgreSQL(pgvector) + Redis + Neo4j + App，healthcheck 保障启动顺序，开箱即用 |
 | **丰富的知识库** | 内置产品知识文档 + 1,800 条电商 FAQ + 2,600+ 条真实客服对话（JDDC 数据集） |
 
 ## 系统架构
@@ -46,11 +46,11 @@
   │    ├─ graphrag-query → Multi-Tool Workflow
   │    │    ├─ Text2Cypher（NL → Cypher 查询）
   │    │    ├─ PredefinedCypher（预定义模板 + 向量匹配）
-  │    │    └─ 向量检索（ChromaDB）→ 混合检索(BM25+向量) → 相关性评分(LLM)
+  │    │    └─ 向量检索（pgvector）→ 混合检索(BM25+向量) → 相关性评分(LLM)
   │    ├─ image-query → GPT-4o 图片分析
   │    └─ file-query → 文件处理
   │
-  └─ /api/upload ────────→ 文档解析 → 向量入库（ChromaDB）
+  └─ /api/upload ────────→ 文档解析 → 向量入库（pgvector）
 ```
 
 ## 技术栈
@@ -58,13 +58,13 @@
 | 层次 | 技术 | 作用 |
 |------|------|------|
 | 后端框架 | FastAPI | REST API，原生异步，SSE 流式响应 |
-| 智能体 | LangGraph | StateGraph 多路由 Agent 编排，支持会话持久化 |
+| 智能体 | LangGraph | StateGraph 多路由 Agent 编排，会话检查点持久化（PostgresSaver） |
 | LLM | DeepSeek API | 对话、推理、Agent（工厂模式可切换 Ollama） |
 | 知识图谱 | Neo4j | 电商数据（商品、订单、客户），Text2Cypher 查询 |
-| 文档检索 | ChromaDB | 语义分块 + 向量入库 + 混合检索（BM25 + 向量 RRF） |
+| 文档检索 | pgvector | 语义分块 + 向量入库（HNSW）+ 混合检索（BM25 + 向量 RRF） |
 | Embedding | SiliconFlow (BAAI/bge-m3) | 语义向量生成，免费 API |
 | 向量缓存 | Redis | 语义缓存（余弦相似度 >= 0.90 命中） |
-| 数据库 | MySQL | 用户、会话、消息持久化 |
+| 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | 前端 | Vue（静态 dist） | 聊天界面 |
 
 ## 快速开始
@@ -109,12 +109,12 @@ uv sync
 cp llm_backend/.env llm_backend/.env
 # 编辑 llm_backend/.env 填入 API Key 和数据库连接信息
 
-# 4. 启动 MySQL、Redis、Neo4j（可用 Docker 单独启动）
-docker compose up -d mysql redis neo4j
+# 4. 启动 PostgreSQL、Redis、Neo4j（可用 Docker 单独启动）
+docker compose up -d postgres redis neo4j
 
-# 5. 初始化数据库
-cd scripts
-python init_db.py
+# 5. 初始化数据库（建表 + 启用 pgvector 扩展 + HNSW 索引）
+cd llm_backend
+python -m scripts.init_db
 
 # 6. 启动服务
 cd llm_backend
@@ -131,7 +131,7 @@ python scripts/download_datasets.py
 python scripts/download_jddc.py
 ```
 
-文档通过 `/api/upload` 上传后自动完成解析 → 分块 → Embedding → ChromaDB 入库（`vector_db/`），无需手动建索引。
+文档通过 `/api/upload` 上传后自动完成解析 → 分块 → Embedding → pgvector 入库（`document_chunks` 表），无需手动建索引。
 
 ## API 端点
 
@@ -141,7 +141,7 @@ python scripts/download_jddc.py
 | `/api/reason` | POST | 深度推理（SSE 流式） |
 | `/api/search` | POST | 联网搜索（Function Calling） |
 | `/api/langgraph/query` | POST | Agent 多路由查询（SSE 流式） |
-| `/api/upload` | POST | 上传文件 -> 解析分块 -> 向量入库（ChromaDB） |
+| `/api/upload` | POST | 上传文件 -> 解析分块 -> 向量入库（pgvector） |
 | `/api/conversations` | POST | 创建会话 |
 | `/api/conversations/{id}/messages` | GET | 获取历史消息 |
 | `/api/register` | POST | 用户注册 |
@@ -170,7 +170,7 @@ python scripts/download_jddc.py
 │   │   │               ├── cypher_tools/    # Text2Cypher 闭环
 │   │   │               ├── relevance_grader.py  # LLM 相关性评分
 │   │   │               └── hybrid_retrieval/    # BM25+向量 RRF 融合
-│   │   ├── models/                   # SQLAlchemy 数据模型
+│   │   │   ├── models/                   # SQLAlchemy 数据模型（含 document_chunks 向量表）
 │   │   ├── api/                      # 认证路由
 │   │   └── prompts/                  # 提示词模板
 │   └── static/dist/                  # Vue 编译后的前端
@@ -178,8 +178,7 @@ python scripts/download_jddc.py
 │   ├── generate_product_knowledge.py # 从 CSV 生成产品知识文档
 │   ├── download_datasets.py          # 下载开源电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 客服对话数据集
-├── vector_db/                        # ChromaDB 向量库数据（索引自动生成）
-├── docker-compose.yml                # Docker Compose 配置
+├── docker-compose.yml                # Docker Compose 配置（postgres/redis/neo4j/app）
 ├── Dockerfile                        # Docker 镜像构建
 ├── .env.docker                       # Docker 环境变量
 └── STUDY_NOTES.md                    # 项目学习文档（面试准备）

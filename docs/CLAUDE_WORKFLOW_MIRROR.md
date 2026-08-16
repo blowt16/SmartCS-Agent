@@ -11,13 +11,13 @@
 |------|------|
 | 项目名 | SmartCS-Agent — 智能电商客服系统 |
 | 用户目的 | 学习项目代码，准备求职面试 |
-| 技术栈 | FastAPI + LangGraph + Neo4j + MySQL + Redis + DeepSeek/Ollama + ChromaDB + Vue |
+| 技术栈 | FastAPI + LangGraph + Neo4j + PostgreSQL(pgvector) + Redis + DeepSeek/Ollama + Vue |
 | 核心架构 | LangGraph StateGraph 单Agent多路由（6节点5类型），Multi-Tool 子图（Text2Cypher / 预定义Cypher / 向量检索） |
-| 三库分工 | MySQL（用户认证+聊天记录）、Neo4j（知识图谱）、Redis（语义缓存） |
+| 三库分工 | PostgreSQL（用户认证+聊天记录+向量检索+LangGraph 检查点）、Neo4j（知识图谱）、Redis（语义缓存） |
 | 入口文件 | `llm_backend/main.py`（所有API端点） |
 | Agent图 | `llm_backend/app/lg_agent/lg_builder.py` |
 | 配置 | `llm_backend/app/core/config.py` + `.env` |
-| 知识库配置 | `vector_db/`（ChromaDB 持久化目录，集合 `smartcs_agent_docs`） |
+| 知识库配置 | pgvector 表 `document_chunks`（与业务库共用 PostgreSQL 实例，HNSW 索引） |
 | 学习文档 | `STUDY_NOTES.md`（根目录，已含19章面试笔记） |
 | 近期改进 | P0 智能分块（recursive + 中文 separators）、P1 查询复杂度量化（Router 新增4字段 + tool_preference） |
 
@@ -155,7 +155,7 @@ llm_backend/
 
 - LangGraph StateGraph 构建和条件路由
 - Neo4j 基础（节点/关系/属性/Cypher）
-- 标准 RAG 索引管道（解析→清洗→分块→Embedding→ChromaDB 入库）
+- 标准 RAG 索引管道（解析→清洗→分块→Embedding→pgvector 入库）
 - Redis 语义缓存（bge-m3 + 余弦相似度）
 - SSE 流式响应原理
 - JWT 认证流程

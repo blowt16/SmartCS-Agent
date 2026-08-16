@@ -23,7 +23,7 @@
 
 ## 1. 项目概述
 
-SmartCS-Agent 是一个**基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统**，深度集成了 ChromaDB 向量检索（标准 RAG 管道）、Text2Cypher 知识图谱查询、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
+SmartCS-Agent 是一个**基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、Text2Cypher 知识图谱查询、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
 **核心能力**: 5 路智能意图路由 → 多工具编排 → 混合检索 → 幻觉检测 → 流式响应
 
@@ -54,13 +54,13 @@ graph TB
     end
 
     subgraph "知识检索层"
-        E1[ChromaDB 向量检索<br/>标准 RAG 管道]
+        E1[pgvector 向量检索<br/>标准 RAG 管道]
         E2[Neo4j 图数据库<br/>Text2Cypher + 预定义模板]
         E3[混合检索 BM25 + 向量 + RRF]
     end
 
     subgraph "存储层"
-        F1[(MySQL 8.0<br/>用户/会话/消息)]
+        F1[(PostgreSQL 16 + pgvector<br/>用户/会话/消息/向量/检查点)]
         F2[(Redis 7<br/>语义缓存/摘要缓存)]
         F3[(Neo4j 5<br/>电商知识图谱)]
     end
@@ -88,19 +88,19 @@ graph TB
 | 层次 | 技术 | 版本 | 职责 |
 |------|------|------|------|
 | **后端框架** | FastAPI | 0.100+ | REST API，原生 async/await，SSE 流式响应 |
-| **Agent 编排** | LangGraph | latest | StateGraph 多路由 Agent，checkpointer 会话持久化 |
+| **Agent 编排** | LangGraph | latest | StateGraph 多路由 Agent，PostgresSaver 会话检查点持久化 |
 | **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理、Cypher 校验 |
 | **本地 LLM** | Ollama | - | 可切换的本地 LLM 替代方案 |
 | **知识图谱** | Neo4j | 5 Community | 电商数据（商品/订单/客户），APOC 插件 |
-| **文档检索** | ChromaDB | latest | 向量库（vector_db/，集合 smartcs_agent_docs），标准 RAG 索引管道 |
+| **文档检索** | pgvector | 0.5+ | 向量表 document_chunks（HNSW 索引），标准 RAG 索引管道 |
 | **Embedding** | SiliconFlow BAAI/bge-m3 | - | 语义向量生成，免费 API |
 | **本地 Embedding** | sentence-transformers | paraphrase-multilingual-MiniLM-L12-v2 | 混合检索的本地向量编码 |
 | **向量缓存** | Redis | 7 Alpine | 语义缓存（余弦相似度 ≥ 0.90 命中） |
-| **关系数据库** | MySQL | 8.0 | 用户、会话、消息持久化 |
+| **关系数据库** | PostgreSQL | 16（pgvector 镜像） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | **LLM SDK** | OpenAI SDK (AsyncOpenAI) | - | 兼容 DeepSeek API |
 | **LangChain** | langchain-core/deepseek/ollama | - | LLM 抽象层，结构化输出 |
 | **前端** | Vue | 编译静态 dist | 聊天 UI 界面（非主要重点） |
-| **部署** | Docker + Docker Compose | - | 4 服务（MySQL/Redis/Neo4j/App）一键编排 |
+| **部署** | Docker + Docker Compose | - | 4 服务（PostgreSQL(pgvector)/Redis/Neo4j/App）一键编排 |
 | **搜索** | SerpAPI | - | Function Calling 联网搜索 |
 | **图片处理** | Pillow (PIL) | - | 上传图片压缩/格式转换 |
 | **异步 HTTP** | aiohttp | - | 视觉 API 异步调用 |
@@ -155,7 +155,7 @@ flowchart TB
     end
 
     subgraph Store["💾 存储层"]
-        MySQL[(MySQL)]
+        PostgreSQL[(PostgreSQL+pgvector)]
         Redis[(Redis)]
         Neo4j[(Neo4j)]
     end
@@ -167,7 +167,7 @@ flowchart TB
     KG --> KGTools
     KGTools --> Neo4j
     KGTools --> Redis
-    LLMF --> MySQL
+    LLMF --> PostgreSQL
     LLMF --> Redis
 ```
 
@@ -181,7 +181,7 @@ SmartCS-Agent/
 │   └── app/
 │       ├── core/                         # 核心配置层
 │       │   ├── config.py                 # Pydantic Settings 配置（环境变量映射）
-│       │   ├── database.py              # MySQL 异步连接（aiomysql）
+│       │   ├── database.py              # PostgreSQL 异步连接（psycopg）
 │       │   ├── security.py              # JWT 认证
 │       │   ├── hashing.py               # 密码哈希
 │       │   ├── logger.py                # 结构化日志
@@ -195,7 +195,7 @@ SmartCS-Agent/
 │       │   ├── search_service.py        # SerpAPI 联网搜索
 │       │   ├── redis_semantic_cache.py  # Redis 语义缓存
 │       │   ├── conversation_service.py  # 会话 CRUD
-│       │   └── indexing_service.py      # 标准 RAG 索引构建（解析→分块→ChromaDB 入库）
+│       │   └── indexing_service.py      # 标准 RAG 索引构建（解析→分块→pgvector 入库）
 │       ├── lg_agent/                     # LangGraph Agent 层
 │       │   ├── lg_builder.py            # StateGraph 构建 + 路由 + 5 节点
 │       │   ├── lg_states.py             # 状态定义（Router/AgentState）
@@ -247,7 +247,7 @@ SmartCS-Agent/
 
 - **多 LLM 服务策略模式**: `CHAT_SERVICE`、`REASON_SERVICE`、`AGENT_SERVICE` 可分别独立选择 DeepSeek/Ollama
 - **属性计算**: `DATABASE_URL`、`REDIS_URL`、`NEO4J_CONN_URL` 通过 `@property` 动态构建
-- **向量检索完整配置**: ChromaDB 持久化目录（vector_db/）、集合名（smartcs_agent_docs）、分块参数（500/50）等配置
+- **向量检索完整配置**: pgvector 表名（document_chunks）、Embedding 维度（1024）、分块参数（500/50）等配置
 - **相关性评分配置**: 阈值、重试次数等可调参
 
 ```python
@@ -261,8 +261,8 @@ class Settings(BaseSettings):
     # Database: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
     # Neo4j: NEO4J_URL, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE
     # Redis: REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
-    # Embedding: EMBEDDING_TYPE, EMBEDDING_MODEL, EMBEDDING_THRESHOLD
-    # ChromaDB: VECTOR_DB_PATH, VECTOR_DB_COLLECTION, CHUNK_SIZE, CHUNK_OVERLAP ...
+    # Embedding: EMBEDDING_TYPE, EMBEDDING_MODEL, EMBEDDING_DIMENSION, EMBEDDING_THRESHOLD
+    # pgvector: VECTOR_TABLE_NAME, CHUNK_SIZE, CHUNK_OVERLAP ...
 ```
 
 ### 4.2 LLM 工厂 (`app/services/llm_factory.py`)
@@ -392,7 +392,7 @@ Guardrails → Planner → ToolSelection → [Text2Cypher | PredefinedCypher | �
 |------|---------|
 | Text2Cypher | NL 问题 → Few-shot 示例检索 → Cypher 生成 → 正则校验 → LLM 校验 → 自动修正(最多3次) → 执行 |
 | PredefinedCypher | NL 问题 → 向量相似度匹配模板 → 参数填充 → Neo4j 执行 |
-| 向量检索 | NL 问题 → VectorStoreQuery 查询 ChromaDB → 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
+| 向量检索 | NL 问题 → VectorStoreQuery 查询 pgvector → 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
 
 ### 4.6 Text2Cypher 闭环 (`components/cypher_tools/`)
 
@@ -501,8 +501,8 @@ sequenceDiagram
     participant Agent as LangGraph Agent
     participant LLM as DeepSeek
     participant Neo4j as Neo4j 图数据库
-    participant VS as ChromaDB 向量检索引擎
-    participant MySQL as MySQL
+    participant VS as pgvector 向量检索引擎
+    participant PostgreSQL as PostgreSQL
 
     Client->>API: POST /api/langgraph/query
     Note over API: 1. 请求入口
@@ -554,7 +554,7 @@ sequenceDiagram
 
     Agent-->>API: SSE 流式返回 AIMessage
     API-->>Client: data: {"content": "..."}\n\n
-    API->>MySQL: 回调保存消息(可选)
+    API->>PostgreSQL: 回调保存消息(可选)
 ```
 
 ### 5.2 意图路由决策流程
@@ -595,7 +595,7 @@ flowchart TD
 | **单例模式** | `checkpointer = MemorySaver()` | LangGraph 全局持久化存储 |
 | **模板方法模式** | 提示词模板 | 预定义提示词 + 动态参数注入 |
 | **装饰器模式** | `LoggingMiddleware` | FastAPI 中间件统一日志 |
-| **门面模式** | `VectorStoreQuery` | 封装 ChromaDB 客户端的初始化/查询 API |
+| **门面模式** | `VectorStoreQuery` | 封装 pgvector 表的初始化/查询 API |
 
 ---
 
@@ -605,8 +605,8 @@ flowchart TD
 
 ```
 用户消息 + AI回复 → ConversationService.save_message()
-  → MySQL: conversations 表 (会话元信息)
-  → MySQL: messages 表 (用户消息 + 助手回复)
+  → PostgreSQL: conversations 表 (会话元信息)
+  → PostgreSQL: messages 表 (用户消息 + 助手回复)
   → 首条消息自动生成会话标题 (前 20 字)
 ```
 
@@ -638,7 +638,7 @@ Neo4j 图结构:
   → 文本清洗
   → RecursiveCharacterTextSplitter 分块 (500/50)
   → Embedding (EmbeddingProvider, bge-m3 1024 维)
-  → ChromaDB 入库 (vector_db/, 集合 smartcs_agent_docs)
+  → pgvector 入库 (document_chunks 表, HNSW 索引)
 ```
 
 ---
@@ -737,13 +737,13 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 
 ### 8.7 🌟 Docker Compose 一键部署 + Healthcheck
 
-**创新点**: 4 个服务 (MySQL/Redis/Neo4j/App) 通过 `depends_on` + `condition: service_healthy` 确保启动顺序：
+**创新点**: 4 个服务 (PostgreSQL/Redis/Neo4j/App) 通过 `depends_on` + `condition: service_healthy` 确保启动顺序：
 
 ```yaml
 app:
   depends_on:
-    mysql:
-      condition: service_healthy   # mysqladmin ping
+    postgres:
+      condition: service_healthy   # pg_isready
     redis:
       condition: service_healthy   # redis-cli ping
     neo4j:
@@ -763,7 +763,7 @@ app:
 | **模块化清晰** | 配置/服务/Agent/组件分层明确，职责单一 |
 | **高可扩展性** | 工厂模式 + 策略模式，新增 LLM 只需添加服务类 |
 | **Agent 编排成熟** | LangGraph StateGraph 提供可视化的状态流转 |
-| **会话持久化** | MemorySaver + thread_id 实现多轮对话状态管理 |
+| **会话持久化** | PostgresSaver + thread_id 实现多轮对话状态管理（重启不丢失） |
 | **SSE 流式响应** | 所有 LLM 接口统一使用 Server-Sent Events，用户体验好 |
 | **Human-in-the-Loop** | 支持中断/恢复机制，实现人工确认流程 |
 
@@ -885,7 +885,7 @@ checkpointer = MemorySaver()  # 进程内存储，重启丢失
 - 索引构建耗时 5-30 分钟/次，LLM 成本高
 - Local/Global/DRIFT/Basic 检索能力对电商客服场景过剩（实体关系查询已由 Neo4j 承担）
 
-**解决**: 已迁移为标准 RAG 管道（ChromaDB 向量检索），删除 `llm_backend/app/graphrag/` 源码目录、`scripts/build_graphrag_index.py` 与 graphrag 依赖，索引构建降至秒级，事实查询效果持平。
+**解决**: 已迁移为标准 RAG 管道（pgvector 向量检索），删除 `llm_backend/app/graphrag/` 源码目录、`scripts/build_graphrag_index.py` 与 graphrag 依赖，索引构建降至秒级，事实查询效果持平。
 
 #### 10.2.6 缺少输入校验
 
@@ -947,14 +947,14 @@ class ChatMessage(BaseModel):
 ```mermaid
 graph TB
     subgraph "Docker Network: smartcs-agent_default"
-        APP["smartcs-agent-app<br/>uvicorn :8000<br/>Python 3.11-slim"]
-        MYSQL["smartcs-agent-mysql<br/>MySQL 8.0 :3306<br/>healthcheck: mysqladmin ping"]
+        APP["smartcs-agent-app<br/>uvicorn :8000<br/>Python 3.13-slim"]
+        PG["smartcs-agent-postgres<br/>pgvector/pgvector:pg16 :5432<br/>healthcheck: pg_isready"]
         REDIS["smartcs-agent-redis<br/>Redis 7-alpine :6379<br/>healthcheck: redis-cli ping"]
         NEO4J["smartcs-agent-neo4j<br/>Neo4j 5-community :7474/:7687<br/>healthcheck: HTTP wget"]
     end
 
     subgraph "Volumes"
-        V1["mysql_data"]
+        V1["pg_data"]
         V2["redis_data"]
         V3["neo4j_data"]
         V4["app_logs"]
@@ -962,10 +962,10 @@ graph TB
     end
 
     Browser -->|":8000"| APP
-    APP -->|"DB_HOST=mysql"| MYSQL
+    APP -->|"DB_HOST=postgres"| PG
     APP -->|"REDIS_HOST=redis"| REDIS
     APP -->|"NEO4J_URL=bolt://neo4j"| NEO4J
-    MYSQL --- V1
+    PG --- V1
     REDIS --- V2
     NEO4J --- V3
     APP --- V4
@@ -977,13 +977,13 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant DC as Docker Compose
-    participant M as MySQL
+    participant M as PostgreSQL
     participant R as Redis
     participant N as Neo4j
     participant A as App
 
-    DC->>M: 启动 MySQL 容器
-    M->>M: mysqladmin ping (每10s)
+    DC->>M: 启动 PostgreSQL(pgvector) 容器
+    M->>M: pg_isready (每10s)
     M-->>DC: healthy ✓
 
     DC->>R: 启动 Redis 容器
@@ -995,7 +995,7 @@ sequenceDiagram
     N-->>DC: healthy ✓
 
     DC->>A: 所有依赖就绪，启动 App
-    A->>A: python -m scripts.init_db (建表)
+    A->>A: python -m scripts.init_db (建表 + pgvector 扩展 + HNSW 索引)
     A->>A: uvicorn main:app --host 0.0.0.0 --port 8000
     A-->>DC: 服务就绪 ✓
 ```
@@ -1023,7 +1023,7 @@ sequenceDiagram
 |------|--------|------|
 | 电商客服原型 | ⭐⭐⭐⭐⭐ | 开箱即用，多轮对话+知识库完善 |
 | 学习 LangGraph | ⭐⭐⭐⭐⭐ | 完整的 StateGraph + 子图 + 多工具编排案例 |
-| 学习标准 RAG | ⭐⭐⭐⭐⭐ | ChromaDB 向量管道 + 混合检索的实际应用 |
+| 学习标准 RAG | ⭐⭐⭐⭐⭐ | pgvector 向量管道 + 混合检索的实际应用 |
 | 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、相关性评分、查询预处理等最佳实践 |
 | 生产部署 | ⭐⭐⭐ | 需补充测试、限流、监控后才能上生产 |
 

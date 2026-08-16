@@ -5,7 +5,7 @@ from langchain_core.messages import ToolCall
 from typing_extensions import TypedDict
 
 from ..components.models import Task
-from .text2cypher.state import CypherOutputState
+from app.lg_agent.kg_sub_graph.kg_states import CypherOutputState
 from .visualize.state import VisualizationOutputState
 
 

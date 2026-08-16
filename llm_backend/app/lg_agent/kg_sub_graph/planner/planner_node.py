@@ -9,6 +9,9 @@ from typing_extensions import TypedDict
 from app.lg_agent.kg_sub_graph.kg_states import CypherOutputState
 
 from langchain_core.prompts import ChatPromptTemplate
+from app.core.logger import get_logger
+
+logger = get_logger(service="planner_node")
 
 
 planner_system = """
@@ -128,18 +131,18 @@ def create_planner_node(
         """
         Break user query into chunks, if appropriate.
         """
-        print("我现在要开始任务分解了！！！")
+        logger.debug("开始任务分解")
         if not ignore_node:
-            print("我进入的是实际执行！！！！")
+            logger.debug("进入实际执行分支")
             planner_output: PlannerOutput = await planner_chain.ainvoke(
                 {"question": state.get("question", "")}
             )
-            print(f"planner_output: {planner_output}")
+            logger.debug(f"planner_output: {planner_output}")
         else:
-            print("我进入的是 空列表")
+            logger.debug("进入空列表分支")
             planner_output = PlannerOutput(tasks=[])
-            print(f"planner_output: {planner_output}")
-        print("我执行完了！！！")
+            logger.debug(f"planner_output: {planner_output}")
+        logger.debug("任务分解执行完成")
     
         return {
             "next_action": next_action,

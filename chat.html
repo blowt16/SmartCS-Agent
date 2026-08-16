@@ -1136,7 +1136,7 @@
             messages.value[msgIndex] = { ...messages.value[msgIndex], content: aiContent };
             scrollToBottom();
 
-            // 流结束后，保存这轮对话到 MySQL
+            // 流结束后，保存这轮对话到 PostgreSQL
             if (currentConversation.value && aiContent && content) {
               try {
                 await fetch('/api/conversations/save-messages', {

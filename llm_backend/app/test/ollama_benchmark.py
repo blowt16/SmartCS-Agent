@@ -16,7 +16,7 @@ log_dir.mkdir(exist_ok=True)
 logger.add(
     "logs/benchmark.log",
     rotation="100 MB",
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {message}"
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
 )
 
 """

@@ -1,5 +1,5 @@
 """
-下载并清洗中文电商客服数据集，输出适合向量检索（ChromaDB）的纯文本文件。
+下载并清洗中文电商客服数据集，输出适合向量检索（pgvector）的纯文本文件。
 
 数据来源:
 1. qgyd2021/e_commerce_customer_service (faq.json - 电商客服问答)

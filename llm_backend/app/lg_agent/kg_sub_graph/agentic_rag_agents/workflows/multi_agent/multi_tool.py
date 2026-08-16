@@ -18,25 +18,14 @@ from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.guardrails.node imp
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner import create_planner_node
 # 导入工具选择节点
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.tool_selection import create_tool_selection_node
-# 导入 text2cypher 节点
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.cypher_tools import create_cypher_query_node
-# 导入Cypher示例检索器基类
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.retrievers.cypher_examples.base import BaseCypherExampleRetriever
 # 导入预定义Cypher节点
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher import create_predefined_cypher_node
-# 导入自定义工具函数节点
+# 导入向量检索节点
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools import create_vector_search_query_node
-
-
 
 from ...components.errors import create_error_tool_selection_node
 from ...components.final_answer import create_final_answer_node
-
-
-
 from ...components.summarize import create_summarization_node
-
-
 
 from .edges import (
     guardrails_conditional_edge,
@@ -59,13 +48,8 @@ def create_multi_tool_workflow(
     graph: Neo4jGraph,
     tool_schemas: List[type[BaseModel]],
     predefined_cypher_dict: Dict[str, str],
-    cypher_example_retriever: BaseCypherExampleRetriever,
     scope_description: Optional[str] = None,
-    llm_cypher_validation: bool = True,
-    max_attempts: int = 3,
-    attempt_cypher_execution_on_final_attempt: bool = False,
-    default_to_text2cypher: bool = True,
-    tool_preference: Optional[str] = None,  # P1 新增：策略偏好，可选值为 "predefined_cypher", "cypher_query", "vector_search_query"
+    tool_preference: Optional[str] = None,  # 策略偏好，可选值为 "predefined_cypher", "vector_search_query"
 ) -> CompiledStateGraph:
     """
     Create a multi tool Agent workflow using LangGraph.
@@ -83,19 +67,9 @@ def create_multi_tool_workflow(
         A Python dictionary of Cypher query names as keys and Cypher queries as values.
     scope_description: Optional[str], optional
         A short description of the application scope, by default None
-    cypher_example_retriever: BaseCypherExampleRetriever
-        The retriever used to collect Cypher examples for few shot prompting.
-    llm_cypher_validation : bool, optional
-        Whether to perform LLM validation with the provided LLM, by default True
-    max_attempts: int, optional
-        The max number of allowed attempts to generate valid Cypher, by default 3
-    attempt_cypher_execution_on_final_attempt, bool, optional
-        THIS MAY BE DANGEROUS.
-        Whether to attempt Cypher execution on the last attempt, regardless of if the Cypher contains errors, by default False
-    default_to_text2cypher : bool, optional
-        Whether to attempt Text2Cypher if no tool calls are returned by the LLM, by default True
-    initial_state: Optional[InputState], optional
-        An initial state passed from parent graph, by default None
+    tool_preference : Optional[str], optional
+        策略偏好，可选值为 "predefined_cypher", "vector_search_query"
+        当有明确偏好时，直接走指定工具，跳过 LLM 选择
 
     Returns
     -------
@@ -103,16 +77,12 @@ def create_multi_tool_workflow(
         The workflow.
     """
     # 1. 创建guardrails节点
-    # Guardrails 节点决定传入的问题是否在检索的范围内（比如是否和电商（自家的产品相关））。如果不在，则提供默认消息，并且工作流路由到最终的答案生成。
     guardrails = create_guardrails_node(
         llm=llm, graph=graph, scope_description=scope_description
     )
 
     # 2. 如果通过guardrails，则会针对用户的问题进行任务分解
     planner = create_planner_node(llm=llm)
-
-    # 3. 创建cypher_query节点，用来根据用户的问题生成Cypher查询语句
-    cypher_query = create_cypher_query_node()
 
     predefined_cypher = create_predefined_cypher_node(
         graph=graph, predefined_cypher_dict=predefined_cypher_dict
@@ -121,13 +91,12 @@ def create_multi_tool_workflow(
     customer_tools = create_vector_search_query_node()
 
     # 工具选择节点，根据用户的问题选择合适的工具
-    # P1: 传入 tool_preference，当有明确策略偏好时直接走指定工具
     tool_selection = create_tool_selection_node(
         llm=llm,
         tool_schemas=tool_schemas,
-        default_to_text2cypher=default_to_text2cypher,
         tool_preference=tool_preference,
     )
+
     summarize = create_summarization_node(llm=llm)
 
     final_answer = create_final_answer_node()
@@ -137,13 +106,11 @@ def create_multi_tool_workflow(
 
     main_graph_builder.add_node(guardrails)
     main_graph_builder.add_node(planner)
-    main_graph_builder.add_node("cypher_query", cypher_query)
     main_graph_builder.add_node(predefined_cypher)
     main_graph_builder.add_node("customer_tools", customer_tools)
     main_graph_builder.add_node(summarize)
     main_graph_builder.add_node(tool_selection)
     main_graph_builder.add_node(final_answer)
-
 
     # 添加边
     main_graph_builder.add_edge(START, "guardrails")
@@ -157,7 +124,6 @@ def create_multi_tool_workflow(
         ["tool_selection"],
     )
 
-    main_graph_builder.add_edge("cypher_query", "summarize")
     main_graph_builder.add_edge("predefined_cypher", "summarize")
     main_graph_builder.add_edge("customer_tools", "summarize")
     main_graph_builder.add_edge("summarize", "final_answer")
@@ -165,4 +131,3 @@ def create_multi_tool_workflow(
     main_graph_builder.add_edge("final_answer", END)
 
     return main_graph_builder.compile()
-

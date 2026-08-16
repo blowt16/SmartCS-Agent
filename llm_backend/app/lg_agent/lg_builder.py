@@ -16,10 +16,10 @@ from app.core.config import settings, ServiceType
 from app.core.logger import get_logger
 from typing import cast, Literal, TypedDict, List, Dict, Any
 from langchain_core.messages import BaseMessage
-from langgraph.checkpoint.memory import MemorySaver
+from psycopg_pool import AsyncConnectionPool
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from app.lg_agent.lg_states import AgentState, InputState, Router, GradeHallucinations
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.retrievers.cypher_examples.northwind_retriever import NorthwindCypherRetriever
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import create_planner_node
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.workflows.multi_agent.multi_tool import create_multi_tool_workflow
 from app.lg_agent.kg_sub_graph.kg_neo4j_conn import get_neo4j_graph
@@ -112,14 +112,14 @@ async def analyze_and_route_query(
 
 def route_query(
     state: AgentState,
-) -> Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query", "create_file_query"]:
+) -> Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query"]:
     """根据查询分类确定下一步操作。
 
     Args:
         state (AgentState): 当前代理状态，包括路由器的分类。
 
     Returns:
-        Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query", "create_file_query"]: 下一步操作。
+        Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query"]: 下一步操作。
     """
     _type = state.router["type"]
     
@@ -136,8 +136,6 @@ def route_query(
         return "create_research_plan"
     elif _type == "image-query":
         return "create_image_query"
-    elif _type == "file-query":
-        return "create_file_query"
     else:
         raise ValueError(f"Unknown router type {_type}")
     
@@ -411,13 +409,6 @@ async def create_image_query(
         logger.error(f"Error processing image: {str(e)}")
         return {"messages": [AIMessage(content=f"抱歉，我无法查看这张图片，请重新上传。")]}
 
-async def create_file_query(
-    state: AgentState, *, config: RunnableConfig
-) -> Dict[str, List[BaseMessage]]:
-    """Create a file query."""
-    
-    # TODO
-
 async def create_research_plan(
     state: AgentState, *, config: RunnableConfig
 ) -> Dict[str, List[str] | str]:
@@ -449,7 +440,7 @@ async def create_research_plan(
 
     # 策略选择逻辑：
     # - 简单查询（complexity < 0.3 且不需要推理）→ 预定义 Cypher 模板（最快）
-    # - 中等查询（0.3 <= complexity <= 0.7）→ Text2Cypher 动态生成
+    # - 中等查询（0.3 <= complexity <= 0.7）→ LLM 自动选择工具
     # - 复杂查询（complexity > 0.7 或需要推理）→ 向量检索（最强）
     if complexity < 0.3 and not reasoning_required:
         tool_preference = "predefined_cypher"
@@ -470,12 +461,9 @@ async def create_research_plan(
     except Exception as e:
         logger.error(f"failed to get Neo4j graph database connection: {e}")
 
-    # 2. 创建自定义检索器实例，根据 Graph Schema 创建 Cypher 示例，用来引导大模型生成正确的Cypher 查询语句
-    cypher_retriever = NorthwindCypherRetriever()
-
-    # step 3. 定义工具模式列表    
-    from app.lg_agent.kg_sub_graph.kg_tools_list import cypher_query, predefined_cypher, vector_search_query
-    tool_schemas: List[type[BaseModel]] = [cypher_query, predefined_cypher, vector_search_query]
+    # step 3. 定义工具模式列表
+    from app.lg_agent.kg_sub_graph.kg_tools_list import predefined_cypher, vector_search_query
+    tool_schemas: List[type[BaseModel]] = [predefined_cypher, vector_search_query]
 
     # 3. 预定义的Cypher查询 - 为电商场景定义有用的查询
     from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.cypher_dict import predefined_cypher_dict
@@ -499,10 +487,8 @@ async def create_research_plan(
         graph=neo4j_graph,
         tool_schemas=tool_schemas,
         predefined_cypher_dict=predefined_cypher_dict,
-        cypher_example_retriever=cypher_retriever,
         scope_description=scope_description,
-        llm_cypher_validation=True,
-        tool_preference=tool_preference,  # P1: 根据复杂度选择的策略偏好
+        tool_preference=tool_preference,  # 根据复杂度选择的策略偏好
     )
     
     # ====== 查询预处理管道（改写 → 纠错 → 实体识别 → 扩展 → Multi-Query + HyDE）======
@@ -614,9 +600,45 @@ async def check_hallucinations(
     return {"hallucination": response} 
 
 
-# 定义持久化存储，也可以使用SQLiteSaver()、PostgresSaver()等
+# 定义持久化存储：会话检查点存 PostgreSQL（PostgresSaver）
 # LangGraph官方地址：https://langchain-ai.github.io/langgraph/how-tos/persistence/
-checkpointer = MemorySaver()
+# AsyncPostgresSaver 必须在事件循环内构造，连接池与 graph 编译推迟到
+# FastAPI 启动时完成（见 main.py 的 lifespan → init_checkpointer）
+checkpointer_pool = AsyncConnectionPool(
+    conninfo=settings.POSTGRES_DSN,
+    open=False,
+    min_size=1,
+    max_size=10,
+    kwargs={"autocommit": True},
+)
+
+
+class _LazyGraph:
+    """graph 延迟代理：lifespan 初始化检查点后编译，请求期再解析真实对象"""
+
+    _graph = None
+
+    def __getattr__(self, name):
+        if self._graph is None:
+            raise RuntimeError("LangGraph 尚未初始化（Postgres 检查点未就绪）")
+        return getattr(self._graph, name)
+
+
+async def init_checkpointer():
+    """打开检查点连接池、创建检查点表并编译 graph（幂等，供 FastAPI lifespan 调用）"""
+    if checkpointer_pool.closed:
+        await checkpointer_pool.open()
+    checkpointer = AsyncPostgresSaver(checkpointer_pool)
+    await checkpointer.setup()
+    _LazyGraph._graph = builder.compile(checkpointer=checkpointer)
+    logger.info("LangGraph PostgresSaver 检查点初始化完成")
+
+
+async def close_checkpointer():
+    """关闭检查点连接池（供 FastAPI lifespan 调用）"""
+    if not checkpointer_pool.closed:
+        await checkpointer_pool.close()
+
 
 # 定义状态图
 builder = StateGraph(AgentState, input=InputState)
@@ -626,14 +648,13 @@ builder.add_node(respond_to_general_query)
 builder.add_node(get_additional_info)
 builder.add_node("create_research_plan", create_research_plan)  # 这里是子图
 builder.add_node(create_image_query)
-builder.add_node(create_file_query)
 
 # 添加边
 builder.add_edge(START, "analyze_and_route_query")
 builder.add_conditional_edges("analyze_and_route_query", route_query)
 
 
-graph = builder.compile(checkpointer=checkpointer)
+graph = _LazyGraph()
 
 # from IPython.display import Image, display
 # display(Image(graph.get_graph().draw_mermaid_png()))

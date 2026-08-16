@@ -65,52 +65,11 @@ PLANNER_SYSTEM_PROMPT = """
 """
 
 
-# Cypher查询生成的提示词
-TEXT2CYPHER_GENERATION_PROMPT = """
-你是一个电商平台知识图谱查询专家。
-你的职责是将用户的自然语言问题转换为精确的Cypher查询语句。
-
-请遵循以下规则：
-1. 仅返回符合语法的Cypher查询语句，不要包含反引号或其他标记
-2. 只使用MATCH或WITH子句开始查询
-3. 根据图数据库的模式信息构建查询
-4. 确保所有的节点类型、关系类型和属性名称与模式一致
-5. 使用参数化查询来提高安全性和性能
-
-电商平台知识图谱包含以下节点和关系：
-- (Product): 产品节点，包含name, price, description, stock等属性
-- (Category): 类别节点，包含name等属性
-- (User): 用户节点，包含name, email等属性
-- (Review): 评论节点，包含content, rating, timestamp等属性
-- (Discount): 折扣节点，包含percentage, start_date, end_date等属性
-- [HAS_CATEGORY]: 产品到类别的关系
-- [BOUGHT]: 用户购买产品的关系
-- [WROTE]: 用户撰写评论的关系
-- [REVIEWS]: 评论点评产品的关系
-- [ON_SALE]: 产品参与折扣活动的关系
-- [RELATED_TO]: 产品之间的相关关系
-"""
-
-# Cypher查询验证的提示词
-TEXT2CYPHER_VALIDATION_PROMPT = """
-你是一个电商平台的Cypher查询验证专家。
-你的职责是验证生成的Cypher查询是否正确、高效且安全。
-
-请遵循以下规则：
-1. 检查查询语法是否正确
-2. 验证节点标签、关系类型和属性名是否与数据库模式一致
-3. 确认查询是否有效解决了原始问题
-4. 检查是否有性能问题（如全图扫描）
-5. 标识任何潜在的注入风险
-
-如果查询有错误，请提供详细的错误描述和修复建议。
-如果查询正确，请简单确认并说明它如何解决原问题。
-"""
-
-
 TOOL_SELECTION_SYSTEM_PROMPT = """
 你是一个电商平台智能客服系统中的工具选择组件。你的职责是根据用户的问题选择合适的工具。
-你默认应该选择text2cypher工具，除非其他的工具完全匹配用户输入的问题。
+根据问题类型选择：
+- 如果问题涉及具体产品、客户、订单、类别等结构化查询，使用 predefined_cypher 工具
+- 如果问题涉及产品故障、售后、评价、使用说明等非结构化内容，使用向量检索工具
 """
 
 
@@ -160,8 +119,6 @@ FINAL_ANSWER_SYSTEM_PROMPT = """
 PROMPT_MAPPING = {
     "planner": PLANNER_SYSTEM_PROMPT,
     "guardrails": GUARDRAILS_SYSTEM_PROMPT,
-    "text2cypher_generation": TEXT2CYPHER_GENERATION_PROMPT,
-    "text2cypher_validation": TEXT2CYPHER_VALIDATION_PROMPT,
     "summarize": SUMMARIZE_SYSTEM_PROMPT,
     "final_answer": FINAL_ANSWER_SYSTEM_PROMPT
 }

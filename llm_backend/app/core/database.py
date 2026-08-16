@@ -1,3 +1,11 @@
+import asyncio
+import sys
+
+if sys.platform == "win32":
+    # psycopg 异步模式不支持 Windows 默认的 ProactorEventLoop，必须全局切换为 SelectorEventLoop
+    # （在事件循环创建前设置；uvicorn / asyncio.run 创建循环时都会遵循此策略）
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base

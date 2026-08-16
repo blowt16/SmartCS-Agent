@@ -5,9 +5,12 @@ from langchain_core.language_models import BaseChatModel
 
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.constants import NO_CYPHER_RESULTS
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.state import PredefinedCypherInputState
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.text2cypher.state import CypherOutputState
+from app.lg_agent.kg_sub_graph.kg_states import CypherOutputState
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.utils import create_vector_query_matcher
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.descriptions import QUERY_DESCRIPTIONS
+from app.core.logger import get_logger
+
+logger = get_logger(service="predefined_cypher")
 
 
 def create_predefined_cypher_node(
@@ -43,19 +46,19 @@ def create_predefined_cypher_node(
         params = state.get(
             "query_parameters", dict()
         )  
-        print("statement_name", statement_name)
-        print("params", params)
-        
+        logger.debug(f"statement_name: {statement_name}")
+        logger.debug(f"params: {params}")
+
         # 将parameters中的每个值转换为字符串
         parameters = params.get("parameters", {})
         for key, value in parameters.items():
             parameters[key] = str(value)
-        
+
         statement = predefined_cypher_dict.get(params.get("query"))
-        print("statement", statement)
+        logger.debug(f"statement: {statement}")
         if statement is not None:
             records = graph.query(query=statement, params=parameters)
-            print(f"records: {records}")
+            logger.debug(f"records: {records}")
             
         else:
             errors.append(

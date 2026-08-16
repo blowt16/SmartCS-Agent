@@ -1,7 +1,7 @@
 from typing import Any, Callable, Coroutine, Dict, List
 
 from ....components.state import ToolSelectionErrorState
-from ....components.text2cypher.state import CypherOutputState
+from app.lg_agent.kg_sub_graph.kg_states import CypherOutputState
 
 
 def create_error_tool_selection_node() -> (

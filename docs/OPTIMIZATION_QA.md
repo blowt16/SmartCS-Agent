@@ -14,10 +14,10 @@
 **问题**：文档检索最初使用 Microsoft GraphRAG。构建索引需要 LLM 抽取实体/关系/社区，**每次 5-30 分钟**，Token 消耗大；内嵌源码 80+ 文件，依赖 `graphrag==2.1.0` 难以管理。而业务场景是电商客服事实查询（价格、库存、售后），Global Search/DRIFT 多跳推理等高级能力极少用到，且实体关系已在 Neo4j 中管理，GraphRAG 的实体抽取完全冗余。
 
 **解决**：整体迁移为标准 RAG 管道（✅ 已解决）：
-- `文档解析（PyPDF2/python-docx）→ 清洗 → RecursiveCharacterTextSplitter 分块（500/50，中文标点作分隔符）→ Embedding → ChromaDB 入库 → 相似度检索`
+- `文档解析（PyPDF2/python-docx）→ 清洗 → RecursiveCharacterTextSplitter 分块（500/50，中文标点作分隔符）→ Embedding → pgvector 入库 → 相似度检索`
 - 删除 `app/graphrag/` 内嵌源码（80+ 文件）与 `graphrag` pip 依赖
 - 查询侧用 `VectorStoreQuery`（约 20 行）替代 `GraphRAGAPI`（约 100 行 + 6 个 parquet 初始化），结果仍流入原有的混合检索 + 相关性评分管道
-- 向量库选 ChromaDB 的理由：persist 模式零运维、无需新增 Docker 服务、Python 原生
+- 向量库选型演进：初版用 ChromaDB（persist 模式零运维）；后统一技术栈迁移到 **pgvector**——与业务库共用 PostgreSQL 实例，官方 `pgvector/pgvector` Docker 镜像一条 compose 服务解决，HNSW 索引余弦检索，且 LangGraph 检查点（PostgresSaver）复用同一实例
 
 **结果**：索引从分钟级降到秒级；删除 80+ 维护负担文件；事实查询效果持平；Neo4j（Text2Cypher/PredefinedCypher）、混合检索、语义缓存全部保留。
 
@@ -27,7 +27,7 @@
 
 ### Q2：Embedding 维度配置与实际模型不一致，检索结果全错，如何排查？
 
-**问题**：配置中 `EMBEDDING_DIMENSION=384`，但实际 Embedding 模型是 bge-m3（**1024 维**）。向量维度不匹配会导致向量检索/缓存相似度计算异常，且多个组件（HybridRetriever、ChromaDB、Ollama、语义缓存）各自为政，容易互相不一致。
+**问题**：配置中 `EMBEDDING_DIMENSION=384`，但实际 Embedding 模型是 bge-m3（**1024 维**）。向量维度不匹配会导致向量检索/缓存相似度计算异常，且多个组件（HybridRetriever、pgvector、Ollama、语义缓存）各自为政，容易互相不一致。
 
 **解决**（✅ 已解决）：
 - 将 `EMBEDDING_DIMENSION` 修正为 1024，并在 `.env` 补齐缺失的 Embedding 配置段
@@ -72,7 +72,7 @@
 
 **解决**（📋 已设计，待实施）：
 - Checkpointer 换 `RedisSaver`（项目已有 Redis 基础设施），thread_id 驱动会话快照自动持久化与恢复
-- 职责分离：Redis 存 Agent 运行快照（禁止业务查询）；MySQL 业务库存前端可见对话 + 新增 `agent_tool_log` 工具日志表（审计/排查/RAGAS 评测）
+- 职责分离：Redis 存 Agent 运行快照（禁止业务查询）；PostgreSQL 业务库存前端可见对话 + 新增 `agent_tool_log` 工具日志表（审计/排查/RAGAS 评测）
 - Redis 故障兜底：从业务库读历史对话重建新会话（降级，会丢工具上下文）
 - 配套要求：Redis 必须开 RDB/AOF 持久化 + TTL 防膨胀
 

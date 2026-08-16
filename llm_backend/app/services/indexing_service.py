@@ -1,27 +1,21 @@
 import os
-import asyncio
-import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
-import mimetypes
-import shutil
-import uuid
+from typing import Dict, Any
 
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PyPDF2 import PdfReader
 from docx import Document
 from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
+from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
+from app.models.document_chunk import DocumentChunk
 
 logger = get_logger(service="indexing")
 
 
 class IndexingService:
-    """标准 RAG 索引服务：解析 → 清洗 → 分块 → Embedding → ChromaDB 入库"""
+    """标准 RAG 索引服务：解析 → 清洗 → 分块 → Embedding → pgvector 入库"""
 
     def __init__(self):
         # 文本分割器 — 复用 P0 智能分块的参数
@@ -34,23 +28,6 @@ class IndexingService:
         # Embedding 模型 — 优先用 settings 中的配置，兜底本地 bge-m3
         embedding_model_name = getattr(settings, "EMBEDDING_MODEL", "bge-m3")
         self.embedding_model = SentenceTransformer(embedding_model_name)
-
-        # Embedding 函数 — 适配 ChromaDB 接口
-        def embedding_function(texts):
-            return self.embedding_model.encode(texts, normalize_embeddings=True).tolist()
-
-        self.embedding_fn = embedding_function
-
-        # ChromaDB 客户端
-        os.makedirs(settings.VECTOR_DB_PATH, exist_ok=True)
-        self.client = chromadb.PersistentClient(
-            path=settings.VECTOR_DB_PATH,
-            settings=ChromaSettings(anonymized_telemetry=settings.CHROMADB_ANONYMIZED_TELEMETRY),
-        )
-        self.collection = self.client.get_or_create_collection(
-            name=settings.VECTOR_DB_COLLECTION,
-            embedding_function=self.embedding_fn,
-        )
 
     # ==================== 文档解析 ====================
 
@@ -80,7 +57,7 @@ class IndexingService:
     # ==================== 核心流程 ====================
 
     async def process_file(self, file_info: Dict[str, Any]) -> Dict[str, Any]:
-        """处理单个文件：解析 → 清洗 → 分块 → Embedding → ChromaDB 入库"""
+        """处理单个文件：解析 → 清洗 → 分块 → Embedding → pgvector 入库"""
         try:
             file_path = file_info['path']
             user_id = file_info.get('user_id', 0)
@@ -104,28 +81,28 @@ class IndexingService:
             chunks = self.text_splitter.split_text(text)
             logger.info(f"分块完成: {len(chunks)} 个文本块")
 
-            # 4. 入库 ChromaDB（带元数据）
-            chunk_ids = [
-                f"user_{user_id}_{uuid.uuid4().hex[:8]}_{i}"
-                for i in range(len(chunks))
-            ]
-            metadatas = [
-                {
-                    "source": original_name,
-                    "file_path": file_path,
-                    "user_id": str(user_id),
-                    "chunk_index": i,
-                }
-                for i in range(len(chunks))
-            ]
+            # 4. Embedding
+            embeddings = self.embedding_model.encode(
+                chunks, normalize_embeddings=True
+            ).tolist()
 
-            self.collection.add(
-                ids=chunk_ids,
-                documents=chunks,
-                metadatas=metadatas,
-            )
+            # 5. 入库 pgvector（document_chunks 表）
+            rows = [
+                DocumentChunk(
+                    source=original_name,
+                    file_path=file_path,
+                    user_id=str(user_id),
+                    chunk_index=i,
+                    content=chunk,
+                    embedding=embedding,
+                )
+                for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+            ]
+            async with AsyncSessionLocal() as session:
+                session.add_all(rows)
+                await session.commit()
 
-            logger.info(f"入库完成: {len(chunks)} 个文本块已写入 ChromaDB")
+            logger.info(f"入库完成: {len(chunks)} 个文本块已写入 pgvector")
 
             return {
                 'original_file_path': file_path,

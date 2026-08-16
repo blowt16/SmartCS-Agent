@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = "password"
     NEO4J_DATABASE: str = "neo4j"
     
+    # Logging settings
+    LOG_LEVEL: str = "INFO"                                 # 日志级别: DEBUG / INFO / WARNING / ERROR
+
     # JWT settings
     SECRET_KEY: str = "your-secret-key"  # 在生产环境中使用安全的密钥
     ALGORITHM: str = "HS256"
@@ -85,9 +88,8 @@ class Settings(BaseSettings):
     QWEN_EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     QWEN_EMBEDDING_MODEL: str = "text-embedding-v4"
     
-    # Vector DB settings (ChromaDB)
-    VECTOR_DB_PATH: str = str(ROOT_DIR / "vector_db")   # ChromaDB 持久化目录
-    VECTOR_DB_COLLECTION: str = "smartcs_agent_docs"    # 集合名称
+    # Vector DB settings (pgvector)
+    VECTOR_TABLE_NAME: str = "document_chunks"           # pgvector 文档块表名
 
     # Relevance grading settings
     RELEVANCE_GRADING_ENABLED: bool = True                  # 是否启用相关性评分
@@ -109,9 +111,6 @@ class Settings(BaseSettings):
     # Streaming settings
     STREAM_DELAY: float = 0.05                              # 流式响应延迟（秒）
 
-    # ChromaDB settings
-    CHROMADB_ANONYMIZED_TELEMETRY: bool = False             # ChromaDB 匿名遥测
-
     # Reranker settings
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"        # 重排序模型
     RERANKER_TOP_K: int = 5                                  # 重排序返回数
@@ -130,8 +129,14 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
-        return f"mysql+aiomysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-    
+        """SQLAlchemy 异步连接串（PostgreSQL + psycopg）"""
+        return f"postgresql+psycopg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
+    @property
+    def POSTGRES_DSN(self) -> str:
+        """psycopg 原生连接串（供 psycopg_pool / LangGraph PostgresSaver 使用）"""
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
     @property
     def REDIS_URL(self) -> str:
         """构建Redis URL"""

@@ -5,6 +5,9 @@
 import re
 from typing import Optional, Dict, Any
 from langchain_neo4j import Neo4jGraph
+from app.core.logger import get_logger
+
+logger = get_logger(service="schema_utils")
 
 def safe_get_schema(graph: Optional[Neo4jGraph] = None) -> str:
     """
@@ -38,7 +41,7 @@ def safe_get_schema(graph: Optional[Neo4jGraph] = None) -> str:
         
         return schema
     except Exception as e:
-        print(f"获取Neo4j数据库结构失败: {e}")
+        logger.error(f"获取Neo4j数据库结构失败: {e}")
         return ""
 
 def create_guardrails_context(

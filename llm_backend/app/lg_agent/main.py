@@ -9,7 +9,7 @@ sys.path.append(str(root_dir))
 
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
-from app.lg_agent.lg_builder import graph
+from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
 from langgraph.types import Command
 import asyncio
 import time
@@ -32,8 +32,9 @@ async def process_query(query):
     # async for c in graph.astream(input=inputState, stream_mode="values", config=thread):
     #     print(c, end="", flush=True)
 
-    if len(graph.get_state(thread)[-1]) > 0:
-        if len(graph.get_state(thread)[-1][0].interrupts) > 0:
+    state = await graph.aget_state(thread)
+    if len(state[-1]) > 0:
+        if len(state[-1][0].interrupts) > 0:
             response = input('\n响应可能包含不确定信息。重试生成？如果是，按"y"：')
             if response.lower() == 'y':
                 async for c, metadata in graph.astream(Command(resume=response), stream_mode="messages", config=thread):
@@ -45,13 +46,17 @@ async def process_query(query):
 
 
 async def main():
-    input = builtins.input
-    while True:
-        query = input("> ")
-        if query.strip().lower() == "q":
-            print("Exiting...")
-            break
-        await process_query(query)
+    await init_checkpointer()
+    try:
+        input = builtins.input
+        while True:
+            query = input("> ")
+            if query.strip().lower() == "q":
+                print("Exiting...")
+                break
+            await process_query(query)
+    finally:
+        await close_checkpointer()
 
 
 if __name__ == "__main__":

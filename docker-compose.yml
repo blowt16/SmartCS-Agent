@@ -1,18 +1,17 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: smartcs-agent-mysql
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: smartcs-agent-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: smartcs_agent_root_pwd
-      MYSQL_DATABASE: smartcs_agent
-      MYSQL_USER: smartcs-agent
-      MYSQL_PASSWORD: smartcs_agent_pwd
+      POSTGRES_DB: smartcs_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: smartcs_agent_pwd
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d smartcs_agent"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -54,9 +53,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: smartcs-agent
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
       DB_PASSWORD: smartcs_agent_pwd
       DB_NAME: smartcs_agent
       REDIS_HOST: redis
@@ -70,7 +69,7 @@ services:
     env_file:
       - .env.docker
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -81,7 +80,7 @@ services:
       - app_uploads:/app/llm_backend/uploads
 
 volumes:
-  mysql_data:
+  pg_data:
   redis_data:
   neo4j_data:
   neo4j_logs:
