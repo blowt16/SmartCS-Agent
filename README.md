@@ -79,8 +79,8 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/wang219416/GraphRAG-.git
-cd GraphRAG-
+git clone https://github.com/blowt16/SmartCS-Agent.git
+cd SmartCS-Agent
 
 # 2. 编辑 .env.docker 填入 API Key
 #    必填：DEEPSEEK_API_KEY
@@ -99,8 +99,8 @@ docker compose logs -f app
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/wang219416/GraphRAG-.git
-cd GraphRAG-
+git clone https://github.com/blowt16/SmartCS-Agent.git
+cd SmartCS-Agent
 
 # 2. 创建虚拟环境并安装依赖
 python -m venv .venv
@@ -212,6 +212,7 @@ MIT License
 
 ## 致谢
 
+- [wang219416/GraphRAG-](https://github.com/wang219416/GraphRAG-) - 原作者的开源项目，本系统基于其二次开发
 - [Microsoft GraphRAG](https://github.com/microsoft/graphrag) - 文档索引与检索
 - [LangGraph](https://github.com/langchain-ai/langgraph) - Agent 编排框架
 - [JDDC](https://jddc.jd.com/) - 京东客服对话数据集
