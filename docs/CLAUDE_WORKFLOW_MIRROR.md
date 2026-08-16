@@ -11,9 +11,9 @@
 |------|------|
 | 项目名 | SmartCS-Agent — 智能电商客服系统 |
 | 用户目的 | 学习项目代码，准备求职面试 |
-| 技术栈 | FastAPI + LangGraph + Neo4j + PostgreSQL(pgvector) + Redis + DeepSeek/Ollama + Vue |
-| 核心架构 | LangGraph StateGraph 单Agent多路由（6节点5类型），Multi-Tool 子图（Text2Cypher / 预定义Cypher / 向量检索） |
-| 三库分工 | PostgreSQL（用户认证+聊天记录+向量检索+LangGraph 检查点）、Neo4j（知识图谱）、Redis（语义缓存） |
+| 技术栈 | FastAPI + LangGraph + PostgreSQL(pgvector) + Redis + DeepSeek/Ollama + Vue |
+| 核心架构 | LangGraph StateGraph 单Agent多路由（6节点5类型），Multi-Tool 子图（Guardrails→Planner→向量检索→Summarize→FinalAnswer） |
+| 存储分工 | PostgreSQL（用户认证+聊天记录+向量检索+LangGraph 检查点）、Redis（语义缓存） |
 | 入口文件 | `llm_backend/main.py`（所有API端点） |
 | Agent图 | `llm_backend/app/lg_agent/lg_builder.py` |
 | 配置 | `llm_backend/app/core/config.py` + `.env` |
@@ -33,14 +33,11 @@ llm_backend/
 │   │   ├── lg_states.py              # Router/AgentState 定义
 │   │   ├── lg_prompts.py             # 提示词模板
 │   │   └── kg_sub_graph/
-│   │       ├── kg_neo4j_conn.py      # Neo4j 连接
 │   │       ├── kg_tools_list.py      # 工具 Schema 定义
 │   │       └── agentic_rag_agents/
 │   │           ├── workflows/multi_agent/multi_tool.py  # 多工具工作流
 │   │           └── components/
 │   │               ├── tool_selection/node.py           # 工具选择节点
-│   │               ├── cypher_tools/                    # Text2Cypher
-│   │               ├── predefined_cypher/               # 预定义Cypher模板
 │   │               └── customer_tools/node.py           # 向量检索（VectorStoreQuery）
 │   ├── services/
 │   │   ├── llm_factory.py            # LLM 工厂模式
@@ -154,7 +151,7 @@ llm_backend/
 ### 5.2 用户已知的知识领域
 
 - LangGraph StateGraph 构建和条件路由
-- Neo4j 基础（节点/关系/属性/Cypher）
+- （历史）Neo4j 基础与 Cypher 语法（功能已移除，仅作知识储备）
 - 标准 RAG 索引管道（解析→清洗→分块→Embedding→pgvector 入库）
 - Redis 语义缓存（bge-m3 + 余弦相似度）
 - SSE 流式响应原理
@@ -167,7 +164,7 @@ llm_backend/
 
 - 对照《All-in-RAG》第九章深化 RAG 理解
 - P0/P1 代码改进已完成的验证
-- Neo4j 数据导入和图谱可视化
+- （历史）图数据库建模与图谱可视化
 - 面试实战演练
 
 ---

@@ -34,18 +34,18 @@ def create_summarization_node(
 
     async def summarize(state: OverallState) -> Dict[str, Any]:
         """
-        Summarize results of the performed Cypher queries.
+        Summarize results of the performed vector searches.
         """
         results = []
-        
+
         # 使用直接属性访问而不是get方法
-        for cypher in state.get("cyphers", list()):
+        for search in state.get("searches", list()):
             # 检查是否是字典类型，使用get方法
-            if isinstance(cypher, dict) and cypher.get("records") is not None:
-                results.append(cypher.get("records"))
+            if isinstance(search, dict) and search.get("records") is not None:
+                results.append(search.get("records"))
             # 检查是否是Pydantic模型，使用直接属性访问
-            elif hasattr(cypher, "records") and cypher.records is not None:
-                results.append(cypher.records)
+            elif hasattr(search, "records") and search.records is not None:
+                results.append(search.records)
                 
         if results:
             summary = await generate_summary.ainvoke(

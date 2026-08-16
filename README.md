@@ -6,10 +6,9 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-005571?logo=fastapi)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
 ![DeepSeek](https://img.shields.io/badge/DeepSeek-V3-orange)
-![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-*基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统，集成向量知识检索（pgvector）与多轮对话管理*
+*基于 FastAPI + LangGraph 的智能电商客服系统，集成向量知识检索（pgvector）与多轮对话管理*
 
 </div>
 
@@ -20,12 +19,12 @@
 | 特性 | 说明 |
 |------|------|
 | **5 路意图路由** | LangGraph StateGraph 实现：闲聊 / 追问 / 知识库查询 / 图片分析 / 文件处理，自动识别用户意图并路由 |
-| **Text2Cypher 闭环** | 自然语言 → Cypher 查询 → 正则 + LLM 双重校验 → 自动修正 → 执行，实现图数据库的自然语言查询 |
+| **向量知识库检索** | pgvector（HNSW）Top-K 检索 + BM25 混合检索 + LLM 相关性评分，文档上传秒级建索引 |
 | **混合检索 + 相关性评分** | BM25 + 向量检索 RRF 融合，LLM 逐条评分过滤不相关结果，不足时自动切换策略重检索 |
 | **文档向量检索管道** | 解析 → 清洗 → 语义分块 → Embedding → pgvector 入库（HNSW 索引），秒级索引，配合混合检索增强召回 |
 | **语义缓存** | 基于 Embedding 向量余弦相似度（阈值 0.90），相同语义问题直接返回缓存，降低 LLM 调用成本 |
 | **幻觉检测** | LLM 校验生成回答是否基于事实数据，为回答质量提供最后保障 |
-| **Docker Compose 一键部署** | PostgreSQL(pgvector) + Redis + Neo4j + App，healthcheck 保障启动顺序，开箱即用 |
+| **Docker Compose 一键部署** | PostgreSQL(pgvector) + Redis + App，healthcheck 保障启动顺序，开箱即用 |
 | **丰富的知识库** | 内置产品知识文档 + 1,800 条电商 FAQ + 2,600+ 条真实客服对话（JDDC 数据集） |
 
 ## 系统架构
@@ -44,8 +43,6 @@
   │    ├─ general-query → 纯 LLM 闲聊
   │    ├─ additional-query → 护栏检查 + 追问
   │    ├─ graphrag-query → Multi-Tool Workflow
-  │    │    ├─ Text2Cypher（NL → Cypher 查询）
-  │    │    ├─ PredefinedCypher（预定义模板 + 向量匹配）
   │    │    └─ 向量检索（pgvector）→ 混合检索(BM25+向量) → 相关性评分(LLM)
   │    ├─ image-query → GPT-4o 图片分析
   │    └─ file-query → 文件处理
@@ -60,7 +57,6 @@
 | 后端框架 | FastAPI | REST API，原生异步，SSE 流式响应 |
 | 智能体 | LangGraph | StateGraph 多路由 Agent 编排，会话检查点持久化（PostgresSaver） |
 | LLM | DeepSeek API | 对话、推理、Agent（工厂模式可切换 Ollama） |
-| 知识图谱 | Neo4j | 电商数据（商品、订单、客户），Text2Cypher 查询 |
 | 文档检索 | pgvector | 语义分块 + 向量入库（HNSW）+ 混合检索（BM25 + 向量 RRF） |
 | Embedding | SiliconFlow (BAAI/bge-m3) | 语义向量生成，免费 API |
 | 向量缓存 | Redis | 语义缓存（余弦相似度 >= 0.90 命中） |
@@ -109,8 +105,8 @@ uv sync
 cp llm_backend/.env llm_backend/.env
 # 编辑 llm_backend/.env 填入 API Key 和数据库连接信息
 
-# 4. 启动 PostgreSQL、Redis、Neo4j（可用 Docker 单独启动）
-docker compose up -d postgres redis neo4j
+# 4. 启动 PostgreSQL、Redis（可用 Docker 单独启动）
+docker compose up -d postgres redis
 
 # 5. 初始化数据库（建表 + 启用 pgvector 扩展 + HNSW 索引）
 cd llm_backend
@@ -167,7 +163,6 @@ python scripts/download_jddc.py
 │   │   │       └── agentic_rag_agents/
 │   │   │           └── components/
 │   │   │               ├── customer_tools/  # 向量检索 + 混合检索
-│   │   │               ├── cypher_tools/    # Text2Cypher 闭环
 │   │   │               ├── relevance_grader.py  # LLM 相关性评分
 │   │   │               └── hybrid_retrieval/    # BM25+向量 RRF 融合
 │   │   │   ├── models/                   # SQLAlchemy 数据模型（含 document_chunks 向量表）
@@ -178,7 +173,7 @@ python scripts/download_jddc.py
 │   ├── generate_product_knowledge.py # 从 CSV 生成产品知识文档
 │   ├── download_datasets.py          # 下载开源电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 客服对话数据集
-├── docker-compose.yml                # Docker Compose 配置（postgres/redis/neo4j/app）
+├── docker-compose.yml                # Docker Compose 配置（postgres/redis/app）
 ├── Dockerfile                        # Docker 镜像构建
 ├── .env.docker                       # Docker 环境变量
 └── STUDY_NOTES.md                    # 项目学习文档（面试准备）
@@ -191,7 +186,6 @@ python scripts/download_jddc.py
 | **工厂模式** | `LLMFactory` | 通过 `.env` 配置切换 DeepSeek/Ollama，不改代码 |
 | **策略模式** | `config.py` | CHAT/REASON/AGENT 可分别选不同 LLM 服务 |
 | **回调模式** | `deepseek_service.py` | `on_complete` 回调触发消息持久化，解耦 LLM 和存储 |
-| **责任链** | Text2Cypher | 生成 -> 校验 -> 修正 -> 执行流水线 |
 | **状态图** | LangGraph | `StateGraph` + 条件边实现多路由 Agent |
 
 ## 数据集说明

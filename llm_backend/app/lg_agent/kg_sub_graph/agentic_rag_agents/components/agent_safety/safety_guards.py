@@ -1,23 +1,17 @@
 """
-基础安全护栏：迭代限制、Cypher 安全校验、超时保护
+基础安全护栏：迭代限制、超时保护
 
 ① MaxIterationGuard
     防止工具调用死循环。每次工具调用 +1，超过阈值强制终止。
     放在 multi_tool_workflow 的循环边中，每次循环检查。
 
-② CypherSafetyValidator
-    在 Text2Cypher 生成 Cypher 后、执行前，检查是否包含危险操作。
-    危险关键词：DELETE, DETACH DELETE, DROP, REMOVE, CREATE (节点/关系),
-                SET (修改属性), MERGE (可能创建)
-
-③ TimeoutGuard
+② TimeoutGuard
     用 asyncio.wait_for 包装整个 agent 调用，超时返回降级回答。
     默认超时 30 秒。
 """
 
-import re
 import asyncio
-from typing import Optional, Any, Awaitable
+from typing import Any, Awaitable
 
 from app.core.logger import get_logger
 
@@ -60,62 +54,7 @@ class MaxIterationGuard:
         return self._counters.get(conversation_id, 0)
 
 
-# ===== ② Cypher 安全校验 =====
-
-class CypherSafetyValidator:
-    """
-    Cypher 查询安全校验器。
-
-    在 LLM 生成的 Cypher 执行前做安全检查，拦截所有写操作。
-
-    拦截规则：
-        - DDL: CREATE, DROP, ALTER
-        - DML 写操作: DELETE, DETACH DELETE, SET, REMOVE, MERGE
-        - CALL（可能调用存储过程）
-        - FOREACH（批量写操作）
-    """
-
-    DANGEROUS_PATTERNS = [
-        (r'\bDELETE\b', "包含 DELETE 操作"),
-        (r'\bDETACH\s+DELETE\b', "包含 DETACH DELETE 操作"),
-        (r'\bDROP\b', "包含 DROP 操作"),
-        (r'\bCREATE\b', "包含 CREATE 操作"),
-        (r'\bMERGE\b', "包含 MERGE 操作"),
-        (r'\bSET\b', "包含 SET 操作（修改属性）"),
-        (r'\bREMOVE\b', "包含 REMOVE 操作"),
-        (r'\bCALL\b', "包含 CALL 操作（存储过程）"),
-        (r'\bFOREACH\b', "包含 FOREACH 操作（批量写）"),
-    ]
-
-    def validate(self, cypher: str) -> tuple[bool, str]:
-        """
-        校验 Cypher 是否安全。
-
-        Returns:
-            (is_safe, reason)
-        """
-        if not cypher or not cypher.strip():
-            return False, "Cypher 为空"
-
-        cypher_upper = cypher.upper()
-
-        for pattern, reason in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, cypher_upper):
-                logger.warning(f"Cypher 安全拦截: {reason}, 查询: {cypher[:100]}")
-                return False, reason
-
-        return True, "安全"
-
-    def sanitize(self, cypher: str) -> str:
-        """校验通过返回原查询，不通过返回空字符串"""
-        is_safe, reason = self.validate(cypher)
-        if is_safe:
-            return cypher
-        logger.warning(f"Cypher 不安全（{reason}），拒绝执行")
-        return ""
-
-
-# ===== ③ 响应超时 =====
+# ===== ② 响应超时 =====
 
 class TimeoutGuard:
     """

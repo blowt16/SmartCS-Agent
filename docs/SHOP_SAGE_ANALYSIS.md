@@ -1,5 +1,7 @@
 # ShopSage 架构对比与优化参考
 
+> ⚠️ 本文撰写于 2026-08-16 Neo4j 退役之前：文中 SmartCS 侧涉及 Neo4j/Text2Cypher/predefined_cypher/实体识别 的描述（如工作流图、bug 记录、健康检查建议）请以历史视角阅读——这些组件已于同日整体移除，当前知识库查询统一走 pgvector 向量检索。
+
 > 本文档服务于 SmartCS-Agent 二次开发：对比分析 `D:\ShopSage` 与本项目，提炼 ShopSage 中可迁移到 SmartCS-Agent 的**架构与功能流程设计亮点**，并映射到本项目当前痛点，给出落地优先级建议。
 >
 > 分析方法：两份只读源码走读（SmartCS-Agent 约 1.1 万行 Python；ShopSage 全仓库），关键结论已抽样复核。
@@ -32,7 +34,7 @@
 | Web | FastAPI + SSE（`llm_backend/main.py:105`） | FastAPI + SSE + WebSocket |
 | Agent | LangGraph 0.3.25 StateGraph，双图嵌套 | LangGraph 1.x，单图 6 节点 |
 | LLM | DeepSeek/Ollama 工厂切换，独立 Vision API | DeepSeek（chat/intent 分组），通义千问 Embedding |
-| 检索 | pgvector（BM25+向量 RRF）+ Neo4j Text2Cypher | PostgreSQL 16 + pgvector（HNSW）余弦 Top5 |
+| 检索 | pgvector（BM25+向量 RRF） | PostgreSQL 16 + pgvector（HNSW）余弦 Top5 |
 | 缓存/队列 | Redis 语义缓存 + 摘要缓存（**同步客户端**） | Redis 7（redis-stack）+ Celery 5.6 |
 | 业务库 | PostgreSQL 16（psycopg + SQLAlchemy async） | PostgreSQL（SQLModel + asyncpg） |
 | 迁移 | ❌ 无 | ✅ Alembic 异步迁移（6 个版本） |

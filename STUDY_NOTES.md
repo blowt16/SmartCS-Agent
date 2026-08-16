@@ -1,6 +1,6 @@
 # SmartCS-Agent 项目架构文档
 
-> 智能电商客服系统，基于 FastAPI + LangGraph + Neo4j 构建
+> 智能电商客服系统，基于 FastAPI + LangGraph 构建
 
 ---
 
@@ -22,7 +22,7 @@
 
 ## 1. Overview
 
-SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字、图片等方式咨询商品信息，系统自动识别用户意图，路由到不同的处理模块。普通闲聊直接用 LLM 回答；商品查询通过 Neo4j 知识图谱的 Text2Cypher 技术实现；需要联网的问题调用搜索 API。
+SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字、图片等方式咨询商品信息，系统自动识别用户意图，路由到不同的处理模块。普通闲聊直接用 LLM 回答；商品查询通过 pgvector 向量检索 + 混合检索实现；需要联网的问题调用搜索 API。
 
 ### 技术栈总览
 
@@ -31,7 +31,6 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 后端框架 | FastAPI | REST API 服务，原生异步支持 |
 | 智能体 | LangGraph | 多路由 Agent 编排（StateGraph） |
 | LLM | DeepSeek / Ollama | 大语言模型对话、推理（工厂模式切换） |
-| 知识图谱 | Neo4j | 电商数据（商品、订单、客户） |
 | 文档检索 | 标准 RAG（pgvector） | 文档解析→分块→Embedding→pgvector 表（HNSW），混合检索（BM25+向量 RRF） |
 | 向量缓存 | Redis | 语义缓存（基于 Embedding 向量相似度） |
 | 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
@@ -44,7 +43,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 定位 | 智能电商客服系统 | 文档 Q&A + RAG 参考架构 |
 | 核心场景 | 商品咨询、图片分析、联网搜索 | 上传文档 → 基于文档问答 |
 | Agent 复杂度 | 5路意图路由 | 2路路由 |
-| 知识图谱 | Neo4j + Text2Cypher | 无 |
+| 知识图谱 | 无（已移除，知识库统一走 pgvector） | 无 |
 | 搜索策略 | 标准 RAG：BM25 + 向量 RRF 混合检索 | 自建混合搜索（dense + sparse RRF） |
 | 独有亮点 | 幻觉检测、语义缓存、图片分析、**混合检索+相关性评分** | 三级分块、查询改写、Auto-Merge、Rerank |
 
@@ -55,7 +54,6 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 ### 环境要求
 
 - Python 3.8+
-- Neo4j 4.0+
 - Redis 6.0+
 - PostgreSQL 16+（pgvector 镜像，Docker 部署）
 
@@ -88,7 +86,7 @@ python run.py
 
 ### Docker Compose 一键部署
 
-如果不想手动安装 PostgreSQL、Redis、Neo4j，可以用 Docker Compose 一键启动：
+如果不想手动安装 PostgreSQL、Redis，可以用 Docker Compose 一键启动：
 
 ```bash
 # 1. 编辑 .env.docker 填入真实 API Key
@@ -108,7 +106,6 @@ docker compose down
 |------|------|------|------|
 | postgres | pgvector/pgvector:pg16 | 5432 | 用户/会话/消息持久化 + 向量检索 + LangGraph 检查点 |
 | redis | redis:7-alpine | 6379 | 语义缓存 |
-| neo4j | neo4j:5-community | 7474/7687 | 知识图谱 |
 | app | 自构建 | 8000 | FastAPI 应用 |
 
 关键设计：
@@ -133,9 +130,6 @@ SERPAPI_KEY=xxxxx
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=smartcs_agent
-
-# Neo4j
-NEO4J_URI=bolt://localhost:7687
 
 # Redis
 REDIS_HOST=localhost
@@ -165,7 +159,7 @@ REDIS_PORT=6379
 │   RedisSemanticCache → Redis + Ollama Embedding      │
 ├─────────────────────────────────────────────────────┤
 │                   数据层                              │
-│   PostgreSQL（用户/会话/消息/向量/检查点） Neo4j（知识图谱） │
+│   PostgreSQL（用户/会话/消息/向量/检查点）                  │
 │   Redis（语义缓存）                              │
 └─────────────────────────────────────────────────────┘
 ```
@@ -190,8 +184,6 @@ REDIS_PORT=6379
   │    │    ├─ general-query → 闲聊（纯 LLM）
   │    │    ├─ additional-query → 追问 + 护栏检查
   │    │    ├─ graphrag-query → Multi-Tool Workflow
-  │    │    │    ├─ Text2Cypher（NL → Cypher 查询）
-  │    │    │    ├─ PredefinedCypher（预定义查询模板）
   │    │    │    └─ 向量检索（pgvector）＋混合检索（BM25+向量 RRF）
   │    │    ├─ image-query → GPT-4o 图片分析
   │    │    └─ file-query → 文件处理
@@ -259,7 +251,7 @@ REDIS_PORT=6379
 5种路由类型：
 - `general-query` — 闲聊，不查数据库
 - `additional-query` — 问题不明确，需要追问
-- `graphrag-query` — 查知识库（Neo4j / pgvector 文档检索）
+- `graphrag-query` — 查知识库（pgvector 文档检索）
 - `image-query` — 图片分析
 - `file-query` — 文件处理（未实现）
 
@@ -297,12 +289,12 @@ class AgentState(InputState):
 #### 节点3：get_additional_info（追问 + 护栏）
 
 **双重机制**：
-1. **护栏检查（Guardrails）**：连接 Neo4j 获取图谱结构，让 LLM 判断问题是否在经营范围（智能家居）内
+1. **护栏检查（Guardrails）**：让 LLM 判断问题是否在经营范围（智能家居）内
    - 超范围 → "我家暂时没有这方面的商品"
    - 范围内 → LLM 生成追问
 2. **追问**：如果在经营范围内但信息不足，LLM 生成追问
 
-#### 节点4：create_research_plan（知识图谱查询）
+#### 节点4：create_research_plan（知识库检索）
 
 > 参见：[5. 知识图谱查询](#5-知识图谱查询) 了解该节点的完整内部架构
 
@@ -332,10 +324,10 @@ builder.add_node(create_file_query)
 builder.add_edge(START, "analyze_and_route_query")
 builder.add_conditional_edges("analyze_and_route_query", route_query)
 
-graph = builder.compile(checkpointer=MemorySaver())
+graph = builder.compile(checkpointer=checkpointer)
 ```
 
-`MemorySaver` 让 LangGraph 支持对话持久化——用户可以关闭页面再回来继续聊。
+`checkpointer` 为 `AsyncPostgresSaver`（PostgreSQL），让 LangGraph 支持对话持久化——用户可以关闭页面再回来继续聊，服务重启状态也不丢失。
 
 ### 关键设计模式
 
@@ -344,7 +336,7 @@ graph = builder.compile(checkpointer=MemorySaver())
 | 状态图（StateGraph） | LangGraph 核心，通过状态在节点间传递数据 |
 | 条件边（conditional_edges） | 路由分类后走不同分支 |
 | 结构化输出 | `with_structured_output(Router)` 让 LLM 输出指定格式 |
-| 检查点（checkpointer） | `MemorySaver()` 支持会话持久化和中断恢复 |
+| 检查点（checkpointer） | `AsyncPostgresSaver`（PostgreSQL）支持会话持久化和中断恢复 |
 | 子图（SubGraph） | create_research_plan 内部调用完整的多工具工作流 |
 | 工厂模式 | LLMFactory 根据 config 创建 DeepSeek/Ollama 实例 |
 
@@ -362,8 +354,8 @@ graph = builder.compile(checkpointer=MemorySaver())
    → 根据 type 路由到 create_research_plan
 
 4. create_research_plan
-   → 连接 Neo4j → 创建 multi_tool_workflow
-   → 生成 Cypher: MATCH (p:Product {name:'智能灯泡'}) RETURN p.price
+   → 创建 multi_tool_workflow（Guardrails → Planner → 向量检索 → Summarize → FinalAnswer）
+   → pgvector 检索"智能灯泡"相关文档块 → 混合检索 + 相关性评分
    → 返回结果
 
 5. 返回 {messages: [AIMessage(content="智能灯泡价格是xx元...")]}
@@ -371,56 +363,51 @@ graph = builder.compile(checkpointer=MemorySaver())
 
 ---
 
-## 5. 知识图谱查询
+## 5. 知识库查询（Multi-Tool Workflow）
 
 > 这是 Agent 中最复杂的节点，内部嵌套了一个完整的 Multi-Tool Workflow。
+> ⚠️ 本章原描述「知识图谱查询（Text2Cypher / PredefinedCypher）」，相关功能已于 2026-08-16 随 Neo4j 退役（见本章末尾「历史演进」），当前实现为纯向量检索编排。
 
 ### 解决什么问题
 
-用户问的商品查询需要从知识库中检索数据。但知识库有多种访问方式（图数据库查询、预定义模板、文档检索），需要一个统一的编排层来选择最合适的工具。
+用户问的商品/售后/使用说明等查询需要从知识库（pgvector 文档块）中检索数据，需要一个统一的编排层完成范围检查、任务分解、检索与汇总。
 
 ### Multi-Tool Workflow 内部架构
 
 ```
-Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（工具选择）
-  ├── Text2Cypher: 自然语言→Cypher查询语言
-  │   └── 生成→校验→修正→执行 四步闭环
-  ├── PredefinedCypher: 预定义查询模板 + 向量匹配
-  └── 向量检索: pgvector 文档检索（向量 + BM25 混合检索）
-→ Summarize（汇总）→ Final Answer（最终回答）→ Validate（完整性验证）
+Guardrails（范围检查）→ Planner（任务分解）→ 向量检索（customer_tools 节点）
+  └── VectorStoreQuery 余弦 Top-K → 混合检索（BM25 + 向量 RRF）→ 相关性评分
+→ Summarize（汇总）→ Final Answer（最终回答）
 ```
 
-### Text2Cypher（自然语言 → Cypher 查询）
+### 向量检索（customer_tools 节点）
 
-把自然语言自动翻译成 Neo4j 的 Cypher 查询语言，采用**生成-校验-修正-执行的闭环**：
-
-1. **生成**：LLM 根据 Neo4j 的 Schema 和 Cypher 示例生成查询语句
-2. **校验**：用正则和 LLM 双重校验语法和语义
-3. **修正**：如果校验失败就自动修正
-4. **执行**：执行查询返回结果
-
-示例：
-- 输入："智能灯泡多少钱"
-- 输出：`MATCH (p:Product {category:'智能照明'}) WHERE p.name CONTAINS '灯泡' RETURN p.name, p.price`
-
-还使用了**向量检索**来匹配最相关的 Cypher 示例，提高生成准确率。
-
-### PredefinedCypher（预定义查询模板 + 向量匹配）
-
-系统预置了常用的查询模板，通过向量匹配找到最相关的模板直接执行，避免每次都让 LLM 从零生成。
+1. **VectorStoreQuery**：本地 SentenceTransformer 编码 query
+2. **pgvector 检索**：`cosine_distance` 在 document_chunks 表做 Top-K 余弦检索
+3. **混合检索补充**：拉取全量语料构建 HybridRetriever（BM25 + 向量 RRF 融合），补充关键词精确命中
+4. **相关性评分**：LLM 逐条过滤不相关文档
+5. 检索结果汇总进 Summarize，生成客服风格回答
 
 ### 护栏机制（Guardrails）
 
-- 连接 Neo4j 获取图谱结构
-- 让 LLM 判断用户问题是否在经营范围内
+- 让 LLM 判断用户问题是否在经营范围内（智能家居）
 - 超范围问题直接拒绝，避免 LLM 产生无关回答
 
 ### 幻觉检测
 
 用 LLM 检查生成的回答是否基于事实数据。`binary_score` = "1" 表示基于事实，"0" 表示有幻觉。这为回答质量提供了最后一道保障。
 
-> 参见：[7. Neo4j 知识图谱](#7-neo4j-知识图谱) 了解图数据库的设计。
 > 参见：[8. 文档检索管道（标准 RAG）](#8-文档检索管道标准-rag) 了解文档检索的实现。
+
+### 历史演进：Text2Cypher 与 PredefinedCypher（2026-08-16 已移除）
+
+旧版在 Planner 后接入 Tool Selection 节点，按查询复杂度三选一：
+
+- **Text2Cypher**：LLM 把自然语言翻译为 Neo4j Cypher，生成 → 正则校验 → LLM 校验 → 修正（最多 3 次）→ 执行
+- **PredefinedCypher**：28 条预定义模板 + 向量匹配选模板，直接填参执行
+- **向量检索**：pgvector 文档检索
+
+迁移原因：Neo4j 与 PostgreSQL 双数据库 + 图查询/向量检索双引擎并存，运维与查询路径复杂度高；业务问答集中在文档知识库场景，混合检索已能覆盖；统一到 PostgreSQL + pgvector 后，知识库查询收敛为单一检索路径，运维面大幅收敛。
 
 ---
 
@@ -462,34 +449,23 @@ Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（�
 
 # Part 3: 知识系统
 
-> 知识系统是 SmartCS-Agent 的数据基础，由 Neo4j 知识图谱和标准 RAG 文档检索管道两部分组成。
+> 知识系统是 SmartCS-Agent 的数据基础，核心为标准 RAG 文档检索管道（pgvector）。
 
 ## 7. Neo4j 知识图谱
 
-### 解决什么问题
+> ⚠️ 本章原描述 Neo4j 图数据库设计（商品/订单实体建模与 Text2Cypher 查询），相关功能与依赖已于 2026-08-16 整体移除：docker-compose 的 neo4j 服务、`langchain-neo4j` 依赖、predefined_cypher/text2cypher 组件、实体识别链接管道、Cypher 安全校验器等。移除原因：业务问答集中在文档知识库场景，图查询与向量检索双引擎并存带来运维与查询路径复杂度；统一到 PostgreSQL + pgvector 后，知识库查询收敛为单一向量检索路径。以下保留历史模型速览，供面试复盘参考。
 
-电商数据天然适合图结构——商品、分类、供应商、订单之间存在复杂的多对多关系。Neo4j 图数据库能高效存储和查询这些关系数据。
+### 历史模型速览
 
-### 电商数据模型
-
-知识图谱中存储的实体类型包括：商品（Product）、分类（Category）、供应商（Supplier）、订单（Order）、客户（Customer）等。
-
-### 常用 Cypher 查询模式
-
-通过 Text2Cypher，系统能自动将自然语言翻译为如下查询：
+曾用于商品/分类/关系查询的 Cypher 模式（已随功能移除）：
 
 ```cypher
 -- 查商品价格
 MATCH (p:Product {name:'智能灯泡'}) RETURN p.price
 
--- 按分类查商品
-MATCH (p:Product {category:'智能照明'}) WHERE p.name CONTAINS '灯泡' RETURN p.name, p.price
-
 -- 查关联关系
 MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 ```
-
-> 参见：[5. 知识图谱查询](#5-知识图谱查询) 了解如何通过 Text2Cypher 自动生成这些查询。
 
 ---
 
@@ -504,7 +480,7 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 | 索引成本高 | 建索引需 LLM 抽取实体关系，一次 5-30 分钟，API 成本高 | 索引秒级完成，全程无 LLM 调用 |
 | 维护成本高 | 80+ 内嵌源码，版本升级困难 | 管道只有解析→清洗→分块→入库，代码量小 |
 | 场景不匹配 | 电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理 | 事实查询效果持平，复杂度大幅降低 |
-| 数据冗余 | 实体关系已由 Neo4j 知识图谱管理，GraphRAG 再抽一份属冗余 | 向量库与 Neo4j 各司其职 |
+| 数据冗余 | GraphRAG 抽取实体关系与知识库文档检索冗余 | pgvector 统一知识库检索，单一数据源 |
 
 > 复盘结论：**选型先看场景**。GraphRAG 适合需要跨文档归纳、多跳推理的宏观分析；电商客服的事实查询场景，标准 RAG 足矣。
 
@@ -1177,38 +1153,38 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 
 ### Q1: 请介绍一下你的项目
 
-> SmartCS-Agent 是一个智能电商客服系统。用户可以通过文字、图片等方式咨询商品信息，系统会自动识别用户意图，路由到不同的处理模块。普通闲聊直接用 LLM 回答；商品查询通过 Neo4j 知识图谱的 Text2Cypher 技术实现；需要联网的问题调用搜索 API。我还实现了语义缓存来减少重复的 LLM 调用。
+> SmartCS-Agent 是一个智能电商客服系统。用户可以通过文字、图片等方式咨询商品信息，系统会自动识别用户意图，路由到不同的处理模块。普通闲聊直接用 LLM 回答；商品查询通过 pgvector 向量检索 + 混合检索实现；需要联网的问题调用搜索 API。我还实现了语义缓存来减少重复的 LLM 调用。
 
 ### Q2: 你的 LangGraph Agent 是怎么设计的？
 
-> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow，支持 Text2Cypher 自动生成图查询、预定义 Cypher 模板匹配、以及基于 pgvector 的标准 RAG 文档检索三种工具。
+> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow（护栏检查 → 任务分解 → 向量检索 → 结果汇总 → 最终回答），检索统一走 pgvector：余弦 Top-K 召回 + BM25/向量 RRF 混合检索 + LLM 相关性评分。
 
 ### Q3: 语义缓存是怎么实现的？
 
 > 传统缓存用精确匹配，"灯泡多少钱"和"灯泡价格"是两个不同的 key。我的语义缓存使用 Ollama 的 bge-m3 模型把用户消息转成向量，然后和 Redis 中所有缓存的向量计算余弦相似度。如果最高相似度超过 0.90 的阈值，就认为问题语义相同，直接返回缓存答案。这样避免了重复调用 LLM，既降低了成本又减少了响应延迟。
 
-### Q4: Text2Cypher 是怎么工作的？
+### Q4: 你的知识库检索是怎么演进的？
 
-> Text2Cypher 是把自然语言翻译成 Neo4j 图数据库的 Cypher 查询语言。我实现了一个生成-校验-修正-执行的闭环：首先 LLM 根据 Neo4j 的 Schema 和 Cypher 示例生成查询语句；然后用正则和 LLM 双重校验语法和语义；如果校验失败就自动修正；最后执行查询返回结果。还使用了向量检索来匹配最相关的 Cypher 示例，提高生成准确率。
+> 项目早期是双引擎：Text2Cypher（LLM 把自然语言翻译成 Neo4j Cypher，走生成-校验-修正-执行闭环）加 pgvector 向量检索，由工具选择节点按复杂度三选一。后来复盘发现电商客服问答集中在文档知识库场景，双数据库 + 双查询引擎的运维与查询路径复杂度远超收益，就把 Neo4j 整体退役，检索统一收敛到 pgvector：余弦 Top-K + BM25/向量 RRF 混合 + LLM 相关性评分。这个演进的核心经验是：技术选型要匹配场景，能力过剩的组件（图查询引擎）要及时裁掉。
 
 ### Q5: 你用了哪些设计模式？
 
 > 1. **工厂模式**：LLMFactory 根据配置创建不同的 LLM 服务实例
 > 2. **策略模式**：通过 .env 配置切换 DeepSeek 和 Ollama
 > 3. **回调模式**：on_complete 参数实现消息持久化
-> 4. **责任链模式**：Text2Cypher 的生成-校验-修正-执行流水线
+> 4. **责任链模式**：查询预处理管道的 改写→纠错→扩展→HyDE 流水线
 > 5. **观察者模式**：LangGraph 的状态变化通知机制
 
 ### Q6: 为什么选择这些技术？
 
 > - **FastAPI**：原生异步支持，适合 LLM 流式输出场景
 > - **LangGraph**：比纯 LangChain 更适合复杂的多步骤工作流编排，支持状态持久化和中断恢复
-> - **Neo4j**：电商数据天然适合图结构（商品-分类-供应商-订单关系）
+> - **PostgreSQL + pgvector**：业务数据与向量检索共用一个实例，运维面最小
 > - **标准 RAG（pgvector）**：文档管道简单可靠，混合检索（BM25+向量 RRF）兼顾关键词与语义，事实查询效果与 GraphRAG 持平但成本低一个量级
 
 ### Q7: 为什么从 GraphRAG 迁移到标准 RAG？
 
-> GraphRAG 建索引需要 LLM 抽取实体和关系，一次要 5-30 分钟、API 成本高；80+ 内嵌源码维护困难；而且电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理；实体关系已经由 Neo4j 管理，再抽一份是冗余。迁移到标准 RAG（pgvector）后索引秒级完成，事实查询效果持平。核心经验：**选型要看场景**——GraphRAG 适合跨文档归纳、多跳推理的宏观分析，事实查询用标准 RAG 足矣。
+> GraphRAG 建索引需要 LLM 抽取实体和关系，一次要 5-30 分钟、API 成本高；80+ 内嵌源码维护困难；而且电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理；知识库问答靠文档检索已能覆盖，实体关系抽取是冗余。迁移到标准 RAG（pgvector）后索引秒级完成，事实查询效果持平。核心经验：**选型要看场景**——GraphRAG 适合跨文档归纳、多跳推理的宏观分析，事实查询用标准 RAG 足矣。
 
 ### Q8: 你的混合检索（BM25 + 向量 RRF）是怎么设计的？
 
@@ -1305,7 +1281,7 @@ async def init_db():
 
 ### 4. 责任链模式（Chain of Responsibility）
 
-**位置**：`lg_builder.py` 的 Text2Cypher 流水线
+**位置**：（历史）原 Text2Cypher 流水线（已于 2026-08-16 随 Neo4j 移除）
 
 **应用**：生成→校验→修正→执行，每一步处理完传递给下一步，校验失败则退回修正。
 

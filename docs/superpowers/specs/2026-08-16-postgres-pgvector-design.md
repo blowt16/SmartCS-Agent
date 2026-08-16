@@ -55,3 +55,7 @@
 - 本地 Windows 开发必须经 `run.py` 启动（loop 补丁）；Docker/Linux 无此问题
 - 混合检索仍走「全量拉取语料本地编码」的旧路径，后续可改为直接复用 pgvector 已存向量，省一次全量编码
 - 本地直接 `uvicorn main:app` 不经过 run.py 补丁，Windows 下会报 ProactorEventLoop 错误——README 已注明用 run.py 启动
+
+## 6. 后续演进（2026-08-16 同日）
+
+Neo4j 与 Cypher 全链路退役：审计确认 PredefinedCypher/实体识别/tool_selection 仍在生产路径后，彻底移除——multi_tool 工作流收敛为 `Guardrails → Planner → 向量检索 → Summarize → FinalAnswer`，删除 predefined_cypher/text2cypher 残留组件、kg_neo4j_conn、实体识别管道、Cypher 安全校验器等 30+ 死文件，移除 `langchain-neo4j` 依赖与 docker-compose neo4j 服务，状态契约 `cyphers` 字段更名为 `searches`。验证：主图/子图节点无 cypher 残留，应用启动 `/health` 200。

@@ -22,12 +22,10 @@ from langgraph.graph import END, START, StateGraph
 from app.lg_agent.lg_states import AgentState, InputState, Router, GradeHallucinations
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import create_planner_node
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.workflows.multi_agent.multi_tool import create_multi_tool_workflow
-from app.lg_agent.kg_sub_graph.kg_neo4j_conn import get_neo4j_graph
 from pydantic import BaseModel
 from typing import Dict, List
 from langchain_core.messages import AIMessage
 from langchain_core.runnables.base import Runnable
-from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.utils.utils import retrieve_and_parse_schema_from_graph_for_prompts
 from langchain_core.prompts import ChatPromptTemplate
 import base64
 import os
@@ -200,14 +198,6 @@ async def get_additional_info(
 
     # 如果用户的问题是电商相关，但与自己的业务无关，则需要返回"无关问题"
 
-    # 首先连接 Neo4j 图数据库
-    neo4j_graph = None
-    try:
-        neo4j_graph = get_neo4j_graph()
-        logger.info("success to get Neo4j graph database connection")
-    except Exception as e:
-        logger.error(f"failed to get Neo4j graph database connection: {e}")
-
     # 定义电商经营范围
     scope_description = """
     个人电商经营范围：智能家居产品，包括但不限于：
@@ -217,7 +207,7 @@ async def get_additional_info(
     - 智能音箱（语音助手、音响）
     - 智能厨电（电饭煲、冰箱、洗碗机）
     - 智能清洁（扫地机器人、洗衣机）
-    
+
     不包含：服装、鞋类、体育用品、化妆品、食品等非智能家居产品。
     """
 
@@ -227,14 +217,7 @@ async def get_additional_info(
         else ""
     )
 
-    # 动态从 Neo4j 图表中获取图表结构
-    graph_context = (
-        f"\n参考图表结构来回答:\n{retrieve_and_parse_schema_from_graph_for_prompts(neo4j_graph)}"
-        if neo4j_graph is not None
-        else ""
-    )
-
-    message = scope_context + graph_context + "\nQuestion: {question}"
+    message = scope_context + "\nQuestion: {question}"
 
     # 拼接提示模版
     full_system_prompt = ChatPromptTemplate.from_messages(
@@ -432,42 +415,6 @@ async def create_research_plan(
     else:
         model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
 
-    # P1 新增：根据查询复杂度选择最优策略
-    # 从路由阶段获取复杂度信息，使用 .get() 安全访问（兼容旧版本）
-    router = state.router
-    complexity = router.get("complexity", 0.5) if isinstance(router, dict) else 0.5
-    reasoning_required = router.get("reasoning_required", False) if isinstance(router, dict) else False
-
-    # 策略选择逻辑：
-    # - 简单查询（complexity < 0.3 且不需要推理）→ 预定义 Cypher 模板（最快）
-    # - 中等查询（0.3 <= complexity <= 0.7）→ LLM 自动选择工具
-    # - 复杂查询（complexity > 0.7 或需要推理）→ 向量检索（最强）
-    if complexity < 0.3 and not reasoning_required:
-        tool_preference = "predefined_cypher"
-        logger.info(f"简单查询(complexity={complexity:.2f})，优先使用预定义 Cypher 策略")
-    elif complexity > 0.7 or reasoning_required:
-        tool_preference = "vector_search_query"
-        logger.info(f"复杂查询(complexity={complexity:.2f}, reasoning={reasoning_required})，使用向量检索策略")
-    else:
-        tool_preference = None  # 无偏好，让 LLM 自动选择
-        logger.info(f"中等查询(complexity={complexity:.2f})，使用 LLM 自动选择工具策略")
-
-    # 初始化必要参数
-    # 1. Neo4j图数据库连接 - 使用配置中的连接信息
-    neo4j_graph = None
-    try:
-        neo4j_graph = get_neo4j_graph()
-        logger.info("success to get Neo4j graph database connection")
-    except Exception as e:
-        logger.error(f"failed to get Neo4j graph database connection: {e}")
-
-    # step 3. 定义工具模式列表
-    from app.lg_agent.kg_sub_graph.kg_tools_list import predefined_cypher, vector_search_query
-    tool_schemas: List[type[BaseModel]] = [predefined_cypher, vector_search_query]
-
-    # 3. 预定义的Cypher查询 - 为电商场景定义有用的查询
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.cypher_dict import predefined_cypher_dict
-
     # 定义电商经营范围
     scope_description = """
     个人电商经营范围：智能家居产品，包括但不限于：
@@ -477,21 +424,17 @@ async def create_research_plan(
     - 智能音箱（语音助手、音响）
     - 智能厨电（电饭煲、冰箱、洗碗机）
     - 智能清洁（扫地机器人、洗衣机）
-    
+
     不包含：服装、鞋类、体育用品、化妆品、食品等非智能家居产品。
     """
 
-    # 创建多工具工作流，传入 tool_preference 以根据复杂度选择策略
+    # 创建多工具工作流（guardrails → planner → 向量检索 → summarize → final_answer）
     multi_tool_workflow = create_multi_tool_workflow(
         llm=model,
-        graph=neo4j_graph,
-        tool_schemas=tool_schemas,
-        predefined_cypher_dict=predefined_cypher_dict,
         scope_description=scope_description,
-        tool_preference=tool_preference,  # 根据复杂度选择的策略偏好
     )
-    
-    # ====== 查询预处理管道（改写 → 纠错 → 实体识别 → 扩展 → Multi-Query + HyDE）======
+
+    # ====== 查询预处理管道（改写 → 纠错 → 扩展 → Multi-Query + HyDE）======
     # ④ 预算控制：每步 LLM 调用前检查预算，超预算跳过非必要步骤
     budget = BudgetGuard()
 
@@ -518,28 +461,14 @@ async def create_research_plan(
         corrected_question = await correct_query(model, resolved_question)
         budget.record("query_correction", tokens=300, essential=False)
 
-    # 第三步：实体识别与链接（必要）
-    # 从用户问题中识别产品名、类别名等实体，链接到 Neo4j 节点
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.entity_recognition import (
-        recognize_and_link_entities,
-    )
-    if budget.can_call("entity_recognition", essential=True) and neo4j_graph is not None:
-        linked_entities = await recognize_and_link_entities(model, neo4j_graph, corrected_question)
-        budget.record("entity_recognition", tokens=400, essential=True)
-        if linked_entities:
-            entity_summary = "; ".join(
-                f"{e.name}→{e.node_type}(id={e.node_id})" for e in linked_entities if e.linked
-            )
-            logger.info(f"实体识别链接结果: {entity_summary}")
-
-    # 第四步：查询扩展（非必要，可跳过）
+    # 第三步：查询扩展（非必要，可跳过）
     # 补充同义词（如"灯泡"→"LED灯"），扩大检索覆盖面
     expanded_question = corrected_question
     if budget.can_call("query_expansion", essential=False):
         expanded_question = await expand_query(model, corrected_question)
         budget.record("query_expansion", tokens=300, essential=False)
 
-    # 第五步：查询改写 Multi-Query + HyDE（非必要，可跳过）
+    # 第四步：查询改写 Multi-Query + HyDE（非必要，可跳过）
     enhanced_question = expanded_question
     if budget.can_call("multi_query", essential=False):
         rewritten = await rewrite_query(model, expanded_question)

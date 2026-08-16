@@ -16,7 +16,7 @@ from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.state import InputS
 planner_prompt = create_planner_prompt_template()
 
 def create_planner_node(
-    llm: BaseChatModel, ignore_node: bool = False, next_action: str = "tool_selection"
+    llm: BaseChatModel, ignore_node: bool = False, next_action: str = "customer_tools"
 ) -> Callable[[InputState], Coroutine[Any, Any, Dict[str, Any]]]:
     """
     Create a planner node to be used in a LangGraph workflow.

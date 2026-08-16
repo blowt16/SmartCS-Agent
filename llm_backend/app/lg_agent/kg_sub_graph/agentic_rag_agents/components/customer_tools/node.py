@@ -179,13 +179,11 @@ def create_vector_search_query_node(
             )
 
         return {
-            "cyphers": [
+            "searches": [
                 VectorSearchOutputState(
                     **{
                         "task": state.get("task", ""),
                         "query": query,
-                        "statement": "",
-                        "parameters": "",
                         "errors": errors,
                         "records": {
                             "result": response_text,

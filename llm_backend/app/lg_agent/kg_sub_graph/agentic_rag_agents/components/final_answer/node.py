@@ -30,12 +30,12 @@ def create_final_answer_node() -> (
         history_record = {
             "question": state.get("question", ""),
             "answer": answer,
-            "cyphers": [
+            "searches": [
                 {
                     "task": c.task if hasattr(c, "task") else c.get("task", ""),
                     "records": c.records if hasattr(c, "records") else c.get("records", {}),
                 }
-                for c in state.get("cyphers", list())
+                for c in state.get("searches", list())
             ],
         }
 

@@ -6,7 +6,6 @@ from typing import Any, Callable, Coroutine, Dict, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables.base import Runnable
-from langchain_neo4j import Neo4jGraph
 
 
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.guardrails.models import GuardrailsOutput
@@ -20,7 +19,6 @@ logger = get_logger(service="guardrails_node")
 
 def create_guardrails_node(
     llm: BaseChatModel,
-    graph: Optional[Neo4jGraph] = None,
     scope_description: Optional[str] = None,
 ) -> Callable[[InputState], Coroutine[Any, Any, dict[str, Any]]]:
     """
@@ -30,8 +28,6 @@ def create_guardrails_node(
     ----------
     llm : BaseChatModel
         The LLM used to process data.
-    graph: Optional[Neo4jGraph], optional
-        The `Neo4jGraph` object used to generated a schema definition, by default None
     scope_description : Optional[str], optional
         A description of the application scope, by default None
 
@@ -41,9 +37,9 @@ def create_guardrails_node(
         The LangGraph node.
     """
 
-    # 获取包含了图表结构和范围描述的guardrails完整提示词
+    # 获取包含范围描述的guardrails完整提示词
     guardrails_prompt = create_guardrails_prompt_template(
-        graph=graph, scope_description=scope_description
+        scope_description=scope_description
     )
 
     # 使用LLM进行结构化输出
@@ -63,7 +59,7 @@ def create_guardrails_node(
         guardrails_output: GuardrailsOutput = await guardrails_chain.ainvoke(
             {"question": question}
         )
-        
+
         summary = None
 
         if guardrails_output.decision == "end":
@@ -74,7 +70,7 @@ def create_guardrails_node(
             "summary": summary,
             "steps": ["guardrails"],
         }
-        
+
         logger.info(f"Guardrails Decision Info: {decision_info}")
 
         return decision_info

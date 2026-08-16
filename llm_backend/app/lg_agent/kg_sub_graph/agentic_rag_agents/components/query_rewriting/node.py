@@ -293,7 +293,7 @@ async def rewrite_query(
     )
 
     # 增强查询 = 原始问题 + HyDE 线索
-    # 这样下游的 Text2Cypher / 向量检索 都能利用到 HyDE 的专业术语
+    # 这样下游的向量检索能利用到 HyDE 的专业术语
     enhanced_query = f"{question}\n参考线索: {hypothetical_answer}"
 
     result = RewrittenQuery(

@@ -8,7 +8,6 @@ SmartCS-Agent 智能客服系统的后端服务核心模块
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
 ![pgvector](https://img.shields.io/badge/pgvector-Vector%20Store-brightgreen)
-![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
 
 ## 🏗️ 架构设计
 
@@ -33,9 +32,7 @@ flowchart TB
     
     subgraph "📊 Data Layer"
         I[(PostgreSQL+pgvector<br/>Conversations/向量)]
-        J[(Neo4j<br/>Knowledge Graph)]
         K[(Redis<br/>Cache)]
-        L[pgvector<br/>Vector Store]
     end
     
     A --> B
@@ -48,9 +45,7 @@ flowchart TB
     C --> I
     F --> G
     F --> H
-    G --> J
     E --> K
-    E --> L
 ```
 
 ## 🚀 快速启动
@@ -95,10 +90,6 @@ DB_PORT=5432
 DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=smartcs_agent
-
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
 
 REDIS_HOST=localhost
 REDIS_PORT=6379
