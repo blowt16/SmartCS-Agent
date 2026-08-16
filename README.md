@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.8+-blue?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-005571?logo=fastapi)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
 ![DeepSeek](https://img.shields.io/badge/DeepSeek-V3-orange)
@@ -72,7 +72,8 @@
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.13+
+- uv（Python 包管理器，用于本地安装依赖）
 - Docker & Docker Compose（推荐）
 
 ### Docker Compose 一键部署（推荐）
@@ -102,11 +103,8 @@ docker compose logs -f app
 git clone https://github.com/blowt16/SmartCS-Agent.git
 cd SmartCS-Agent
 
-# 2. 创建虚拟环境并安装依赖
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-source .venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
+# 2. 安装依赖（uv 自动创建 .venv 并按 uv.lock 锁定版本）
+uv sync
 
 # 3. 配置环境变量
 cp llm_backend/.env llm_backend/.env

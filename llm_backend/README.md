@@ -5,7 +5,7 @@ SmartCS-Agent 智能客服系统的后端服务核心模块
 ## 📊 技术栈
 
 ![FastAPI](https://img.shields.io/badge/FastAPI-005571?logo=fastapi&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.8+-blue?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
 ![GraphRAG](https://img.shields.io/badge/GraphRAG-Microsoft-orange)
 ![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
@@ -57,15 +57,15 @@ flowchart TB
 
 ### 1. 环境准备
 
-确保您在项目根目录 (`deepseek_agent/`)：
+确保您在项目根目录 (`SmartCS-Agent/`)：
 
 ```bash
+# 安装依赖（uv 自动创建 .venv 并锁定版本）
+uv sync
+
 # 激活虚拟环境
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate   # Windows
-
-# 安装依赖（如果尚未安装）
-pip install -r requirements.txt
 ```
 
 ### 2. 配置文件
@@ -357,16 +357,17 @@ gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker
 ### Docker 部署
 
 ```dockerfile
-FROM python:3.9-slim
+FROM python:3.13-slim
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN pip install uv && \
+    UV_PROJECT_ENVIRONMENT=/usr/local uv sync --frozen --no-dev --no-install-project
 
 COPY llm_backend/ .
 EXPOSE 8000
 
-CMD ["python", "run.py"]
+CMD ["sh", "-c", "python -m scripts.init_db && uvicorn main:app --host 0.0.0.0 --port 8000"]
 ```
 
 ### 监控与日志

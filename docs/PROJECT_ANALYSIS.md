@@ -232,8 +232,9 @@ SmartCS-Agent/
 │   └── download_jddc.py              # 下载 JDDC 对话数据集
 ├── chat.html                          # 独立聊天页面
 ├── docker-compose.yml                 # 4 服务编排
-├── Dockerfile                         # Python 3.11-slim 镜像
-├── requirements.txt                   # Python 依赖
+├── Dockerfile                         # Python 3.13-slim 镜像（uv 安装锁定依赖）
+├── pyproject.toml                     # Python 依赖清单（uv 管理）
+├── uv.lock                            # 依赖锁定文件
 ├── .env.example                       # 环境变量模板（34 项配置）
 └── .env.docker                        # Docker 环境变量
 ```

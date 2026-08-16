@@ -7,9 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ && \
     rm -rf /var/lib/apt/lists/*
 
-# 先复制 requirements，利用 Docker 缓存层
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 安装 uv 包管理器（使用清华镜像加速）
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple uv
+
+# 依赖安装到系统 Python（供 uvicorn 直接使用）
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
+
+# 先复制依赖清单，利用 Docker 缓存层
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # 复制项目代码
 COPY llm_backend/ ./llm_backend/

@@ -67,11 +67,9 @@ git clone <repository-url>
 cd deepseek_agent
 
 # 2. 创建虚拟环境
-python -m venv .venv
+# 3. 安装依赖（uv 自动创建 .venv 并锁定版本）
+uv sync
 .venv\Scripts\activate   # Windows
-
-# 3. 安装依赖
-pip install -r requirements.txt
 
 # 4. 配置环境变量
 cp llm_backend/.env llm_backend/.env
