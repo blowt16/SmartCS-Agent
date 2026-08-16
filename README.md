@@ -15,6 +15,10 @@
 
 ---
 
+## 项目来源
+
+本项目基于原项目 [wang219416/GraphRAG-](https://github.com/wang219416/GraphRAG-) 二次开发，在此向原作者 [wang219416](https://github.com/wang219416) 的开源贡献表示感谢。
+
 ## 项目亮点
 
 | 特性 | 说明 |

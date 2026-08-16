@@ -306,6 +306,7 @@ sequenceDiagram
 ```
 
 **核心机制**:
+
 - **向量存储**: 用户消息 → Ollama BGE-M3 Embedding → Redis 存储 `{prefix}:vec:{md5}`
 - **相似度计算**: 余弦相似度 `cos(θ) = A·B / (|A|·|B|)`
 - **自动清理**: 异步任务按 LRU 策略清理超量缓存
@@ -411,6 +412,7 @@ flowchart LR
 ```
 
 **核心组件**:
+
 1. **生成节点** (`text2cypher/generation/`): Few-shot + Schema 上下文 → LLM 生成 Cypher
 2. **校验节点** (`text2cypher/validation/`): 正则语法检查 + LLM 语义检查双重保障
 3. **修正节点** (`text2cypher/correction/`): 自动修正 + 最多 3 次重试
@@ -701,7 +703,8 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 第三层: 轮次 16+ (压缩为 ~100 字摘要 + 关键实体)
 ```
 
-**技术价值**: 
+**技术价值**:
+
 - 增量压缩：新轮次只压缩未处理的，不从零开始
 - Redis 缓存：跨请求复用摘要，避免重复 LLM 调用
 - Token 预算控制：动态裁剪确保不超限
@@ -717,6 +720,7 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 ```
 
 **工程细节**:
+
 - 按用户隔离缓存 (`prefix:user_id:...`)
 - LRU 自动清理 + 访问次数统计
 - 模拟流式返回保持前端体验一致
@@ -841,13 +845,15 @@ NEO4J_AUTH: neo4j/smartcs_agent_neo4j_pwd
 
 项目中**没有任何测试文件**。对于一个包含 200+ Python 文件的复杂系统，缺乏测试覆盖是高风险问题。
 
-**建议**: 
+**建议**:
+
 - 为核心模块（Text2Cypher、语义缓存、路由逻辑、混合检索）添加 pytest 测试
 - 集成 LangGraph 的测试工具进行 Agent 行为验证
 
 #### 10.2.2 前端过于简单
 
 `chat.html` 是单文件 HTML + 少量 Vue，缺少：
+
 - 用户登录 UI
 - 会话列表展示
 - 图片上传交互
@@ -878,7 +884,8 @@ checkpointer = MemorySaver()  # 进程内存储，重启丢失
 
 `llm_backend/app/graphrag/` 直接包含了 Microsoft GraphRAG 的完整源码（约 80+ 文件）。
 
-**影响**: 
+**影响**:
+
 - 增加仓库体积
 - 难以跟随上游更新
 - 版本管理混乱
@@ -908,7 +915,8 @@ class ChatMessage(BaseModel):
 
 #### 10.3.2 添加监控和可观测性
 
-**建议**: 
+**建议**:
+
 - 集成 OpenTelemetry 追踪 LLM 调用链
 - 添加 Prometheus metrics (请求延迟、缓存命中率、LLM Token 消耗)
 - 设置 LLM API 调用告警
@@ -929,7 +937,8 @@ class ChatMessage(BaseModel):
 
 用户上传的图片/文件直接存储在本地文件系统。
 
-**建议**: 
+**建议**:
+
 - 敏感图片自动脱敏
 - 定期清理过期文件
 - 实现访问控制（当前 `/api/conversations/{id}/messages` 的 `user_id` 通过 query 参数传递，不安全）
@@ -1036,6 +1045,7 @@ SmartCS-Agent 是一个**技术深度优秀、工程完整性良好但生产就�
 
 ---
 
-> **分析工具**: Claude Code  
-> **分析范围**: 全项目 200+ Python 文件，34 项配置，4 Docker 服务  
+> **分析工具**: Claude Code
+> **分析范围**: 全项目 200+ Python 文件，34 项配置，4 Docker 服务
 > **核心模块覆盖率**: 100%
+
