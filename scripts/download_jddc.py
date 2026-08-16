@@ -1,5 +1,5 @@
 """
-下载 JDDC (京东电商客服对话语料库) 数据并处理为 GraphRAG 可用的 txt 格式。
+下载 JDDC (京东电商客服对话语料库) 数据并处理为向量检索可用的 txt 格式。
 
 数据来源：
 1. GitHub zhangbo2008/JDDC_for_train_gpt_data - 已从 JDDC 原始数据提取的 ~12 万条多轮对话
@@ -24,7 +24,7 @@ from pathlib import Path
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "llm_backend" / "app" / "graphrag" / "data" / "input" / "customer_service_qa"
+OUTPUT_DIR = PROJECT_ROOT / "llm_backend" / "knowledge_data" / "customer_service_qa"
 CACHE_DIR = PROJECT_ROOT / "scripts" / ".cache_jddc"
 
 # JDDC 数据 GitHub 直链 (约 53MB, 含约 12 万条对话)

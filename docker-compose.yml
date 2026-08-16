@@ -79,7 +79,6 @@ services:
     volumes:
       - app_logs:/app/llm_backend/logs
       - app_uploads:/app/llm_backend/uploads
-      - ./llm_backend/app/graphrag:/app/llm_backend/app/graphrag:ro
 
 volumes:
   mysql_data:

@@ -10,7 +10,7 @@
 
 1. **入门** → [1. Overview](#1-overview) → [2. Quick Start](#2-quick-start) → [3. Architecture Overview](#3-architecture-overview)
 2. **Agent 核心** → [4. LangGraph Agent 设计](#4-langgraph-agent-设计) → [5. 知识图谱查询](#5-知识图谱查询) → [6. 联网搜索与图片分析](#6-联网搜索与图片分析)
-3. **知识系统** → [7. Neo4j 知识图谱](#7-neo4j-知识图谱) → [8. GraphRAG 文档管道](#8-graphrag-文档管道) → [8.5 检索增强管道](#85-检索增强管道retrieval-augmentation-pipeline)
+3. **知识系统** → [7. Neo4j 知识图谱](#7-neo4j-知识图谱) → [8. 文档检索管道（标准 RAG）](#8-文档检索管道标准-rag) → [8.5 检索增强管道](#85-检索增强管道retrieval-augmentation-pipeline)
 4. **平台功能** → [9. LLM 服务层](#9-llm-服务层) → [10. 语义缓存](#10-语义缓存) → [11. 安全认证](#11-安全认证) → [12. 流式响应与前后端交互](#12-流式响应与前后端交互) → [13. 数据模型与持久化](#13-数据模型与持久化)
 5. **面试准备** → [14. 面试高频问答](#14-面试高频问答) → [15. 踩坑记录](#15-踩坑记录) → [16. 设计模式总结](#16-设计模式总结)
 
@@ -32,7 +32,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 智能体 | LangGraph | 多路由 Agent 编排（StateGraph） |
 | LLM | DeepSeek / Ollama | 大语言模型对话、推理（工厂模式切换） |
 | 知识图谱 | Neo4j | 电商数据（商品、订单、客户） |
-| 文档检索 | Microsoft GraphRAG | 文档索引与向量检索（4种策略） |
+| 文档检索 | 标准 RAG（ChromaDB） | 文档解析→分块→Embedding→向量库，混合检索（BM25+向量 RRF） |
 | 向量缓存 | Redis | 语义缓存（基于 Embedding 向量相似度） |
 | 数据库 | MySQL | 用户、会话、消息持久化 |
 | 前端 | Vue（静态打包 dist） | 聊天界面 |
@@ -45,7 +45,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 核心场景 | 商品咨询、图片分析、联网搜索 | 上传文档 → 基于文档问答 |
 | Agent 复杂度 | 5路意图路由 | 2路路由 |
 | 知识图谱 | Neo4j + Text2Cypher | 无 |
-| 搜索策略 | GraphRAG 4种策略 | 自建混合搜索（dense + sparse RRF） |
+| 搜索策略 | 标准 RAG：BM25 + 向量 RRF 混合检索 | 自建混合搜索（dense + sparse RRF） |
 | 独有亮点 | 幻觉检测、语义缓存、图片分析、**混合检索+相关性评分** | 三级分块、查询改写、Auto-Merge、Rerank |
 
 ---
@@ -114,7 +114,7 @@ docker compose down
 关键设计：
 - **healthcheck**：每个数据库服务都有健康检查，app 用 `depends_on: condition: service_healthy` 确保数据库就绪后才启动
 - **.env.docker**：数据库连接配置在 `docker-compose.yml` 的 `environment` 中（使用容器内网络主机名），LLM API Key 等从 `.env.docker` 读取
-- **GraphRAG 数据**：通过 volume mount `./llm_backend/app/graphrag:/app/llm_backend/app/graphrag:ro` 只读挂载
+- **向量库数据**：ChromaDB 持久化在容器内 `/app/llm_backend/vector_db`（`VECTOR_DB_PATH` 配置，集合 `smartcs_agent_docs`）
 - **Ollama 访问**：容器内用 `host.docker.internal` 访问宿主机的 Ollama 服务
 
 ### 配置文件说明（`.env` 关键项）
@@ -161,12 +161,12 @@ REDIS_PORT=6379
 │   LLMFactory → DeepSeekService / OllamaService       │
 │   SearchService → SerpAPI                            │
 │   ConversationService → MySQL                        │
-│   IndexingService → GraphRAG                         │
+│   IndexingService → ChromaDB                         │
 │   RedisSemanticCache → Redis + Ollama Embedding      │
 ├─────────────────────────────────────────────────────┤
 │                   数据层                              │
 │   MySQL（用户/会话/消息）  Neo4j（知识图谱）           │
-│   Redis（语义缓存）       GraphRAG（文档索引）         │
+│   Redis（语义缓存）       ChromaDB（向量库）          │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -192,13 +192,13 @@ REDIS_PORT=6379
   │    │    ├─ graphrag-query → Multi-Tool Workflow
   │    │    │    ├─ Text2Cypher（NL → Cypher 查询）
   │    │    │    ├─ PredefinedCypher（预定义查询模板）
-  │    │    │    └─ Microsoft GraphRAG（4种检索策略）
+  │    │    │    └─ 向量检索（ChromaDB）＋混合检索（BM25+向量 RRF）
   │    │    ├─ image-query → GPT-4o 图片分析
   │    │    └─ file-query → 文件处理
   │    │
   │    └─ check_hallucinations（幻觉检测）
   │
-  └─ /api/upload ──→ IndexingService → GraphRAG build_index
+  └─ /api/upload ──→ IndexingService → 解析→分块→Embedding→ChromaDB 入库
 ```
 
 ### 目录结构与模块映射
@@ -207,7 +207,7 @@ REDIS_PORT=6379
 |----------|----------|----------|
 | `app/services/` | 业务逻辑服务层 | `llm_factory.py`, `deepseek_service.py`, `ollama_service.py`, `search_service.py`, `redis_semantic_cache.py`, `conversation_service.py` |
 | `app/lg_agent/` | LangGraph 智能体系统 | `lg_builder.py`, `lg_states.py`, `lg_prompts.py`, `kg_sub_graph/` |
-| `app/graphrag/` | 微软 GraphRAG 集成 | `graphrag/`, `dev/`, `origin_data/` |
+| `llm_backend/knowledge_data/` | 数据准备脚本输出目录 | 产品知识 / 电商FAQ / 客服对话（TXT） |
 | `app/core/` | 核心配置与工具 | `config.py`, `database.py`, `logger.py`, `security.py` |
 | `app/models/` | SQLAlchemy 数据模型 | `user.py`, `conversation.py`, `message.py` |
 | `app/api/` | 认证路由 | `auth.py` |
@@ -259,7 +259,7 @@ REDIS_PORT=6379
 5种路由类型：
 - `general-query` — 闲聊，不查数据库
 - `additional-query` — 问题不明确，需要追问
-- `graphrag-query` — 查知识库（Neo4j/GraphRAG）
+- `graphrag-query` — 查知识库（Neo4j / ChromaDB 文档检索）
 - `image-query` — 图片分析
 - `file-query` — 文件处理（未实现）
 
@@ -386,7 +386,7 @@ Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（�
   ├── Text2Cypher: 自然语言→Cypher查询语言
   │   └── 生成→校验→修正→执行 四步闭环
   ├── PredefinedCypher: 预定义查询模板 + 向量匹配
-  └── GraphRAG: 微软GraphRAG文档检索(local/global/drift/basic)
+  └── 向量检索: ChromaDB 文档检索（向量 + BM25 混合检索）
 → Summarize（汇总）→ Final Answer（最终回答）→ Validate（完整性验证）
 ```
 
@@ -420,7 +420,7 @@ Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（�
 用 LLM 检查生成的回答是否基于事实数据。`binary_score` = "1" 表示基于事实，"0" 表示有幻觉。这为回答质量提供了最后一道保障。
 
 > 参见：[7. Neo4j 知识图谱](#7-neo4j-知识图谱) 了解图数据库的设计。
-> 参见：[8. GraphRAG 文档管道](#8-graphrag-文档管道) 了解文档检索的实现。
+> 参见：[8. 文档检索管道（标准 RAG）](#8-文档检索管道标准-rag) 了解文档检索的实现。
 
 ---
 
@@ -462,7 +462,7 @@ Guardrails（范围检查）→ Planner（任务分解）→ Tool Selection（�
 
 # Part 3: 知识系统
 
-> 知识系统是 SmartCS-Agent 的数据基础，由 Neo4j 知识图谱和 GraphRAG 文档管道两部分组成。
+> 知识系统是 SmartCS-Agent 的数据基础，由 Neo4j 知识图谱和标准 RAG 文档检索管道两部分组成。
 
 ## 7. Neo4j 知识图谱
 
@@ -493,84 +493,64 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 
 ---
 
-## 8. GraphRAG 文档管道
+## 8. 文档检索管道（标准 RAG）
 
-### 解决什么问题
+### 解决什么问题（为什么从 GraphRAG 迁移到标准 RAG）
 
-传统 RAG 只做向量检索，GraphRAG 先把文档构建成知识图谱（实体+关系），再基于图谱做检索，能回答跨文档、需要多跳推理的问题。
+项目早期曾用 Microsoft GraphRAG 做文档检索，实践中发现它与本项目的场景并不匹配，最终迁移到标准 RAG 管道：
 
-### GraphRAG vs 传统 RAG
+| 问题 | 当时 GraphRAG 的代价 | 迁移后的收益 |
+|------|---------------------|-------------|
+| 索引成本高 | 建索引需 LLM 抽取实体关系，一次 5-30 分钟，API 成本高 | 索引秒级完成，全程无 LLM 调用 |
+| 维护成本高 | 80+ 内嵌源码，版本升级困难 | 管道只有解析→清洗→分块→入库，代码量小 |
+| 场景不匹配 | 电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理 | 事实查询效果持平，复杂度大幅降低 |
+| 数据冗余 | 实体关系已由 Neo4j 知识图谱管理，GraphRAG 再抽一份属冗余 | 向量库与 Neo4j 各司其职 |
 
-| 维度 | 传统 RAG | GraphRAG |
-|------|---------|----------|
-| 检索方式 | 纯向量相似度匹配 | 向量 + 图结构关系 |
-| 能否多跳推理 | 不能 | 能 |
-| 回答宏观问题 | 困难 | 通过社区报告支持 |
-| 构建成本 | 低 | 高（需要 LLM 抽取实体关系） |
+> 复盘结论：**选型先看场景**。GraphRAG 适合需要跨文档归纳、多跳推理的宏观分析；电商客服的事实查询场景，标准 RAG 足矣。
 
-### GraphRAG 在项目中的使用方式
+### 管道全景
 
-**路径1：嵌入 LangGraph Agent（主路径，生产使用）**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 标准 RAG 索引管道（IndexingService）            │
+│                                                             │
+│  上传文档（PDF / DOCX / TXT）                                  │
+│    → 文档解析（PyPDF2 / python-docx / UTF-8 文本）              │
+│    → _clean_text 清洗（统一换行、去噪声）                        │
+│    → RecursiveCharacterTextSplitter 分块                      │
+│       chunk_size=500, overlap=50（分隔符含中文标点）             │
+│    → Embedding（统一 EmbeddingProvider，bge-m3 1024 维）       │
+│    → ChromaDB 入库（PersistentClient，集合 smartcs_agent_docs）│
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 标准 RAG 在项目中的使用方式
+
+**主路径：嵌入 LangGraph Agent（生产使用）**
 
 ```
 用户问题 → LangGraph Agent → 意图识别为 "graphrag-query"
   → create_research_plan → Multi-Tool Workflow → Tool Selection
-  → LLM 选择工具 "microsoft_graphrag_query"
-  → customer_tools/node.py 的 GraphRAGAPI 类
-  → 调用 graphrag.api.local_search / global_search / drift_search / basic_search
+  → LLM 选择工具 "vector_search_query"（原 microsoft_graphrag_query）
+  → customer_tools/node.py 的 VectorStoreQuery 类（替代原 GraphRAGAPI）
+  → ChromaDB 向量检索 + HybridRetriever（BM25 + 向量 RRF 融合）
+  → RelevanceGrader（LLM 相关性评分过滤）→ 生成回答
 ```
 
-关键代码在 `lg_agent/kg_sub_graph/agentic_rag_agents/components/customer_tools/node.py`：
-- `GraphRAGAPI` 类：封装 GraphRAG 的初始化和数据加载
-- `initialize()` 方法：加载 6 张 parquet 索引表到内存
-- `query_graphrag()` 方法：根据 `.env` 中 `GRAPHRAG_QUERY_TYPE` 选择搜索策略
+关键代码在 `lg_agent/kg_sub_graph/agentic_rag_agents/components/`：
+- `customer_tools/node.py`：`VectorStoreQuery` 类封装 ChromaDB 客户端（PersistentClient），`search()` 方法执行向量检索
+- `hybrid_retrieval/`：HybridRetriever（BM25 + 向量 RRF 融合）
+- `relevance_grader.py`：LLM 相关性评分，过滤不相关结果
+- `kg_tools_list.py` 与 `tool_selection/node.py`：工具名已由 `microsoft_graphrag_query` 改为 `vector_search_query`
 
-**路径2：独立 API 服务（开发调试用）**
+**索引路径：上传文件自动入库（`app/services/`）**
 
-| 文件 | 作用 | 端口 |
-|------|------|------|
-| `dev/graphrag_api.py` | FastAPI 封装的查询 API | 8078 |
-| `dev/graphrag_query.py` | 命令行查询脚本 | - |
-| `dev/graphrag_indexing.py` | 命令行索引构建脚本 | - |
-| `dev/webserver/main.py` | OpenAI 兼容的 Chat API | 20213 |
+| 文件 | 作用 |
+|------|------|
+| `app/services/indexing_service.py` | IndexingService：解析→清洗→分块→Embedding→ChromaDB 入库 |
+| `app/services/embedding_provider.py` | 统一 Embedding 提供器（local / ollama / qwen 后端可切换） |
 
-### GraphRAG 整体架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GraphRAG 数据处理架构                      │
-│                                                             │
-│  ┌──────────┐    ┌───────────┐    ┌─────────────────┐      │
-│  │ 原始文档   │───→│ 文本分块    │───→│ 实体+关系抽取     │      │
-│  │ txt/csv/  │    │ Chunking  │    │ Extract Graph   │      │
-│  │ pdf       │    │ 500字/块   │    │  （LLM调用）     │      │
-│  └──────────┘    └───────────┘    └────────┬────────┘      │
-│                                             │               │
-│                        ┌────────────────────▼──────────┐   │
-│                        │  描述去重合并（同一实体多段描述）  │   │
-│                        │  Summarize Descriptions        │   │
-│                        └────────────────────┬──────────┘   │
-│                                             │               │
-│                        ┌────────────────────▼──────────┐   │
-│                        │  图聚类 → 社区报告生成            │   │
-│                        │  Hierarchical Clustering        │   │
-│                        │  + Community Reports（LLM调用）  │   │
-│                        └────────────────────┬──────────┘   │
-│                                             │               │
-│  ┌──────────────┐    ┌─────────────────────▼──────────┐   │
-│  │ 向量存储      │◀───│  实体描述 Embedding +             │   │
-│  │ LanceDB      │    │  node2vec 图嵌入                  │   │
-│  └──────────────┘    └────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  最终输出: Parquet 文件（6张索引表）                    │   │
-│  │  entities | relationships | text_units               │   │
-│  │  communities | community_reports | covariates        │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 索引构建 8 步工作流
+### 索引构建流程
 
 **入口**：`indexing_service.py` 的 `process_file()` 方法
 
@@ -578,215 +558,116 @@ MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p.name, c.name
 ```
 1. 用户上传文件（POST /api/upload）
 2. 保存到 uploads/{user_uuid}/{timestamp}/ 目录
-3. 复制文件到 GraphRAG 的 data/input/{user_uuid}/ 目录
-4. 根据文件类型选择配置文件：
-   - .txt → settings.yaml（默认）
-   - .csv → settings_csv.yaml
-   - .pdf → settings_pdf.yaml
-5. 调用 api.build_index() 构建索引
-6. 输出 parquet 文件到 data/output/{user_uuid}/ 目录
+3. 按文件类型解析：
+   - .pdf → PyPDF2 逐页提取文本
+   - .docx → python-docx 读取段落
+   - 其他 → 按 UTF-8 文本读取
+4. _clean_text() 清洗：统一换行符、压缩连续空行、去首尾空白
+5. RecursiveCharacterTextSplitter 分块（chunk_size=500, overlap=50）
+6. bge-m3 向量化（1024 维）
+7. 写入 ChromaDB 集合 smartcs_agent_docs（带 source/file_path/user_id 元数据）
 ```
 
-| 步骤 | 工作流名称 | 做什么 | 是否调用 LLM |
-|------|-----------|--------|------------|
-| 1 | 输入读取 | 读取 data/input/ 下的文件 | 否 |
-| 2 | 文本分块 | 按 size=500, overlap=100 切分 | 否 |
-| 3 | **实体关系抽取** | LLM 从文本中识别实体和关系 | **是（最耗时）** |
-| 4 | 实体描述摘要 | LLM 合并同一实体的多个描述 | 是 |
-| 5 | 图聚类 | 层次聚类算法(max_cluster_size=10) | 否 |
-| 6 | **社区报告生成** | LLM 为每个社区写摘要报告 | **是（耗时）** |
-| 7 | 图嵌入 | node2vec 生成节点向量 | 否 |
-| 8 | 文本嵌入 | Embedding 模型生成实体描述向量 | 否 |
+| 步骤 | 做什么 | 是否调用 LLM |
+|------|--------|------------|
+| 1 | 文档解析（PDF / DOCX / TXT → 纯文本） | 否 |
+| 2 | _clean_text 文本清洗 | 否 |
+| 3 | 递归分块（分隔符含中文标点） | 否 |
+| 4 | Embedding 向量化（bge-m3，1024 维） | 否 |
+| 5 | ChromaDB 入库（秒级完成） | 否 |
 
 **关键代码**（indexing_service.py）：
 ```python
-graphrag_config = load_config(
-    Path(self.data_dir), Path(config_path), config_overrides
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", "。", "！", "？", "，", " ", ""],  # 含中文标点
 )
 
-index_result = await api.build_index(
-    config=graphrag_config,
-    method=IndexingMethod.Standard,  # 或 Fast（更快但精度低）
-    is_update_run=is_update,         # 增量更新还是全量重建
-    memory_profile=False,
-    progress_logger=RichProgressLogger(prefix="graphrag-index")
+# ChromaDB 持久化客户端
+client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
+collection = client.get_or_create_collection(
+    name=settings.VECTOR_DB_COLLECTION,   # smartcs_agent_docs
+    embedding_function=embedding_fn,      # bge-m3 向量化
 )
 ```
 
-### 图建模（Graph Modeling）
+### 数据准备脚本
 
-**图建模 = 告诉 LLM "要从文本中抽取哪些类型的实体和关系"**。
+内置知识库数据由脚本生成，输出到 `llm_backend/knowledge_data/`，上传入库后即可检索：
 
-在 `settings.yaml` 的 `extract_graph` 部分定义：
+| 脚本 | 数据内容 | 输出目录 |
+|------|---------|---------|
+| `scripts/generate_product_knowledge.py` | 产品知识文档 | `knowledge_data/product_knowledge/` |
+| `scripts/download_datasets.py` | 电商 FAQ 数据集 | `knowledge_data/ecommerce_faq/` |
+| `scripts/download_jddc.py` | 京东客服对话语料 | `knowledge_data/` |
 
-```yaml
-extract_graph:
-  prompt: "prompt_turn_output/extract_graph_zh.txt"
-  entity_types: [company, person, product, technology, service, ...]
-  max_gleanings: 1   # 补充抽取轮次
-```
+### ChromaDB 集合结构
 
-三套配置对应三种场景：
+标准 RAG 只用一张集合（`smartcs_agent_docs`）存所有分块，每条记录由四部分组成：
 
-| 配置文件 | 适用场景 | 实体类型举例 |
-|----------|---------|-------------|
-| `settings.yaml` | 通用文本 | company, person, product, technology, service, location... |
-| `settings_csv.yaml` | CSV 评价数据 | customer, company, product, brand, rating, review, date |
-| `settings_pdf.yaml` | PDF 说明书 | appliance, safety warning, tool, dimension, cabinet... |
-
-**抽取提示词** 工作原理：
-
-```
-给定一段文本，识别其中的实体和关系。
-输出格式：
-  ("entity"<分隔符>实体名<分隔符>实体类型<分隔符>描述)
-  ("relationship"<分隔符>源实体<分隔符>目标实体<分隔符>关系描述<分隔符>强度1-10)
-```
-
-**`max_gleanings` 的作用**：第一轮抽取后，LLM 会再看一遍文本问"有没有遗漏的实体？"设为 1 表示补充一轮。越高越全面，但 API 调用成本翻倍。
-
-### 图聚类与社区报告
-
-- 抽取完所有实体和关系后，GraphRAG 用**层次聚类算法**（Leiden 算法）把实体分成"社区"
-- 同一个社区的实体关系紧密，不同社区的实体关系稀疏
-- 然后让 LLM 为每个社区生成一份**社区报告**（摘要该社区的实体和关系）
-- `max_cluster_size: 10` 控制社区最大规模
-
-### 四种检索策略详解
-
-#### 策略1：Local Search（本地搜索）— 最常用
-```
-查询文本 → Embedding 向量
-  → 在 LanceDB 中找最相似的实体
-  → 提取该实体的关联关系、所属文本单元、社区报告
-  → 拼接为上下文 → LLM 生成回答
-```
-- **适用场景**：具体问题，如"苹果公司有哪些产品？"
-- **特点**：精度高，从局部实体出发向外扩展
-- **所需数据**：entities + relationships + text_units + community_reports + covariates
-
-#### 策略2：Global Search（全局搜索）— MapReduce 模式
-```
-查询文本
-  → Map 阶段：遍历所有社区报告，每个社区独立生成关键要点（并行）
-  → Reduce 阶段：汇总所有要点，LLM 生成最终回答
-```
-- **适用场景**：宏观问题，如"科技行业的整体趋势是什么？"
-- **特点**：覆盖面广，能回答跨领域的大问题
-- **所需数据**：entities + communities + community_reports
-- **社区级别(community_level)**：值越大社区越细分，值越小社区越宏观
-
-#### 策略3：DRIFT Search（漂移搜索）— 图遍历模式
-```
-查询文本 → Embedding → 找到种子实体
-  → 沿关系边"漂移"遍历图
-  → 每一步评估是否与查询相关
-  → 收集所有相关子图的信息 → LLM 生成回答
-```
-- **适用场景**：需要多跳推理的问题，如"A 公司和 B 公司有什么间接关联？"
-- **特点**：兼顾精度和覆盖面，能发现隐含关系
-
-#### 策略4：Basic Search（基础搜索）— 纯向量检索
-```
-查询文本 → Embedding → 在 text_units 中找最相似的文本块
-  → 拼接为上下文 → LLM 生成回答
-```
-- **适用场景**：简单事实性问题
-- **特点**：最简单最快，等价于传统 RAG
-
-**四种策略对比**：
-
-| 策略 | 精度 | 覆盖面 | 速度 | 资源消耗 | 适用问题类型 |
-|------|------|--------|------|----------|-------------|
-| Local | 高 | 低 | 中 | 中 | 具体事实查询 |
-| Global | 中 | 高 | 慢 | 高 | 宏观趋势分析 |
-| DRIFT | 高 | 高 | 慢 | 高 | 多跳推理 |
-| Basic | 中 | 低 | 快 | 低 | 简单文本检索 |
-
-### 6 张 Parquet 表含义
-
-| 表名 | 内容 | 用途 |
+| 字段 | 内容 | 用途 |
 |------|------|------|
-| `entities` | 实体（名称、类型、描述、Embedding 向量） | 所有搜索策略的核心 |
-| `relationships` | 关系（源→目标、描述、强度） | 构建知识图谱的边 |
-| `text_units` | 原始文本块（分块后的文本片段） | 提供原始证据文本 |
-| `communities` | 社区（包含哪些实体、层级） | 层次聚类结果 |
-| `community_reports` | 社区报告（LLM 生成的摘要） | Global 搜索的核心数据 |
-| `covariates` | 协变量/声明（可选） | Local 搜索的补充证据 |
+| `ids` | `user_{user_id}_{随机8位}_{序号}` | 分块唯一标识 |
+| `documents` | 分块后的文本片段 | 检索返回的原始证据文本 |
+| `metadatas` | `source`（文件名）、`file_path`、`user_id`、`chunk_index` | 按用户隔离、溯源原文 |
+| `embeddings` | bge-m3 生成的 1024 维向量 | 向量相似度检索 |
+
+对比 GraphRAG 时代需要维护 6 张 parquet 表（entities/relationships/text_units/communities/community_reports/covariates），迁移后只需一张集合，数据加载和更新逻辑大幅简化。
 
 ### 查询时的数据加载流程
 
-以 Agent 调用 GraphRAG 为例（`customer_tools/node.py`）：
+以 Agent 调用向量检索为例（`customer_tools/node.py`）：
 
 ```python
-class GraphRAGAPI:
-    async def initialize(self):
-        # 1. 构建路径
-        project_directory = os.path.join(self.project_dir, self.data_dir_name)
-        # 2. 加载 settings.yaml 配置
-        self.config = load_config(Path(project_directory), None, None)
-        # 3. 创建文件存储对象
-        self.storage = FilePipelineStorage(root_dir=str(output_dir))
-        # 4. 从 parquet 文件加载 6 张索引表
-        self.entities = await load_table_from_storage("entities", self.storage)
-        self.text_units = await load_table_from_storage("text_units", self.storage)
-        self.communities = await load_table_from_storage("communities", self.storage)
-        self.community_reports = await load_table_from_storage("community_reports", self.storage)
-        self.relationships = await load_table_from_storage("relationships", self.storage)
+class VectorStoreQuery:
+    def __init__(self):
+        # 打开持久化向量库（与索引写入端共用同一目录）
+        self.client = chromadb.PersistentClient(path=settings.VECTOR_DB_PATH)
+        self.collection = self.client.get_or_create_collection(
+            name=settings.VECTOR_DB_COLLECTION,
+            embedding_function=embedding_fn,
+        )
 
-    async def query_graphrag(self, query: str):
-        if self.query_type == "local":
-            response, context = await api.local_search(...)
-        elif self.query_type == "global":
-            response, context = await api.global_search(...)
+    def search(self, query: str, top_k: int = 10):
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+        ...
 ```
 
-**更新后查询需要重新加载数据**：`GraphRAGAPI` 在 `initialize()` 时把 parquet 读入内存，索引更新后需要重新实例化或调用 `initialize()` 刷新缓存。
+**更新后查询自动可见**：ChromaDB 是持久化数据库，新文档写入后查询即可命中，无需重新加载索引（对比 GraphRAG 时代需要把 parquet 读入内存、索引更新后重新实例化刷新缓存）。
 
 ### 增量更新机制
 
-- `is_update_run=True` 时，GraphRAG 只处理新增文件，不重建全部索引
-- 已有实体会被保留和更新
+- ChromaDB 按 `ids` 和 `metadatas` 管理分块，新上传的文件只会 `add` 新分块，不影响已有数据
 - 更新方式：
-  - **Web API**：`POST /api/upload`（自动触发索引构建）
-  - **手动脚本**：`python graphrag_indexing.py`（开发调试用）
+  - **Web API**：`POST /api/upload`（自动触发解析入库）
+  - **批量脚本**：`IndexingService.process_directory()` 处理整个目录（如 `knowledge_data/` 下的全部文档）
 
-### 配置系统详解（settings.yaml 核心配置项）
+### 配置系统详解（.env / config.py 核心配置项）
 
-```yaml
-# ---- LLM 模型配置 ----
-models:
-  default_chat_model:
-    type: openai_chat
-    api_base: ${GRAPHRAG_API_BASE}
-    api_key: ${GRAPHRAG_API_KEY}
-    model: ${GRAPHRAG_MODEL_NAME}
-    concurrent_requests: 25
-  default_embedding_model:
-    type: openai_embedding
-    api_base: ${Embedding_API_BASE}
-    model: ${Embedding_MODEL_NAME}
+```bash
+# ---- 向量库配置 ----
+VECTOR_DB_PATH=../vector_db              # ChromaDB 持久化目录（项目根）
+VECTOR_DB_COLLECTION=smartcs_agent_docs  # 集合名称
 
-# ---- 向量存储 ----
-vector_store:
-  default_vector_store:
-    type: lancedb
-    db_uri: output\lancedb
+# ---- Embedding 配置 ----
+EMBEDDING_TYPE=ollama                    # local / ollama / qwen 可切换
+EMBEDDING_MODEL=bge-m3                   # 默认模型
+EMBEDDING_DIMENSION=1024                 # 向量维度
 
 # ---- 分块配置 ----
-chunks:
-  size: 500
-  overlap: 100
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
 
-# ---- 图抽取配置 ----
-extract_graph:
-  entity_types: [company, person, ...]
-  max_gleanings: 1
-
-# ---- 社区报告配置 ----
-community_reports:
-  max_length: 2000
-  max_input_length: 8000
+# ---- 检索配置 ----
+VECTOR_SEARCH_TOP_K=10                   # 向量检索返回数
+HYBRID_RETRIEVAL_TOP_K=5                 # 混合检索最终返回数
+HYBRID_RETRIEVAL_TOP_N=20                # 混合检索候选数
+RELEVANCE_GRADING_ENABLED=true           # 相关性评分开关
 ```
 
 ---
@@ -797,13 +678,14 @@ community_reports:
 
 ### 解决什么问题
 
-GraphRAG 的检索结果不一定都和用户问题相关。如果直接把不相关的结果喂给 LLM，会产生幻觉或偏题的回答。检索增强管道在"检索"和"生成"之间插入两道关卡：
+向量检索的结果不一定都和用户问题相关。如果直接把不相关的结果喂给 LLM，会产生幻觉或偏题的回答。检索增强管道在"检索"和"生成"之间插入两道关卡：
 
 ```
 用户问题
+  → 向量检索（ChromaDB）
   → 混合检索（BM25 + 向量检索 + RRF 融合）
   → 相关性评分（LLM 逐条评分，过滤不相关结果）
-  → 相关结果不足？→ 切换策略重检索
+  → 相关结果不足时如实返回，不强行补足
   → 输出高质量检索结果给下游 LLM
 ```
 
@@ -843,31 +725,31 @@ GraphRAG 的检索结果不一定都和用户问题相关。如果直接把不�
 检索结果（N 条）
   → LLM 逐条评分（relevant / irrelevant）
   → 过滤掉 irrelevant
-  → relevant 数 >= 阈值(默认2) → 返回
-  → relevant 数 < 阈值 → 切换 GraphRAG 策略重检索
-     local → drift, global → local, drift → local, basic → local
+  → 相关结果如实返回，不足时不重试（宁缺毋滥）
 ```
 
 **关键设计决策：**
 - **LLM 做评分**：比规则匹配更智能，能理解"提到相同实体但内容无关"的情况
 - **temperature=0**：评分不需要创造性，确定性输出更稳定
-- **最多重试1次**：避免无限重检索导致延迟过高
+- **单次评分不重试**：评分不足时如实返回，不再切换策略重检索（早期「切换 GraphRAG 策略重检索」的逻辑已随 GraphRAG 一起移除）
 - **可配置开关**：`RELEVANCE_GRADING_ENABLED` 可关闭，降级为直接返回全部结果
 
 ### 集成位置
 
-在 `customer_tools/node.py` 的 `graphrag_query()` 函数中，检索后、返回前插入评分：
+在 `customer_tools/node.py` 的 `vector_search_query()` 节点函数中，检索后、返回前插入评分：
 
 ```python
-# 并行执行 GraphRAG 和混合检索
-search_result, hybrid_results = await asyncio.gather(...)
+# 1. 向量检索 + 混合检索（BM25 + 向量 RRF 融合）
+vector_results = vector_store.search(query, top_k=settings.VECTOR_SEARCH_TOP_K)
+hybrid_results = retriever.search(query, top_k=settings.HYBRID_RETRIEVAL_TOP_K, ...)
 
-# 相关性评分：过滤不相关的检索结果
+# 2. 相关性评分：过滤不相关的检索结果
 if hybrid_results and settings.RELEVANCE_GRADING_ENABLED:
-    hybrid_results = await grade_and_ensure_min_results(
-        llm=grader_llm, query=query,
+    hybrid_results = await grade_relevance(
+        llm=grader_llm,
+        query=query,
         documents=hybrid_results,
-        graphrag_api=graphrag_api,  # 用于重检索
+        content_key="text",
     )
 ```
 
@@ -1150,7 +1032,7 @@ async function sendAgentQuery(query, conversationId, imageFile) {
 │  /api/chat → LLMFactory → DeepSeek/Ollama → SSE 流式响应        │
 │  /api/search → SearchService → SerpAPI + LLM → SSE 流式响应     │
 │  /api/langgraph/query → LangGraph Agent → SSE 流式响应          │
-│  /api/upload → IndexingService → GraphRAG 索引构建              │
+│  /api/upload → IndexingService → ChromaDB 向量库入库           │
 │  /api/conversations → MySQL → JSON 响应                         │
 │  /api/register, /api/token → bcrypt + JWT → JSON 响应           │
 └─────────────────────────────────────────────────────────────────┘
@@ -1206,7 +1088,7 @@ Pydantic 做了三件事：
 | 深度思考 | `fetch("/api/reason")` | `POST /api/reason` | LLM 推理→SSE |
 | 联网搜索 | `fetch("/api/search")` | `POST /api/search` | SerpAPI+LLM→SSE |
 | Agent 对话 | `fetch("/api/langgraph/query")` | `POST /api/langgraph/query` | LangGraph→SSE |
-| 上传文件 | `fetch("/api/upload")` | `POST /api/upload` | FormData→GraphRAG |
+| 上传文件 | `fetch("/api/upload")` | `POST /api/upload` | FormData→ChromaDB 入库 |
 
 ### 一次完整对话的前后端流程
 
@@ -1302,7 +1184,7 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 
 ### Q2: 你的 LangGraph Agent 是怎么设计的？
 
-> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow，支持 Text2Cypher 自动生成图查询、预定义 Cypher 模板匹配、以及微软 GraphRAG 文档检索三种工具。
+> 我设计了一个基于 StateGraph 的多路由 Agent。用户消息先经过意图分析节点，LLM 把问题分类为 5 种类型（闲聊/追问/知识库查询/图片/文件），然后通过条件边路由到对应节点。最复杂的知识库查询节点内部嵌套了一个 Multi-Tool Workflow，支持 Text2Cypher 自动生成图查询、预定义 Cypher 模板匹配、以及基于 ChromaDB 的标准 RAG 文档检索三种工具。
 
 ### Q3: 语义缓存是怎么实现的？
 
@@ -1325,18 +1207,15 @@ FastAPI 的 `Depends(get_db)` 会在请求时自动创建数据库会话，请�
 > - **FastAPI**：原生异步支持，适合 LLM 流式输出场景
 > - **LangGraph**：比纯 LangChain 更适合复杂的多步骤工作流编排，支持状态持久化和中断恢复
 > - **Neo4j**：电商数据天然适合图结构（商品-分类-供应商-订单关系）
-> - **GraphRAG**：传统 RAG 只能做向量检索，GraphRAG 能理解文档中的实体关系，回答更准确
+> - **标准 RAG（ChromaDB）**：文档管道简单可靠，混合检索（BM25+向量 RRF）兼顾关键词与语义，事实查询效果与 GraphRAG 持平但成本低一个量级
 
-### Q7: GraphRAG 和传统 RAG 有什么区别？
+### Q7: 为什么从 GraphRAG 迁移到标准 RAG？
 
-> 传统 RAG 把文档切成文本块，做向量索引，查询时找最相似的文本块。它不"理解"文档内容之间的关系。GraphRAG 先用 LLM 从文档中抽取实体和关系，构建知识图谱，再做层次聚类生成社区报告。查询时不仅利用向量相似度，还利用图结构中的关系来做多跳推理。因此能回答需要综合多段信息的复杂问题。
+> GraphRAG 建索引需要 LLM 抽取实体和关系，一次要 5-30 分钟、API 成本高；80+ 内嵌源码维护困难；而且电商客服以事实查询为主，用不到 Global/DRIFT 多跳推理；实体关系已经由 Neo4j 管理，再抽一份是冗余。迁移到标准 RAG（ChromaDB）后索引秒级完成，事实查询效果持平。核心经验：**选型要看场景**——GraphRAG 适合跨文档归纳、多跳推理的宏观分析，事实查询用标准 RAG 足矣。
 
-### Q8: GraphRAG 的四种搜索策略分别适合什么场景？
+### Q8: 你的混合检索（BM25 + 向量 RRF）是怎么设计的？
 
-> - **Local Search**：从最相关的实体出发，扩展到关联文本和社区报告。适合具体事实查询。
-> - **Global Search**：MapReduce 模式遍历所有社区报告。适合宏观分析类问题。
-> - **DRIFT Search**：沿图谱关系边遍历。适合需要多跳推理的问题。
-> - **Basic Search**：纯向量检索，不利用图结构。适合简单问题，速度最快。
+> 纯向量检索对精确型号、罕见专有名词匹配差，纯 BM25 不理解语义。我的混合检索把两路结果用 RRF 融合：BM25 和向量各取 top-20，RRF 只用排名不用分数（第 n 名得 1/(60+n) 分），两路分数相加取 top-5。这样不同检索方式的分数量纲差异就不会影响融合结果。融合后还会用 LLM 做相关性评分，过滤掉字面相似但内容无关的结果。
 
 ---
 

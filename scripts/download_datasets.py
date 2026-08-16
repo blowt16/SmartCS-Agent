@@ -1,11 +1,11 @@
 """
-下载并清洗中文电商客服数据集，输出适合 GraphRAG 的纯文本文件。
+下载并清洗中文电商客服数据集，输出适合向量检索（ChromaDB）的纯文本文件。
 
 数据来源:
 1. qgyd2021/e_commerce_customer_service (faq.json - 电商客服问答)
 2. OpenStellarTeam/Chinese-EcomQA (中文电商概念问答)
 
-输出目录: llm_backend/app/graphrag/data/input/ecommerce_faq/
+输出目录: llm_backend/knowledge_data/ecommerce_faq/
 每个 txt 文件不超过 ~5000 字符，包含清晰的 Q&A 格式。
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 # ── 路径配置 ──────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = PROJECT_ROOT / "llm_backend" / "app" / "graphrag" / "data" / "input" / "ecommerce_faq"
+OUTPUT_DIR = PROJECT_ROOT / "llm_backend" / "knowledge_data" / "ecommerce_faq"
 
 MAX_CHARS_PER_FILE = 5000  # 每个 txt 文件的最大字符数
 
@@ -223,7 +223,7 @@ def extract_core_question(prompt, task=""):
     # 对于 PC（个性化推荐）类别，prompt 可能包含用户画像 JSON
     if task == "PC" and len(text) > 800:
         # PC 类别的 gt 通常是简短的选项（如 A/B/C/D），
-        # prompt 中的用户画像 JSON 对 GraphRAG 价值不大，
+        # prompt 中的用户画像 JSON 对向量检索价值不大，
         # 保留前 500 字符作为摘要即可
         text = text[:500] + "...(用户画像数据已截断)"
 

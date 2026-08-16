@@ -7,7 +7,7 @@ SmartCS-Agent 智能客服系统的后端服务核心模块
 ![FastAPI](https://img.shields.io/badge/FastAPI-005571?logo=fastapi&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
-![GraphRAG](https://img.shields.io/badge/GraphRAG-Microsoft-orange)
+![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20Store-brightgreen)
 ![Neo4j](https://img.shields.io/badge/Neo4j-Knowledge%20Graph-brightgreen?logo=neo4j)
 
 ## 🏗️ 架构设计
@@ -35,7 +35,7 @@ flowchart TB
         I[(MySQL<br/>Conversations)]
         J[(Neo4j<br/>Knowledge Graph)]
         K[(Redis<br/>Cache)]
-        L[GraphRAG<br/>Vector Store]
+        L[ChromaDB<br/>Vector Store]
     end
     
     A --> B
@@ -186,10 +186,8 @@ llm_backend/
 │   │   ├── logger.py             # 日志配置
 │   │   ├── middleware.py         # 中间件
 │   │   └── security.py           # 安全配置
-│   ├── 📊 graphrag/              # GraphRAG集成
-│   │   ├── graphrag/             # 核心GraphRAG模块
-│   │   ├── dev/                  # 开发工具
-│   │   └── origin_data/          # 原始数据处理
+│   ├── 🗃️ services/              # 业务服务层
+│   │   └── indexing_service.py   # 文档解析 → 向量入库（ChromaDB）
 │   ├── 🤖 lg_agent/              # LangGraph智能体
 │   │   ├── main.py               # Agent入口
 │   │   ├── lg_states.py          # 状态定义
@@ -390,6 +388,6 @@ CMD ["sh", "-c", "python -m scripts.init_db && uvicorn main:app --host 0.0.0.0 -
 
 **🔧 LLM Backend - SmartCS-Agent 核心服务**
 
-*基于 FastAPI + LangGraph + GraphRAG 构建*
+*基于 FastAPI + LangGraph + ChromaDB 构建*
 
 </div>

@@ -1,5 +1,5 @@
 """
-从 origin_data/exported_data/ 下的 CSV 文件生成 GraphRAG 知识文档。
+从 origin_data/exported_data/ 下的 CSV 文件生成产品知识文档。
 
 每款产品生成一份 txt 文件，包含：
 - 产品基本信息（名称、品牌、品类、价格、库存）
@@ -7,7 +7,7 @@
 - 供应商信息
 - 用户评价（好评/差评分类，按评分排序）
 
-输出目录：llm_backend/app/graphrag/data/input/product_knowledge/
+输出目录：llm_backend/knowledge_data/product_knowledge/
 
 用法：python scripts/generate_product_knowledge.py
 """
@@ -19,8 +19,8 @@ from collections import defaultdict
 
 # 路径配置
 ROOT_DIR = Path(__file__).parent.parent
-ORIGIN_DATA_DIR = ROOT_DIR / "llm_backend" / "app" / "graphrag" / "origin_data" / "exported_data"
-OUTPUT_DIR = ROOT_DIR / "llm_backend" / "app" / "graphrag" / "data" / "input" / "product_knowledge"
+ORIGIN_DATA_DIR = ROOT_DIR / "llm_backend" / "knowledge_data" / "origin_data" / "exported_data"
+OUTPUT_DIR = ROOT_DIR / "llm_backend" / "knowledge_data" / "product_knowledge"
 
 
 def load_csv(filename: str) -> list[dict]:

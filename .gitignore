@@ -50,37 +50,12 @@ doc/
 claude/
 CLAUDE.md
 
-# GraphRAG generated data
-llm_backend/app/graphrag/data/output/
-llm_backend/app/graphrag/data/cache/
-llm_backend/app/graphrag/data/logs/
-llm_backend/app/graphrag/data/text_cache/
-llm_backend/app/graphrag/data/text_logs/
-llm_backend/app/graphrag/data/text_output/
-llm_backend/app/graphrag/data/lancedb/
-llm_backend/app/graphrag/data/logs.json
-llm_backend/app/graphrag/data/pdf_csv_exports/
-llm_backend/app/graphrag/dev/
+# ChromaDB 向量库数据（由索引管道生成）
+vector_db/
+llm_backend/vector_db/
 
-# GraphRAG source (installed via pip, not needed in repo)
-llm_backend/app/graphrag/tests/
-llm_backend/app/graphrag/docs/
-llm_backend/app/graphrag/examples_notebooks/
-llm_backend/app/graphrag/course/
-llm_backend/app/graphrag/test_data/
-llm_backend/app/graphrag/origin_data/
-llm_backend/app/graphrag/graphrag/
-llm_backend/app/graphrag/.github/
-llm_backend/app/graphrag/text_logs/
-llm_backend/app/graphrag/*.md
-llm_backend/app/graphrag/*.yaml
-llm_backend/app/graphrag/dictionary.txt
-llm_backend/app/graphrag/CODEOWNERS
-llm_backend/app/graphrag/.vsts-ci.yml
-llm_backend/app/graphrag/.gitattributes
-llm_backend/app/graphrag/.gitignore
-!llm_backend/app/graphrag/settings.yaml
-llm_backend/app/graphrag/data/pdf_outputs/
+# 知识库数据（由 scripts/ 生成）
+llm_backend/knowledge_data/
 
 # Scripts cache
 scripts/.cache_jddc/

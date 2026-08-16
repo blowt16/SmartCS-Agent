@@ -23,7 +23,7 @@
 
 ## 1. 项目概述
 
-SmartCS-Agent 是一个**基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统**，深度集成了 Microsoft GraphRAG 知识检索、Text2Cypher 知识图谱查询、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
+SmartCS-Agent 是一个**基于 FastAPI + LangGraph + Neo4j 的智能电商客服系统**，深度集成了 ChromaDB 向量检索（标准 RAG 管道）、Text2Cypher 知识图谱查询、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
 **核心能力**: 5 路智能意图路由 → 多工具编排 → 混合检索 → 幻觉检测 → 流式响应
 
@@ -54,7 +54,7 @@ graph TB
     end
 
     subgraph "知识检索层"
-        E1[Microsoft GraphRAG<br/>Local/Global/DRIFT/Basic]
+        E1[ChromaDB 向量检索<br/>标准 RAG 管道]
         E2[Neo4j 图数据库<br/>Text2Cypher + 预定义模板]
         E3[混合检索 BM25 + 向量 + RRF]
     end
@@ -92,7 +92,7 @@ graph TB
 | **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理、Cypher 校验 |
 | **本地 LLM** | Ollama | - | 可切换的本地 LLM 替代方案 |
 | **知识图谱** | Neo4j | 5 Community | 电商数据（商品/订单/客户），APOC 插件 |
-| **文档检索** | Microsoft GraphRAG | latest | 文档索引，4 种检索策略（Local/Global/DRIFT/Basic） |
+| **文档检索** | ChromaDB | latest | 向量库（vector_db/，集合 smartcs_agent_docs），标准 RAG 索引管道 |
 | **Embedding** | SiliconFlow BAAI/bge-m3 | - | 语义向量生成，免费 API |
 | **本地 Embedding** | sentence-transformers | paraphrase-multilingual-MiniLM-L12-v2 | 混合检索的本地向量编码 |
 | **向量缓存** | Redis | 7 Alpine | 语义缓存（余弦相似度 ≥ 0.90 命中） |
@@ -150,8 +150,8 @@ flowchart TB
         direction LR
         T2C["Text2Cypher<br/>生成→校验→执行"]
         PC["预定义 Cypher<br/>模板 + 向量匹配"]
-        GRAG["GraphRAG<br/>4 策略 + 混合检索"]
-        RG["相关性评分<br/>LLM 过滤 + 重检索"]
+        GRAG["向量检索<br/>vector_search_query + 混合检索"]
+        RG["相关性评分<br/>LLM 逐条过滤"]
     end
 
     subgraph Store["💾 存储层"]
@@ -195,7 +195,7 @@ SmartCS-Agent/
 │       │   ├── search_service.py        # SerpAPI 联网搜索
 │       │   ├── redis_semantic_cache.py  # Redis 语义缓存
 │       │   ├── conversation_service.py  # 会话 CRUD
-│       │   └── indexing_service.py      # GraphRAG 索引构建
+│       │   └── indexing_service.py      # 标准 RAG 索引构建（解析→分块→ChromaDB 入库）
 │       ├── lg_agent/                     # LangGraph Agent 层
 │       │   ├── lg_builder.py            # StateGraph 构建 + 路由 + 5 节点
 │       │   ├── lg_states.py             # 状态定义（Router/AgentState）
@@ -207,7 +207,7 @@ SmartCS-Agent/
 │       │           └── components/
 │       │               ├── cypher_tools/     # Text2Cypher 生成/校验/执行
 │       │               ├── predefined_cypher/ # 预定义模板匹配
-│       │               ├── customer_tools/   # GraphRAG 查询 + 混合检索
+│       │               ├── customer_tools/   # 向量检索（VectorStoreQuery）+ 混合检索
 │       │               ├── hybrid_retrieval/ # BM25 + 向量 + RRF 融合
 │       │               ├── relevance_grader.py   # LLM 相关性评分
 │       │               ├── memory/         # 三层记忆管理器
@@ -216,7 +216,6 @@ SmartCS-Agent/
 │       │               ├── guardrails/     # 业务边界护栏
 │       │               ├── planner/        # 任务分解
 │       │               └── tool_selection/ # 工具选择
-│       ├── graphrag/                   # Microsoft GraphRAG 源码
 │       ├── models/                     # SQLAlchemy 模型
 │       │   ├── conversation.py
 │       │   ├── message.py
@@ -226,7 +225,6 @@ SmartCS-Agent/
 │       └── static/dist/               # Vue 前端编译输出
 ├── scripts/                           # 工具脚本
 │   ├── init_db.py                     # 数据库初始化
-│   ├── build_graphrag_index.py        # 手动构建 GraphRAG 索引
 │   ├── generate_product_knowledge.py  # CSV → 产品知识文档
 │   ├── download_datasets.py           # 下载电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 对话数据集
@@ -249,7 +247,7 @@ SmartCS-Agent/
 
 - **多 LLM 服务策略模式**: `CHAT_SERVICE`、`REASON_SERVICE`、`AGENT_SERVICE` 可分别独立选择 DeepSeek/Ollama
 - **属性计算**: `DATABASE_URL`、`REDIS_URL`、`NEO4J_CONN_URL` 通过 `@property` 动态构建
-- **GraphRAG 完整配置**: 支持项目目录、查询类型、社区级别等 8 项配置
+- **向量检索完整配置**: ChromaDB 持久化目录（vector_db/）、集合名（smartcs_agent_docs）、分块参数（500/50）等配置
 - **相关性评分配置**: 阈值、重试次数等可调参
 
 ```python
@@ -264,7 +262,7 @@ class Settings(BaseSettings):
     # Neo4j: NEO4J_URL, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE
     # Redis: REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
     # Embedding: EMBEDDING_TYPE, EMBEDDING_MODEL, EMBEDDING_THRESHOLD
-    # GraphRAG: PROJECT_DIR, DATA_DIR, QUERY_TYPE, RESPONSE_TYPE ...
+    # ChromaDB: VECTOR_DB_PATH, VECTOR_DB_COLLECTION, CHUNK_SIZE, CHUNK_OVERLAP ...
 ```
 
 ### 4.2 LLM 工厂 (`app/services/llm_factory.py`)
@@ -352,10 +350,10 @@ stateDiagram-v2
             Planner --> ToolSelection: 工具选择
             ToolSelection --> Text2Cypher: cypher_query
             ToolSelection --> PredefinedCypher: predefined_cypher
-            ToolSelection --> GraphRAG: microsoft_graphrag_query
+            ToolSelection --> VectorSearch: vector_search_query
             Text2Cypher --> Summarize: 结果汇总
             PredefinedCypher --> Summarize: 结果汇总
-            GraphRAG --> Summarize: 结果汇总
+            VectorSearch --> Summarize: 结果汇总
             Summarize --> FinalAnswer: 最终回答
             FinalAnswer --> [*]
         }
@@ -377,7 +375,7 @@ stateDiagram-v2
 子图结构，实现知识库查询的核心编排：
 
 ```
-Guardrails → Planner → ToolSelection → [Text2Cypher | PredefinedCypher | GraphRAG] → Summarize → FinalAnswer
+Guardrails → Planner → ToolSelection → [Text2Cypher | PredefinedCypher | 向量检索] → Summarize → FinalAnswer
 ```
 
 **P1 优化：基于复杂度的策略选择**:
@@ -386,7 +384,7 @@ Guardrails → Planner → ToolSelection → [Text2Cypher | PredefinedCypher | G
 |--------|---------|------|
 | < 0.3（简单） | `predefined_cypher` | 预定义模板最快 |
 | 0.3-0.7（中等） | LLM 自动选择 | 灵活匹配 |
-| > 0.7（复杂） | `microsoft_graphrag_query` | 最强推理能力 |
+| > 0.7（复杂） | `vector_search_query` | 覆盖故障/售后/保修等语义问答 |
 
 每个策略内部的执行流程：
 
@@ -394,7 +392,7 @@ Guardrails → Planner → ToolSelection → [Text2Cypher | PredefinedCypher | G
 |------|---------|
 | Text2Cypher | NL 问题 → Few-shot 示例检索 → Cypher 生成 → 正则校验 → LLM 校验 → 自动修正(最多3次) → 执行 |
 | PredefinedCypher | NL 问题 → 向量相似度匹配模板 → 参数填充 → Neo4j 执行 |
-| GraphRAG | NL 问题 → GraphRAG API(Local/Global/DRIFT/Basic) → 混合检索(BM25+向量+RRF) → 相关性评分过滤 → 策略切换重检索 |
+| 向量检索 | NL 问题 → VectorStoreQuery 查询 ChromaDB → 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
 
 ### 4.6 Text2Cypher 闭环 (`components/cypher_tools/`)
 
@@ -429,10 +427,8 @@ flowchart TB
     VEC --> RRF
     RRF --> TOPK["Top-K 融合结果"]
     TOPK --> GRADE["LLM 相关性评分<br/>逐条判断 relevant/irrelevant"]
-    GRADE --> CHECK{"相关 ≥ 阈值?"}
-    CHECK -->|是| DONE["返回相关文档"]
-    CHECK -->|否| RETRY["切换 GraphRAG 策略重检索<br/>local→drift / global→local"]
-    RETRY --> GRADE
+    GRADE --> FILTER{"逐条评分过滤<br/>relevant 保留 / irrelevant 丢弃"}
+    FILTER --> DONE["返回相关文档<br/>进入 Summarize 生成回答"]
 ```
 
 ### 4.8 三层记忆管理 (`components/memory/`)
@@ -505,7 +501,7 @@ sequenceDiagram
     participant Agent as LangGraph Agent
     participant LLM as DeepSeek
     participant Neo4j as Neo4j 图数据库
-    participant GraphRAG as GraphRAG 检索引擎
+    participant VS as ChromaDB 向量检索引擎
     participant MySQL as MySQL
 
     Client->>API: POST /api/langgraph/query
@@ -542,7 +538,7 @@ sequenceDiagram
         and
             Agent->>Neo4j: PredefinedCypher 模板匹配
         and
-            Agent->>GraphRAG: GraphRAG 查询
+            Agent->>VS: VectorStoreQuery 向量查询
             Agent->>Agent: 混合检索 BM25+向量+RRF
             Agent->>LLM: 相关性评分过滤
         end
@@ -581,7 +577,7 @@ flowchart TD
     KG --> COMPLEX{"复杂度评估"}
     COMPLEX -->|"< 0.3"| PREFAB["预定义 Cypher 模板"]
     COMPLEX -->|"0.3-0.7"| AUTO["LLM 自动选择工具"]
-    COMPLEX -->|"> 0.7"| GRAG["GraphRAG 检索"]
+    COMPLEX -->|"> 0.7"| GRAG["向量检索 vector_search_query"]
 ```
 
 ---
@@ -599,7 +595,7 @@ flowchart TD
 | **单例模式** | `checkpointer = MemorySaver()` | LangGraph 全局持久化存储 |
 | **模板方法模式** | 提示词模板 | 预定义提示词 + 动态参数注入 |
 | **装饰器模式** | `LoggingMiddleware` | FastAPI 中间件统一日志 |
-| **门面模式** | `GraphRAGAPI` | 封装 Microsoft GraphRAG 复杂的初始化/查询 API |
+| **门面模式** | `VectorStoreQuery` | 封装 ChromaDB 客户端的初始化/查询 API |
 
 ---
 
@@ -634,16 +630,15 @@ Neo4j 图结构:
   (Employee)-[:PROCESSED]->(Order)
 ```
 
-### 7.4 GraphRAG 索引
+### 7.4 标准 RAG 索引管道
 
 ```
-原始文档 (llm_backend/app/graphrag/data/input/)
-  → Microsoft GraphRAG Pipeline
-    → entities.parquet (实体)
-    → relationships.parquet (关系)
-    → communities.parquet (社区)
-    → community_reports.parquet (社区报告)
-    → text_units.parquet (文本单元)
+原始文档 (PDF/DOCX/TXT)
+  → 文档解析 (PyPDF2 / python-docx / TXT)
+  → 文本清洗
+  → RecursiveCharacterTextSplitter 分块 (500/50)
+  → Embedding (EmbeddingProvider, bge-m3 1024 维)
+  → ChromaDB 入库 (vector_db/, 集合 smartcs_agent_docs)
 ```
 
 ---
@@ -663,7 +658,7 @@ class Router(TypedDict):
     entity_count: int              # 实体数量
 ```
 
-**技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息，为下游工具选择提供了**量化决策依据**。相比简单分类器，复杂度信息被用于后续策略选择（简单→预定义模板，复杂→GraphRAG）。
+**技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息，为下游工具选择提供了**量化决策依据**。相比简单分类器，复杂度信息被用于后续策略选择（简单→预定义模板，复杂→向量检索）。
 
 ### 8.2 🌟 Text2Cypher 双重校验闭环
 
@@ -677,7 +672,7 @@ NL问题 → Cypher生成 → 正则校验(语法) → LLM校验(语义) → 执
 
 **技术价值**: Cypher 查询语句的正确性直接影响图数据库查询结果。单纯正则校验无法发现逻辑错误（如表名正确但关系方向错误），LLM 语义校验作为第二道防线显著提升准确性。
 
-### 8.3 🌟 混合检索 + RRF 融合 + 相关性评分 + 策略切换
+### 8.3 🌟 混合检索 + RRF 融合 + 相关性评分过滤
 
 **创新点**: 不是简单的 BM25+向量双路检索，而是一个**4 步闭环**：
 
@@ -685,14 +680,13 @@ NL问题 → Cypher生成 → 正则校验(语法) → LLM校验(语义) → 执
 2. **向量语义匹配** (sentence-transformers 本地编码)
 3. **RRF 倒数排名融合** (不依赖绝对分数，数学上更鲁棒)
 4. **LLM 逐条相关性评分** (relevant/irrelevant 二值判断)
-5. **自动策略切换** (相关不足时切换 GraphRAG 策略重新检索)
 
 ```python
 # RRF 融合公式
 score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的排名
 ```
 
-**技术价值**: 融合了关键词精确匹配和语义理解的优势，同时通过相关性评分防止不相关结果污染 LLM 上下文，策略切换机制确保在检索效果不佳时自动降级/升级。
+**技术价值**: 融合了关键词精确匹配和语义理解的优势，同时通过相关性评分过滤防止不相关结果污染 LLM 上下文，保证回答基于事实数据。
 
 ### 8.4 🌟 三层记忆管理 + Redis 增量缓存
 
@@ -777,7 +771,7 @@ app:
 
 | 优点 | 说明 |
 |------|------|
-| **检索质量闭环** | 混合检索 → 评分 → 重检索，形成质量保障机制 |
+| **检索质量闭环** | 混合检索 → 相关性评分 → 过滤，形成质量保障机制 |
 | **Text2Cypher 工程化** | 生成/校验/修正/执行完整流水线 |
 | **多层护栏** | 范围预检 + LLM 护栏 + 幻觉检测，层层保障 |
 | **内存管理成熟** | 三层摘要 + Token 预算 + Redis 缓存，处理长对话 |
@@ -881,17 +875,17 @@ checkpointer = MemorySaver()  # 进程内存储，重启丢失
 
 **建议**: 集成 `slowapi` 或 Redis 令牌桶实现 IP/用户级别限流。
 
-#### 10.2.5 GraphRAG 源码内嵌
+#### 10.2.5 历史上的 GraphRAG 源码内嵌问题（已迁移解决）
 
-`llm_backend/app/graphrag/` 直接包含了 Microsoft GraphRAG 的完整源码（约 80+ 文件）。
-
-**影响**:
+历史上 `llm_backend/app/graphrag/` 直接包含了 Microsoft GraphRAG 的完整源码（约 80+ 文件），存在以下问题：
 
 - 增加仓库体积
 - 难以跟随上游更新
 - 版本管理混乱
+- 索引构建耗时 5-30 分钟/次，LLM 成本高
+- Local/Global/DRIFT/Basic 检索能力对电商客服场景过剩（实体关系查询已由 Neo4j 承担）
 
-**建议**: 改为 `pip install graphrag` 依赖。
+**解决**: 已迁移为标准 RAG 管道（ChromaDB 向量检索），删除 `llm_backend/app/graphrag/` 源码目录、`scripts/build_graphrag_index.py` 与 graphrag 依赖，索引构建降至秒级，事实查询效果持平。
 
 #### 10.2.6 缺少输入校验
 
@@ -1029,7 +1023,7 @@ sequenceDiagram
 |------|--------|------|
 | 电商客服原型 | ⭐⭐⭐⭐⭐ | 开箱即用，多轮对话+知识库完善 |
 | 学习 LangGraph | ⭐⭐⭐⭐⭐ | 完整的 StateGraph + 子图 + 多工具编排案例 |
-| 学习 GraphRAG | ⭐⭐⭐⭐⭐ | 4 种策略 + 混合检索的实际应用 |
+| 学习标准 RAG | ⭐⭐⭐⭐⭐ | ChromaDB 向量管道 + 混合检索的实际应用 |
 | 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、相关性评分、查询预处理等最佳实践 |
 | 生产部署 | ⭐⭐⭐ | 需补充测试、限流、监控后才能上生产 |
 
@@ -1038,7 +1032,7 @@ sequenceDiagram
 SmartCS-Agent 是一个**技术深度优秀、工程完整性良好但生产就绪度不足**的 AI 客服系统。它在以下方面展现了较强的技术实力：
 
 1. **Agent 编排**: LangGraph StateGraph 的运用成熟，子图嵌套、条件路由、会话持久化、中断恢复等技术点处理得当
-2. **检索增强**: Text2Cypher 闭环、混合检索+RRF融合、相关性评分+策略切换形成完整的检索质量保障链路
+2. **检索增强**: Text2Cypher 闭环、混合检索+RRF融合、相关性评分过滤形成完整的检索质量保障链路
 3. **工程降本**: 语义缓存的实现精细（按用户隔离、LRU清理、流式模拟），三层记忆管理的 Token 预算控制
 4. **系统思维**: 查询预处理管道的必要性分级、根据复杂度自动选择策略的量化决策
 

@@ -11,13 +11,13 @@
 |------|------|
 | 项目名 | SmartCS-Agent — 智能电商客服系统 |
 | 用户目的 | 学习项目代码，准备求职面试 |
-| 技术栈 | FastAPI + LangGraph + Neo4j + MySQL + Redis + DeepSeek/Ollama + Microsoft GraphRAG + Vue |
-| 核心架构 | LangGraph StateGraph 单Agent多路由（6节点5类型），Multi-Tool 子图（Text2Cypher / 预定义Cypher / GraphRAG） |
+| 技术栈 | FastAPI + LangGraph + Neo4j + MySQL + Redis + DeepSeek/Ollama + ChromaDB + Vue |
+| 核心架构 | LangGraph StateGraph 单Agent多路由（6节点5类型），Multi-Tool 子图（Text2Cypher / 预定义Cypher / 向量检索） |
 | 三库分工 | MySQL（用户认证+聊天记录）、Neo4j（知识图谱）、Redis（语义缓存） |
 | 入口文件 | `llm_backend/main.py`（所有API端点） |
 | Agent图 | `llm_backend/app/lg_agent/lg_builder.py` |
 | 配置 | `llm_backend/app/core/config.py` + `.env` |
-| 知识库配置 | `llm_backend/app/graphrag/settings.yaml` |
+| 知识库配置 | `vector_db/`（ChromaDB 持久化目录，集合 `smartcs_agent_docs`） |
 | 学习文档 | `STUDY_NOTES.md`（根目录，已含19章面试笔记） |
 | 近期改进 | P0 智能分块（recursive + 中文 separators）、P1 查询复杂度量化（Router 新增4字段 + tool_preference） |
 
@@ -41,13 +41,11 @@ llm_backend/
 │   │               ├── tool_selection/node.py           # 工具选择节点
 │   │               ├── cypher_tools/                    # Text2Cypher
 │   │               ├── predefined_cypher/               # 预定义Cypher模板
-│   │               └── customer_tools/node.py           # GraphRAG 查询
+│   │               └── customer_tools/node.py           # 向量检索（VectorStoreQuery）
 │   ├── services/
 │   │   ├── llm_factory.py            # LLM 工厂模式
 │   │   ├── deepseek_service.py       # DeepSeek 流式 + Redis 语义缓存
 │   │   └── redis_semantic_cache.py   # 语义缓存（bge-m3 + 余弦相似度）
-│   ├── graphrag/
-│   │   └── settings.yaml             # GraphRAG 索引配置
 │   └── models/                       # SQLAlchemy ORM（User/Conversation/Message）
 └── scripts/init_db.py                # 数据库初始化
 ```
@@ -157,7 +155,7 @@ llm_backend/
 
 - LangGraph StateGraph 构建和条件路由
 - Neo4j 基础（节点/关系/属性/Cypher）
-- GraphRAG 8步索引管道和4种检索策略
+- 标准 RAG 索引管道（解析→清洗→分块→Embedding→ChromaDB 入库）
 - Redis 语义缓存（bge-m3 + 余弦相似度）
 - SSE 流式响应原理
 - JWT 认证流程
