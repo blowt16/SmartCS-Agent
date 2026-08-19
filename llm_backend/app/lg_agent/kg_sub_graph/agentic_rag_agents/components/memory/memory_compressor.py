@@ -102,7 +102,7 @@ async def compress_medium(
     chain = prompt | llm.with_structured_output(ConversationSummary)
     result = await chain.ainvoke({"conversation": conversation})
 
-    logger.info(f"中等压缩: {len(messages)} 条消息 -> {len(result.summary)} 字, 实体: {result.key_entities}")
+    logger.info("中等压缩: {} 条消息 -> {} 字, 实体: {}", len(messages), len(result.summary), result.key_entities)
     return result
 
 
@@ -129,5 +129,5 @@ async def compress_high(
     chain = prompt | llm.with_structured_output(ConversationSummary)
     result = await chain.ainvoke({"conversation": content})
 
-    logger.info(f"高层压缩: -> {len(result.summary)} 字, 实体: {result.key_entities}")
+    logger.info("高层压缩: -> {} 字, 实体: {}", len(result.summary), result.key_entities)
     return result

@@ -142,7 +142,7 @@ class EmbeddingService:
             if not self.current_documents:
                 raise ValueError("文档数据为空")
             
-            logger.info(f"成功加载索引 {index_id}: {self.current_index.ntotal} 个向量, {len(self.current_documents)} 个文档")
+            logger.info("成功加载索引 {}: {} 个向量, {} 个文档", index_id, self.current_index.ntotal, len(self.current_documents))
             
         except Exception as e:
             self.current_index = None

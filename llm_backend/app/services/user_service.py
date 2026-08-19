@@ -51,11 +51,11 @@ class UserService:
         user = result.scalar_one_or_none()  # 获取查询结果中的第一个用户，如果存在则返回，否则返回 None
         
         if not user:
-            logger.warning(f"User not found: {email}")
+            logger.warning("User not found: {}", email)
             return None
             
         if not verify_password(password, user.password_hash):
-            logger.warning(f"Invalid password for user: {email}")
+            logger.warning("Invalid password for user: {}", email)
             return None
             
         # 更新最后登录时间

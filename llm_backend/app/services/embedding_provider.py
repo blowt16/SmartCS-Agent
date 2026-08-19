@@ -55,7 +55,7 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
 
     def __init__(self):
         model_name = settings.EMBEDDING_MODEL
-        logger.info(f"加载本地 Embedding 模型: {model_name}")
+        logger.info("加载本地 Embedding 模型: {}", model_name)
         self._model = SentenceTransformer(model_name)
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
@@ -76,7 +76,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         self.model = settings.OLLAMA_EMBEDDING_MODEL
         self.api_url = f"{self.base_url}/api/embed"
-        logger.info(f"使用 Ollama Embedding: {self.model} @ {self.base_url}")
+        logger.info("使用 Ollama Embedding: {} @ {}", self.model, self.base_url)
 
     def embed_sync(self, texts: List[str]) -> List[List[float]]:
         payload = {"model": self.model, "input": texts}
@@ -85,7 +85,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
             resp.raise_for_status()
             return resp.json()["embeddings"]
         except Exception as e:
-            logger.error(f"Ollama Embedding 失败: {e}")
+            logger.error("Ollama Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
@@ -97,7 +97,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
                     result = await resp.json()
                     return result["embeddings"]
         except Exception as e:
-            logger.error(f"Ollama Embedding 失败: {e}")
+            logger.error("Ollama Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
 
 
@@ -112,7 +112,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
         self.base_url = settings.QWEN_EMBEDDING_BASE_URL.rstrip("/")
         self.model = settings.QWEN_EMBEDDING_MODEL
         self.api_url = f"{self.base_url}/embeddings"
-        logger.info(f"使用 Qwen Embedding: {self.model} @ {self.base_url}")
+        logger.info("使用 Qwen Embedding: {} @ {}", self.model, self.base_url)
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
         headers = {
@@ -134,7 +134,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
                     result = await resp.json()
                     return [item["embedding"] for item in result["data"]]
         except Exception as e:
-            logger.error(f"Qwen Embedding 失败: {e}")
+            logger.error("Qwen Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
 
     def embed_sync(self, texts: List[str]) -> List[List[float]]:
@@ -153,7 +153,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
             result = resp.json()
             return [item["embedding"] for item in result["data"]]
         except Exception as e:
-            logger.error(f"Qwen Embedding 失败: {e}")
+            logger.error("Qwen Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
 
 

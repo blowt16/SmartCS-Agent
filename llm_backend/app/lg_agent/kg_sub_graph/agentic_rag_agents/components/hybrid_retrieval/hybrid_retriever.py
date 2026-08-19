@@ -71,7 +71,7 @@ class HybridRetriever:
     def encoder(self) -> SentenceTransformer:
         """懒加载向量编码模型"""
         if self._encoder is None:
-            logger.info(f"加载向量编码模型: {self.embedding_model_name}")
+            logger.info("加载向量编码模型: {}", self.embedding_model_name)
             self._encoder = SentenceTransformer(self.embedding_model_name)
         return self._encoder
 
@@ -82,7 +82,7 @@ class HybridRetriever:
                 doc.get(self.text_key, "") if isinstance(doc, dict) else str(doc)
                 for doc in self.documents
             ]
-            logger.info(f"编码 {len(texts)} 个文档...")
+            logger.info("编码 {} 个文档...", len(texts))
             self._doc_embeddings = self.encoder.encode(
                 texts, convert_to_numpy=True, normalize_embeddings=True
             )
@@ -117,7 +117,7 @@ class HybridRetriever:
             doc["vector_rank"] = rank
             results.append(doc)
 
-        logger.info(f"向量检索完成: 返回 {len(results)} 条结果")
+        logger.info("向量检索完成: 返回 {} 条结果", len(results))
         return results
 
     def search(
@@ -143,7 +143,7 @@ class HybridRetriever:
         Returns:
             融合后的文档列表（带 rrf_score）
         """
-        logger.info(f"开始混合检索: query='{query}', retrieval_top_n={retrieval_top_n}")
+        logger.info("开始混合检索: query='{}', retrieval_top_n={}", query, retrieval_top_n)
 
         # BM25 + 向量检索
         bm25_results = self.bm25.search(query, top_k=retrieval_top_n)
@@ -157,8 +157,8 @@ class HybridRetriever:
         )
 
         logger.info(
-            f"混合检索完成: BM25 {len(bm25_results)} 条 + "
-            f"向量 {len(vector_results)} 条 -> 融合后 {len(fused)} 条"
+            "混合检索完成: BM25 {} 条 + 向量 {} 条 -> 融合后 {} 条",
+            len(bm25_results), len(vector_results), len(fused),
         )
 
         return fused

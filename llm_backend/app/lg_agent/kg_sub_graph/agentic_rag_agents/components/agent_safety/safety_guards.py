@@ -39,7 +39,7 @@ class MaxIterationGuard:
         """递增计数器，返回当前值"""
         self._counters[conversation_id] = self._counters.get(conversation_id, 0) + 1
         count = self._counters[conversation_id]
-        logger.info(f"迭代计数 {conversation_id}: {count}/{self.max_iterations}")
+        logger.info("迭代计数 {}: {}/{}", conversation_id, count, self.max_iterations)
         return count
 
     def is_exceeded(self, conversation_id: str) -> bool:
@@ -82,6 +82,7 @@ class TimeoutGuard:
             return await asyncio.wait_for(coro, timeout=self.timeout)
         except asyncio.TimeoutError:
             logger.error(
-                f"请求超时: {conversation_id}, 超过 {self.timeout}s, 返回降级回答"
+                "请求超时: {}, 超过 {}s, 返回降级回答",
+                conversation_id, self.timeout,
             )
             return fallback

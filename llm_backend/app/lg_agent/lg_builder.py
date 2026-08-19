@@ -76,16 +76,16 @@ async def analyze_and_route_query(
     scope_guard = ScopeGuard()
     in_scope, scope_reason = scope_guard.check(user_question)
     if not in_scope:
-        logger.warning(f"经营范围预检拦截: {scope_reason}")
+        logger.warning("经营范围预检拦截: {}", scope_reason)
         return {"router": Router(type="general-query", logic=f"超出经营范围: {scope_reason}")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
         model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
-        logger.info(f"Using DeepSeek model: {settings.DEEPSEEK_MODEL}")
+        logger.info("Using DeepSeek model: {}", settings.DEEPSEEK_MODEL)
     else:
         model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
-        logger.info(f"Using Ollama model: {settings.OLLAMA_AGENT_MODEL}")
+        logger.info("Using Ollama model: {}", settings.OLLAMA_AGENT_MODEL)
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话）
     # 使用 MemoryManager 管理对话历史，自动压缩老消息为摘要，Redis 缓存增量摘要
@@ -99,13 +99,13 @@ async def analyze_and_route_query(
         {"role": "system", "content": ROUTER_SYSTEM_PROMPT}
     ] + managed_messages
     logger.info("-----Analyze user query type-----")
-    logger.info(f"Managed messages: {len(managed_messages)} (original: {len(state.messages)})")
+    logger.info("Managed messages: {} (original: {})", len(managed_messages), len(state.messages))
     
     # 使用结构化输出，输出问题类型
     response = cast(
         Router, await model.with_structured_output(Router).ainvoke(messages)
     )
-    logger.info(f"Analyze user query type completed, result: {response}")
+    logger.info("Analyze user query type completed, result: {}", response)
     return {"router": response}
 
 def route_query(
@@ -275,7 +275,7 @@ async def create_image_query(
     image_path = config.get("configurable", {}).get("image_path", None)
 
     if not image_path or not Path(image_path).exists():
-        logger.warning(f"User Upload Image Not Found: {image_path}")
+        logger.warning("User Upload Image Not Found: {}", image_path)
         return {"messages": [AIMessage(content="抱歉，我无法查看这张图片，请重新上传。")]}
     
     # 获取视觉模型配置
@@ -287,7 +287,7 @@ async def create_image_query(
         logger.error("Vision Model Configuration Not Complete")
         return {"messages": [AIMessage(content="抱歉，我无法查看这张图片，请重新上传。")]}
     
-    logger.info(f"Using Vision Model: {vision_model} to process image: {image_path}")
+    logger.info("Using Vision Model: {} to process image: {}", vision_model, image_path)
     
     try:
         # 导入图片处理库
@@ -320,7 +320,7 @@ async def create_image_query(
             # 转换为base64
             image_data = base64.b64encode(img_byte_arr.read()).decode('utf-8')
             
-            logger.info(f"Image Compressed, Original Size: {width}x{height}, New Size: {resized_img.width}x{resized_img.height}")
+            logger.info("Image Compressed, Original Size: {}x{}, New Size: {}x{}", width, height, resized_img.width, resized_img.height)
         
         # 构建API请求
         headers = {
@@ -362,7 +362,7 @@ async def create_image_query(
                 if response.status == 200:
                     result = await response.json()
                     image_description = result["choices"][0]["message"]["content"]
-                    logger.info(f"Successfully processed image and generated description")
+                    logger.info("Successfully processed image and generated description")
                     # 使用图片描述和用户问题生成最终回复
                     # 从lg_prompts导入电商客服模板
                     
@@ -381,7 +381,7 @@ async def create_image_query(
         
                 else:
                     error_text = await response.text()
-                    logger.error(f"Vision API Request Failed: {response.status} - {error_text}")
+                    logger.error("Vision API Request Failed: {} - {}", response.status, error_text)
                     return {"messages": [AIMessage(content=f"抱歉，我无法查看这张图片，请重新上传。")]}
 
 
@@ -389,7 +389,7 @@ async def create_image_query(
 
 
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
+        logger.error("Error processing image: {}", str(e))
         return {"messages": [AIMessage(content=f"抱歉，我无法查看这张图片，请重新上传。")]}
 
 async def create_research_plan(
@@ -475,7 +475,7 @@ async def create_research_plan(
         enhanced_question = rewritten.enhanced_query
         budget.record("multi_query", tokens=500, essential=False)
 
-    logger.info(f"预处理预算消耗: {budget.total_calls} 次调用, {budget.total_tokens} tokens")
+    logger.info("预处理预算消耗: {} 次调用, {} tokens", budget.total_calls, budget.total_tokens)
 
     # 准备输入状态 — 用增强后的问题替代原始问题
     input_state = {

@@ -36,7 +36,7 @@ class SearchTool:
             return self._parse_results(response.json())
             
         except Exception as e:
-            logger.error(f"搜索失败: {str(e)}")
+            logger.error("搜索失败: {}", str(e))
             return []
     
     def _parse_results(self, data: dict) -> List[Dict]:

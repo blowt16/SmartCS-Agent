@@ -63,10 +63,10 @@ def create_planner_node(
         }
 
         # 日志打印格式，分别打印每个任务
-        logger.info(f"Total Sub Task: {len(planner_task_decomposition['tasks'])}")
+        logger.info("Total Sub Task: {}", len(planner_task_decomposition["tasks"]))
    
         for i, task in enumerate(planner_task_decomposition['tasks']):
-            logger.info(f"Sub Task[{i+1}]: {task.question}")
+            logger.info("Sub Task[{}]: {}", i + 1, task.question)
              
         return planner_task_decomposition
 

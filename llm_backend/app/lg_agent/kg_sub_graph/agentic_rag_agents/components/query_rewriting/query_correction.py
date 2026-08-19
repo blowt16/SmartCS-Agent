@@ -122,11 +122,11 @@ async def correct_query(
     result = await chain.ainvoke({"question": question})
 
     if result.has_correction and result.corrections:
-        logger.info(f"查询纠错: '{question}' -> '{result.corrected_query}'")
+        logger.info("查询纠错: '{}' -> '{}'", question, result.corrected_query)
         for c in result.corrections:
-            logger.info(f"  修正: {c}")
+            logger.info("  修正: {}", c)
     else:
-        logger.info(f"查询无需纠错: '{question}'")
+        logger.info("查询无需纠错: '{}'", question)
 
     return result.corrected_query
 
@@ -163,11 +163,11 @@ async def expand_query(
     result = await chain.ainvoke({"question": question})
 
     if result.expanded_terms:
-        logger.info(f"查询扩展: '{question}'")
-        logger.info(f"  扩展词: {', '.join(result.expanded_terms)}")
-        logger.info(f"  扩展后: '{result.expanded_query}'")
+        logger.info("查询扩展: '{}'", question)
+        logger.info("  扩展词: {}", ", ".join(result.expanded_terms))
+        logger.info("  扩展后: '{}'", result.expanded_query)
     else:
-        logger.info(f"查询无需扩展: '{question}'")
+        logger.info("查询无需扩展: '{}'", question)
         return question
 
     return result.expanded_query

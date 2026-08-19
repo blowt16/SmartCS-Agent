@@ -71,7 +71,7 @@ def create_guardrails_node(
             "steps": ["guardrails"],
         }
 
-        logger.info(f"Guardrails Decision Info: {decision_info}")
+        logger.info("Guardrails Decision Info: {}", decision_info)
 
         return decision_info
 

@@ -67,7 +67,7 @@ class ScopeGuard:
         # 1. 检查明确超范围关键词
         for keyword in self.out_of_scope:
             if keyword in query_lower:
-                logger.info(f"经营范围拦截: 命中 '{keyword}'")
+                logger.info("经营范围拦截: 命中 '{}'", keyword)
                 return False, f"超出经营范围（{keyword}）"
 
         # 2. 检查超范围正则

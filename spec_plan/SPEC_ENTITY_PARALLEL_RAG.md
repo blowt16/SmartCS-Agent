@@ -277,7 +277,7 @@ if settings.HYDE_ENABLED:
         if hypo.strip():
             retrieval_queries.append(hypo)
     except Exception as e:
-        logger.warning(f"HyDE 生成失败，跳过: {e}")
+        logger.warning("HyDE 生成失败，跳过: {}", e)
 
 # 对每个检索 query 分别检索（向量 + 混合），按文档 id 合并去重
 merged_results = {}

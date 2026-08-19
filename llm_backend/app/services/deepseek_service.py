@@ -51,7 +51,7 @@ class DeepseekService:
             cached_response = await cache.lookup(messages)
             if cached_response:
                 response_time = time.time() - start_time
-                logger.info(f"Cache hit! Response time: {response_time:.4f} seconds")
+                logger.info("Cache hit! Response time: {:.4f} seconds", response_time)
                 
                 # 模拟流式返回，因为速率太快了
                 async for chunk in self._stream_cached_response(cached_response):
@@ -84,14 +84,14 @@ class DeepseekService:
             await cache.update(messages, complete_response)
             
             response_time = time.time() - start_time
-            logger.info(f"Cache miss. Response time: {response_time:.4f} seconds")
+            logger.info("Cache miss. Response time: {:.4f} seconds", response_time)
             
             # 如果有回调，执行回调
             if on_complete and user_id is not None and conversation_id is not None:
                 await on_complete(user_id, conversation_id, messages, complete_response)
                 
         except Exception as e:
-            logger.error(f"Error in generate_stream: {str(e)}", exc_info=True)
+            logger.error("Error in generate_stream: {}", str(e), exc_info=True)
             error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
 
@@ -105,5 +105,5 @@ class DeepseekService:
             )
             return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Generation error: {str(e)}")
+            logger.error("Generation error: {}", str(e))
             raise 

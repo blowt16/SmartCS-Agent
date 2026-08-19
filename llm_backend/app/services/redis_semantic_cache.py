@@ -43,7 +43,7 @@ class RedisSemanticCache:
                 raise ValueError("Failed to get embedding")
             return embeddings[0]
         except Exception as e:
-            logger.error(f"Error in get_embedding: {str(e)}", exc_info=True)
+            logger.error("Error in get_embedding: {}", str(e), exc_info=True)
             raise
         
     def _get_vector_key(self, message: str) -> str:
@@ -92,10 +92,10 @@ class RedisSemanticCache:
                         hash_id = key.split(":")[-1]
                         await self._remove_cache_item(hash_id)
                         
-                logger.info(f"Cache cleanup completed for prefix {self.prefix}")
+                logger.info("Cache cleanup completed for prefix {}", self.prefix)
                 
             except Exception as e:
-                logger.error(f"Error in cache cleanup: {str(e)}", exc_info=True)
+                logger.error("Error in cache cleanup: {}", str(e), exc_info=True)
                 
             await asyncio.sleep(self.cleanup_interval)
 
@@ -109,7 +109,7 @@ class RedisSemanticCache:
                 f"{self.prefix}:meta:{hash_id}".encode('utf-8')
             )
         except Exception as e:
-            logger.error(f"Error removing cache item: {str(e)}", exc_info=True)
+            logger.error("Error removing cache item: {}", str(e), exc_info=True)
 
     async def _update_metadata(self, message: str):
         """更新缓存项的元数据"""
@@ -128,7 +128,7 @@ class RedisSemanticCache:
             }
             self.redis.set(meta_key, json.dumps(metadata), ex=settings.REDIS_CACHE_EXPIRE)
         except Exception as e:
-            logger.error(f"Error updating metadata: {str(e)}", exc_info=True)
+            logger.error("Error updating metadata: {}", str(e), exc_info=True)
 
     async def lookup(self, messages: List[Dict]) -> Optional[str]:
         """查找缓存的响应"""
@@ -163,13 +163,13 @@ class RedisSemanticCache:
                 if cached_response:
                     # 更新访问元数据
                     await self._update_metadata(user_message)
-                    logger.info(f"Cache hit with similarity: {max_similarity:.4f}")
+                    logger.info("Cache hit with similarity: {:.4f}", max_similarity)
                     return cached_response.decode('utf-8')
                     
             return None
             
         except Exception as e:
-            logger.error(f"Error in lookup: {str(e)}", exc_info=True)
+            logger.error("Error in lookup: {}", str(e), exc_info=True)
             return None
 
     async def update(self, messages: List[Dict], response: str, expire: int = None):
@@ -198,7 +198,7 @@ class RedisSemanticCache:
             }
             self.redis.set(meta_key, json.dumps(metadata), ex=expire)
             
-            logger.info(f"Cache updated for message: {user_message[:50]}...")
+            logger.info("Cache updated for message: {}...", user_message[:50])
             
         except Exception as e:
-            logger.error(f"Error in update: {str(e)}", exc_info=True) 
+            logger.error("Error in update: {}", str(e), exc_info=True)

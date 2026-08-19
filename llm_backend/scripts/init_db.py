@@ -35,7 +35,7 @@ async def init_db():
             ))
         logger.info("Database initialization completed successfully!")
     except Exception as e:
-        logger.error(f"Database initialization failed: {str(e)}")
+        logger.error("Database initialization failed: {}", str(e))
         raise
     finally:
         # 在事件循环关闭前显式释放引擎，避免连接池在 Windows 上的清理报错
@@ -45,7 +45,7 @@ def main():
     try:
         asyncio.run(init_db())
     except Exception as e:
-        logger.error(f"An error occurred: {str(e)}")
+        logger.error("An error occurred: {}", str(e))
 
 if __name__ == "__main__":
     main()

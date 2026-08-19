@@ -51,12 +51,12 @@ class TokenBudgetManager:
 
         allocated = sum(self.budgets.values())
         if allocated > total_budget:
-            logger.warning(f"预算总和 {allocated} 超过总预算 {total_budget}, 自动缩放")
+            logger.warning("预算总和 {} 超过总预算 {}, 自动缩放", allocated, total_budget)
             scale = total_budget / allocated
             for key in self.budgets:
                 self.budgets[key] = int(self.budgets[key] * scale)
 
-        logger.info(f"Token 预算分配: {self.budgets}, 总预算: {total_budget}")
+        logger.info("Token 预算分配: {}, 总预算: {}", self.budgets, total_budget)
 
     def count_tokens(self, text: str) -> int:
         """
@@ -89,7 +89,7 @@ class TokenBudgetManager:
         for key, tokens in actual.items():
             budget = self.budgets.get(key, 0)
             if tokens > budget:
-                logger.warning(f"{key} 超预算: {tokens} > {budget}")
+                logger.warning("{} 超预算: {} > {}", key, tokens, budget)
                 return True
         return False
 
@@ -118,7 +118,7 @@ class TokenBudgetManager:
                 break
             result += sent
 
-        logger.info(f"文本裁剪: {self.count_tokens(text)} -> {self.count_tokens(result)} tokens")
+        logger.info("文本裁剪: {} -> {} tokens", self.count_tokens(text), self.count_tokens(result))
         return result
 
     def get_remaining_budget(self, used: Dict[str, int]) -> int:

@@ -80,7 +80,7 @@ class HallucinationGuard:
 
         supported = sum(1 for c in result.claims if c.is_supported)
         total = len(result.claims) if result.claims else 1
-        logger.info(f"幻觉检测: {total} 声明, {supported} 有支撑, 幻觉率 {result.hallucination_rate:.1%}")
+        logger.info("幻觉检测: {} 声明, {} 有支撑, 幻觉率 {:.1%}", total, supported, result.hallucination_rate)
 
         return result
 
@@ -94,7 +94,7 @@ class HallucinationGuard:
             return fallback
 
         if result.hallucination_rate >= self.threshold:
-            logger.warning(f"幻觉率 {result.hallucination_rate:.1%} 超过阈值，使用降级回答")
+            logger.warning("幻觉率 {:.1%} 超过阈值，使用降级回答", result.hallucination_rate)
             return fallback
 
         return result.corrected_answer or fallback

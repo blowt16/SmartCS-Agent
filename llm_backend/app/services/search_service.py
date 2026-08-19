@@ -68,10 +68,10 @@ class SearchService:
     async def _call_with_tool(self, query: str) -> Dict:
         """调用模型并获取工具调用结果"""
         try:
-            logger.info(f"Calling model with query: {query}")
+            logger.info("Calling model with query: {}", query)
             
 
-            logger.info(f"Messages: {query}")
+            logger.info("Messages: {}", query)
             
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -80,11 +80,11 @@ class SearchService:
                 tool_choice="auto"  # 让模型自己决定是否使用工具
             )
             
-            logger.info(f"Model response: {response.choices[0]}")
+            logger.info("Model response: {}", response.choices[0])
             return response.choices[0]
             
         except Exception as e:
-            logger.error(f"Error in _call_with_tool: {str(e)}", exc_info=True)
+            logger.error("Error in _call_with_tool: {}", str(e), exc_info=True)
             raise
 
     async def generate_stream(
@@ -96,7 +96,7 @@ class SearchService:
     ) -> AsyncGenerator[str, None]:
         """流式生成带搜索功能的回复"""
         try:
-            logger.info(f"Starting search generation for query: {query}")
+            logger.info("Starting search generation for query: {}", query)
             
             # 使用格式化的系统提示
             messages = [
@@ -114,7 +114,7 @@ class SearchService:
 
             # 第一步：获取工具调用
             choice = await self._call_with_tool(messages)
-            logger.info(f"Tool call response: {choice}")
+            logger.info("Tool call response: {}", choice)
             
             # 根据finish_reason决定处理方式
             if choice.finish_reason == "tool_calls":
@@ -122,7 +122,7 @@ class SearchService:
                 tool_calls = choice.message.tool_calls
                 if tool_calls:
                     tool_call = tool_calls[0]
-                    logger.info(f"Processing tool call: {tool_call}")
+                    logger.info("Processing tool call: {}", tool_call)
                     
                     try:
                         # 执行工具调用
@@ -130,7 +130,7 @@ class SearchService:
                             tool_call.function.name,
                             tool_call.function.arguments
                         )
-                        logger.info(f"Got {len(search_results)} search results")
+                        logger.info("Got {} search results", len(search_results))
                         
                         if search_results:
                             # 构建上下文内容
@@ -212,5 +212,5 @@ class SearchService:
                     await on_complete(user_id, conversation_id, [{"role": "user", "content": query}], complete_response)
                 
         except Exception as e:
-            logger.error(f"Error in generate_stream: {str(e)}", exc_info=True)
+            logger.error("Error in generate_stream: {}", str(e), exc_info=True)
             raise

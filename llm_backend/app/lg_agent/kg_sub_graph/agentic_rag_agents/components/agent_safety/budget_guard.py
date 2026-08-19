@@ -69,7 +69,7 @@ class BudgetGuard:
         # 必要调用不阻止，只警告
         if essential:
             if self.essential_calls >= self.config.max_llm_calls:
-                logger.warning(f"必要调用额度接近上限: {node}")
+                logger.warning("必要调用额度接近上限: {}", node)
             return True
 
         # 非必要调用检查预算
@@ -79,11 +79,11 @@ class BudgetGuard:
         )
 
         if non_essential_used >= non_essential_budget:
-            logger.warning(f"非必要调用预算耗尽: {node}, 已用 {non_essential_used}/{non_essential_budget}")
+            logger.warning("非必要调用预算耗尽: {}, 已用 {}/{}", node, non_essential_used, non_essential_budget)
             return False
 
         if self.total_tokens >= self.config.max_total_tokens:
-            logger.warning(f"Token 预算耗尽: {self.total_tokens}/{self.config.max_total_tokens}")
+            logger.warning("Token 预算耗尽: {}/{}", self.total_tokens, self.config.max_total_tokens)
             return False
 
         return True
@@ -92,8 +92,8 @@ class BudgetGuard:
         """记录一次 LLM 调用"""
         self._calls.append(CallRecord(node=node, tokens=tokens, is_essential=essential))
         logger.info(
-            f"LLM 调用: {node}, {tokens} tokens, "
-            f"总 {self.total_calls}/{self.config.max_llm_calls}"
+            "LLM 调用: {}, {} tokens, 总 {}/{}",
+            node, tokens, self.total_calls, self.config.max_llm_calls,
         )
 
     def reset(self):

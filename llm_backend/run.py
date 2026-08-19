@@ -23,7 +23,7 @@ def start_server():
     os.chdir(Path(__file__).parent)
     
     logger.info("Starting server...")
-    logger.info(f"Working directory: {os.getcwd()}")
+    logger.info("Working directory: {}", os.getcwd())
     
     uvicorn.run(
         "main:app",        # 使用模块路径

@@ -63,7 +63,7 @@ class IndexingService:
             user_id = file_info.get('user_id', 0)
             original_name = file_info.get('original_name', os.path.basename(file_path))
 
-            logger.info(f"开始处理文件: {file_path}, 用户ID: {user_id}")
+            logger.info("开始处理文件: {}, 用户ID: {}", file_path, user_id)
 
             # 1. 解析文档
             text = self._parse_document(file_path)
@@ -79,7 +79,7 @@ class IndexingService:
 
             # 3. 分块
             chunks = self.text_splitter.split_text(text)
-            logger.info(f"分块完成: {len(chunks)} 个文本块")
+            logger.info("分块完成: {} 个文本块", len(chunks))
 
             # 4. Embedding
             embeddings = self.embedding_model.encode(
@@ -102,7 +102,7 @@ class IndexingService:
                 session.add_all(rows)
                 await session.commit()
 
-            logger.info(f"入库完成: {len(chunks)} 个文本块已写入 pgvector")
+            logger.info("入库完成: {} 个文本块已写入 pgvector", len(chunks))
 
             return {
                 'original_file_path': file_path,
@@ -112,7 +112,7 @@ class IndexingService:
             }
 
         except Exception as e:
-            logger.error(f"处理文件时发生错误: {str(e)}", exc_info=True)
+            logger.error("处理文件时发生错误: {}", str(e), exc_info=True)
             return {
                 'original_file_path': file_path,
                 'status': 'error',
@@ -141,7 +141,7 @@ class IndexingService:
             }
 
         except Exception as e:
-            logger.error(f"处理目录时发生错误: {str(e)}", exc_info=True)
+            logger.error("处理目录时发生错误: {}", str(e), exc_info=True)
             return {
                 'status': 'error',
                 'error': str(e),

@@ -29,7 +29,7 @@ class ConversationService:
             await db.commit()
             await db.refresh(conversation)
             
-            logger.info(f"Created new conversation {conversation.id} for user {user_id}")
+            logger.info("Created new conversation {} for user {}", conversation.id, user_id)
             return conversation.id
 
     @staticmethod
@@ -48,7 +48,7 @@ class ConversationService:
                 conversation = result.scalar_one_or_none()
                 
                 if not conversation:
-                    logger.error(f"Conversation {conversation_id} not found")
+                    logger.error("Conversation {} not found", conversation_id)
                     return
                     
                 # 查询现有消息数量
@@ -83,9 +83,9 @@ class ConversationService:
                 await db.commit()
                 
         except Exception as e:
-            logger.error(f"Error saving conversation: {str(e)}", exc_info=True)
-            logger.error(f"Error details - user_id: {user_id}, conversation_id: {conversation_id}")
-            logger.error(f"Messages: {messages}")
+            logger.error("Error saving conversation: {}", str(e), exc_info=True)
+            logger.error("Error details - user_id: {}, conversation_id: {}", user_id, conversation_id)
+            logger.error("Messages: {}", messages)
 
     @staticmethod
     async def get_user_conversations(user_id: int) -> List[Dict]:
@@ -113,7 +113,7 @@ class ConversationService:
                 ]
                 
         except Exception as e:
-            logger.error(f"Error getting conversations for user {user_id}: {str(e)}", exc_info=True)
+            logger.error("Error getting conversations for user {}: {}", user_id, str(e), exc_info=True)
             raise
 
     @staticmethod
@@ -152,7 +152,7 @@ class ConversationService:
                 ]
                 
         except Exception as e:
-            logger.error(f"Error getting messages for conversation {conversation_id}: {str(e)}", exc_info=True)
+            logger.error("Error getting messages for conversation {}: {}", conversation_id, str(e), exc_info=True)
             raise
 
     @staticmethod
@@ -172,9 +172,9 @@ class ConversationService:
                 await db.delete(conversation)
                 await db.commit()
                 
-                logger.info(f"已删除会话 {conversation_id} 及其所有消息")
+                logger.info("已删除会话 {} 及其所有消息", conversation_id)
         except Exception as e:
-            logger.error(f"删除会话失败: {str(e)}", exc_info=True)
+            logger.error("删除会话失败: {}", str(e), exc_info=True)
             raise
 
     @staticmethod
@@ -194,7 +194,7 @@ class ConversationService:
                 conversation.title = name
                 await db.commit()
                 
-                logger.info(f"已更新会话 {conversation_id} 的名称为 {name}")
+                logger.info("已更新会话 {} 的名称为 {}", conversation_id, name)
         except Exception as e:
-            logger.error(f"更新会话名称失败: {str(e)}", exc_info=True)
+            logger.error("更新会话名称失败: {}", str(e), exc_info=True)
             raise 

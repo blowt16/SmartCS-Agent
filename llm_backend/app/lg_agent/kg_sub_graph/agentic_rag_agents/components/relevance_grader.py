@@ -93,7 +93,7 @@ async def grade_relevance(
         logger.info("相关性评分已禁用，跳过评分")
         return documents
 
-    logger.info(f"开始相关性评分: query='{query[:50]}...', 共 {len(documents)} 条结果")
+    logger.info("开始相关性评分: query='{}...', 共 {} 条结果", query[:50], len(documents))
 
     # 构造文档摘要（截断太长的内容，避免 prompt 超长）
     doc_summaries = []
@@ -116,7 +116,7 @@ async def grade_relevance(
             "documents": docs_text,
         })
     except Exception as e:
-        logger.warning(f"相关性评分失败，返回全部结果: {e}")
+        logger.warning("相关性评分失败，返回全部结果: {}", e)
         return documents
 
     # 构建评分索引
@@ -133,10 +133,11 @@ async def grade_relevance(
             scored_doc["relevance_score"] = "relevant"
             relevant_docs.append(scored_doc)
         else:
-            logger.debug(f"  文档[{i}] 评为 irrelevant，已过滤")
+            logger.debug("  文档[{}] 评为 irrelevant，已过滤", i)
 
     logger.info(
-        f"相关性评分完成: {len(documents)} 条 -> {len(relevant_docs)} 条 relevant"
+        "相关性评分完成: {} 条 -> {} 条 relevant",
+        len(documents), len(relevant_docs),
     )
 
     return relevant_docs

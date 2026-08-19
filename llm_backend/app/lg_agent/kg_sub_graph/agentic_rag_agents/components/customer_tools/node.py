@@ -81,7 +81,7 @@ class VectorStoreQuery:
 
         docs = [self._to_doc(chunk, score=dist) for chunk, dist in rows]
 
-        logger.info(f"向量检索完成: 返回 {len(docs)} 条结果")
+        logger.info("向量检索完成: 返回 {} 条结果", len(docs))
         return docs
 
     async def get_all_documents(self) -> List[Dict[str, Any]]:
@@ -136,9 +136,9 @@ def create_vector_search_query_node(
                         text_key="text",
                     )
                     hybrid_results = retriever.search(query, top_k=settings.HYBRID_RETRIEVAL_TOP_K, retrieval_top_n=settings.HYBRID_RETRIEVAL_TOP_N)
-                    logger.info(f"混合检索补充了 {len(hybrid_results)} 条文档")
+                    logger.info("混合检索补充了 {} 条文档", len(hybrid_results))
             except Exception as e:
-                logger.warning(f"混合检索失败，跳过: {e}")
+                logger.warning("混合检索失败，跳过: {}", e)
 
             # 3. 合并向量检索结果到 hybrid_results（补充纯语义匹配结果）
             if vector_results:

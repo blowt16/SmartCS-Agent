@@ -61,8 +61,8 @@ def rrf_fuse(
         results.append(doc)
 
     logger.info(
-        f"RRF 融合完成: {len(result_lists)} 路检索, "
-        f"去重后 {len(doc_store)} 个文档, 返回 {len(results)} 条"
+        "RRF 融合完成: {} 路检索, 去重后 {} 个文档, 返回 {} 条",
+        len(result_lists), len(doc_store), len(results),
     )
 
     return results

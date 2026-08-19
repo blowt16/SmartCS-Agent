@@ -95,7 +95,7 @@ class BM25Retriever:
             self._tokenized_corpus.append(tokens)
 
         self._bm25 = BM25Okapi(self._tokenized_corpus)
-        logger.info(f"BM25 索引构建完成，共 {len(self.documents)} 个文档")
+        logger.info("BM25 索引构建完成，共 {} 个文档", len(self.documents))
 
     def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
@@ -128,5 +128,5 @@ class BM25Retriever:
             doc["bm25_rank"] = len(results) + 1
             results.append(doc)
 
-        logger.info(f"BM25 检索完成: query='{query}', 返回 {len(results)} 条结果")
+        logger.info("BM25 检索完成: query='{}', 返回 {} 条结果", query, len(results))
         return results

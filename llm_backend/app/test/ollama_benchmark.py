@@ -134,16 +134,21 @@ class OllamaBenchmark:
         async with aiohttp.ClientSession() as session:
             results = []
             for i in range(num_tests):
-                logger.info(f"执行测试 {i+1}/{num_tests}")
+                logger.info("执行测试 {}/{}", i + 1, num_tests)
                 result = await self.single_request(session)
                 if result["success"]:
                     results.append(result)
                     logger.info(
-                        f"测试 {i+1} 结果:\n"
-                        f"- 生成的token数: {result['eval_count']}\n"
-                        f"- 生成时间: {result['eval_duration_seconds']:.2f}秒\n"
-                        f"- 总时间: {result['total_duration_seconds']:.2f}秒\n"
-                        f"- 每秒生成token数: {result['tokens_per_second']:.2f}"
+                        "测试 {} 结果:\n"
+                        "- 生成的token数: {}\n"
+                        "- 生成时间: {:.2f}秒\n"
+                        "- 总时间: {:.2f}秒\n"
+                        "- 每秒生成token数: {:.2f}",
+                        i + 1,
+                        result["eval_count"],
+                        result["eval_duration_seconds"],
+                        result["total_duration_seconds"],
+                        result["tokens_per_second"],
                     )
                 await asyncio.sleep(2)  # 冷却时间，短时间频繁请求可能导致过载
             
@@ -153,11 +158,11 @@ class OllamaBenchmark:
                 avg_total_time = sum(r["total_duration_seconds"] for r in results) / len(results)
                 avg_tps = sum(r["tokens_per_second"] for r in results) / len(results)
                 
-                logger.info(f"\n{len(results)}次成功测试的平均性能:")
-                logger.info(f"- 平均token数: {avg_tokens:.2f}")
-                logger.info(f"- 平均生成时间: {avg_gen_time:.2f}秒")
-                logger.info(f"- 平均总时间: {avg_total_time:.2f}秒")
-                logger.info(f"- 平均每秒token数: {avg_tps:.2f}")
+                logger.info("\n{}次成功测试的平均性能:", len(results))
+                logger.info("- 平均token数: {:.2f}", avg_tokens)
+                logger.info("- 平均生成时间: {:.2f}秒", avg_gen_time)
+                logger.info("- 平均总时间: {:.2f}秒", avg_total_time)
+                logger.info("- 平均每秒token数: {:.2f}", avg_tps)
                 
                 return {
                     "avg_tokens": avg_tokens,
@@ -169,7 +174,7 @@ class OllamaBenchmark:
 
     async def test_concurrent_requests(self, concurrent_requests: int, total_requests: int):
         """使用信号量测试并发性能"""
-        logger.info(f"开始测试 {concurrent_requests} 并发请求，共 {total_requests} 个请求...")
+        logger.info("开始测试 {} 并发请求，共 {} 个请求...", concurrent_requests, total_requests)
         
         # 控制并发的工具。它的作用是限制同时执行的协程数量，以防止系统过载。
         sem = asyncio.Semaphore(concurrent_requests)
@@ -223,13 +228,13 @@ class OllamaBenchmark:
                 }
                 
                 logger.info("\n并发测试结果:")
-                logger.info(f"- 成功率: {len(successful)}/{total_requests}")
-                logger.info(f"- 总token数: {total_tokens}")
-                logger.info(f"- 平均生成时间: {avg_gen_time:.2f}秒")
-                logger.info(f"- 平均总时间: {avg_total_time:.2f}秒")
-                logger.info(f"- 平均每秒token数: {avg_tps:.2f}")
-                logger.info(f"- 实际总耗时: {actual_time:.2f}秒")
-                logger.info(f"- 系统整体吞吐量: {results['system_throughput']:.2f} tokens/s")
+                logger.info("- 成功率: {}/{}", len(successful), total_requests)
+                logger.info("- 总token数: {}", total_tokens)
+                logger.info("- 平均生成时间: {:.2f}秒", avg_gen_time)
+                logger.info("- 平均总时间: {:.2f}秒", avg_total_time)
+                logger.info("- 平均每秒token数: {:.2f}", avg_tps)
+                logger.info("- 实际总耗时: {:.2f}秒", actual_time)
+                logger.info("- 系统整体吞吐量: {:.2f} tokens/s", results["system_throughput"])
                 
                 return results
             return None
@@ -258,9 +263,9 @@ class OllamaBenchmark:
             
             # 只在资源接近阈值时打印警告
             if cpu_percent > 85:
-                logger.warning(f"CPU 使用率较高: {cpu_percent:.1f}%")
+                logger.warning("CPU 使用率较高: {:.1f}%", cpu_percent)
             if memory_percent > 85:
-                logger.warning(f"内存使用率较高: {memory_percent:.1f}%")
+                logger.warning("内存使用率较高: {:.1f}%", memory_percent)
             
             # GPU 检查
             try:
@@ -286,18 +291,18 @@ class OllamaBenchmark:
                         
                         # 只在 GPU 显存使用率高时打印警告
                         if memory_percent > 85:
-                            logger.warning(f"GPU {int(index)} 显存使用率较高: {memory_percent:.1f}%")
+                            logger.warning("GPU {} 显存使用率较高: {:.1f}%", int(index), memory_percent)
                         
                         if memory_percent > 90:
                             is_healthy = False
                             
             except Exception as e:
-                logger.error(f"获取GPU信息时出错: {e}")
+                logger.error("获取GPU信息时出错: {}", e)
             
             return is_healthy, metrics
             
         except Exception as e:
-            logger.error(f"检查系统状态时出错: {e}")
+            logger.error("检查系统状态时出错: {}", e)
             return False, {}
 
     async def find_max_concurrency(self, start_concurrent: int = 1, max_concurrent: int = 20, 
@@ -325,7 +330,7 @@ class OllamaBenchmark:
                 logger.warning("\n系统资源接近极限，紧急停止")
                 break
             
-            logger.info(f"\n测试并发数: {concurrent}")
+            logger.info("\n测试并发数: {}", concurrent)
             
             # 运行并发测试
             result = await self.test_concurrent_requests(concurrent, requests_per_test)
@@ -346,9 +351,9 @@ class OllamaBenchmark:
             avg_latency = result["average_generation_time"]
             throughput = result["system_throughput"]
             
-            logger.info(f"成功率: {success_rate:.2%}")
-            logger.info(f"平均延迟: {avg_latency:.2f}秒")
-            logger.info(f"系统吞吐量: {throughput:.2f} tokens/s")
+            logger.info("成功率: {:.2%}", success_rate)
+            logger.info("平均延迟: {:.2f}秒", avg_latency)
+            logger.info("系统吞吐量: {:.2f} tokens/s", throughput)
             
             # 更新最优并发数
             if (success_rate >= success_rate_threshold and 
@@ -360,9 +365,9 @@ class OllamaBenchmark:
             # 检查是否应该停止测试
             if (success_rate < success_rate_threshold or 
                 avg_latency > latency_threshold):
-                logger.info(f"\n检测到系统瓶颈:")
-                logger.info(f"- 成功率低于 {success_rate_threshold:.0%}" if success_rate < success_rate_threshold else "")
-                logger.info(f"- 延迟超过 {latency_threshold}秒" if avg_latency > latency_threshold else "")
+                logger.info("\n检测到系统瓶颈:")
+                logger.info("- 成功率低于 {:.0%}" if success_rate < success_rate_threshold else "", success_rate_threshold)
+                logger.info("- 延迟超过 {}秒" if avg_latency > latency_threshold else "", latency_threshold)
                 break
             
             # 每次测试后检查系统状态并等待恢复
@@ -374,8 +379,8 @@ class OllamaBenchmark:
                 await asyncio.sleep(5)   # 正常等待
         
         logger.info("\n=== 并发测试结果总结 ===")
-        logger.info(f"最优并发数: {optimal_concurrent}")
-        logger.info(f"最大吞吐量: {max_throughput:.2f} tokens/s")
+        logger.info("最优并发数: {}", optimal_concurrent)
+        logger.info("最大吞吐量: {:.2f} tokens/s", max_throughput)
         
         return {
             "optimal_concurrent": optimal_concurrent,
@@ -389,21 +394,21 @@ class OllamaBenchmark:
             # 修改为 GET 请求
             async with session.get(f"{self.url}/api/tags") as response:
                 if response.status != 200:
-                    logger.error(f"获取模型列表失败: {response.status}")
+                    logger.error("获取模型列表失败: {}", response.status)
                     return False
                     
                 data = await response.json()
                 models = data.get("models", [])
-                logger.info(f"已安装的模型: {[m['name'] for m in models]}")
+                logger.info("已安装的模型: {}", [m["name"] for m in models])
                 return any(m["name"] == self.model for m in models)
         except Exception as e:
-            logger.error(f"检查模型时出错: {e}")
+            logger.error("检查模型时出错: {}", e)
             return False
 
     async def pull_model(self, session: aiohttp.ClientSession) -> bool:
         """拉取模型"""
         try:
-            logger.info(f"开始拉取模型: {self.model}")
+            logger.info("开始拉取模型: {}", self.model)
             
             async with session.post(
                 f"{self.url}/api/pull",
@@ -413,7 +418,7 @@ class OllamaBenchmark:
                 }
             ) as response:
                 if response.status != 200:
-                    logger.error(f"拉取模型失败: {response.status}")
+                    logger.error("拉取模型失败: {}", response.status)
                     return False
                 
                 # 读取流式响应
@@ -430,12 +435,12 @@ class OllamaBenchmark:
                             completed = data.get("completed", 0)
                             if total > 0:
                                 progress = (completed / total) * 100
-                                logger.info(f"下载进度: {progress:.1f}% ({completed}/{total} bytes)")
+                                logger.info("下载进度: {:.1f}% ({}/{} bytes)", progress, completed, total)
                         else:
-                            logger.info(f"模型拉取状态: {status}")
+                            logger.info("模型拉取状态: {}", status)
                             
                         if status == "success":
-                            logger.info(f"模型 {self.model} 拉取成功")
+                            logger.info("模型 {} 拉取成功", self.model)
                             return True
                             
                     except json.JSONDecodeError:
@@ -444,7 +449,7 @@ class OllamaBenchmark:
                 return False
                 
         except Exception as e:
-            logger.error(f"拉取模型时出错: {e}")
+            logger.error("拉取模型时出错: {}", e)
             return False
 
     async def ensure_model_available(self) -> bool:
@@ -452,17 +457,17 @@ class OllamaBenchmark:
         async with aiohttp.ClientSession() as session:
             # 检查模型是否存在
             if await self.check_model_exists(session):
-                logger.info(f"模型 {self.model} 已存在")
+                logger.info("模型 {} 已存在", self.model)
                 return True
                 
             # 拉取模型
-            logger.info(f"模型 {self.model} 不存在，开始拉取")
+            logger.info("模型 {} 不存在，开始拉取", self.model)
             return await self.pull_model(session)
 
     async def unload_model(self, session: aiohttp.ClientSession) -> bool:
         """通过设置 keep_alive=0 来卸载模型"""
         try:
-            logger.info(f"准备卸载模型: {self.model}")
+            logger.info("准备卸载模型: {}", self.model)
             
             # 发送一个 keep_alive=0 的请求来卸载模型
             async with session.post(
@@ -475,14 +480,14 @@ class OllamaBenchmark:
                 }
             ) as response:
                 if response.status == 200:
-                    logger.info(f"模型 {self.model} 已卸载")
+                    logger.info("模型 {} 已卸载", self.model)
                     return True
                 else:
-                    logger.error(f"卸载模型失败: {response.status}")
+                    logger.error("卸载模型失败: {}", response.status)
                     return False
                     
         except Exception as e:
-            logger.error(f"卸载模型时出错: {e}")
+            logger.error("卸载模型时出错: {}", e)
             return False
 
 async def main():
@@ -532,7 +537,7 @@ async def main():
         with open(filename, "w", encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         
-        logger.info(f"\n测试结果已保存到: {filename}")
+        logger.info("\n测试结果已保存到: {}", filename)
 
     finally:
 

@@ -24,7 +24,7 @@ class OllamaService:
         try:
             # 根据不同的用途使用不同的模型
             model = self.reason_model
-            logger.info(f"Using model: {model}")
+            logger.info("Using model: {}", model)
             
             full_response = []
             async with aiohttp.ClientSession() as session:
@@ -50,7 +50,7 @@ class OllamaService:
                                     content = json.dumps(content, ensure_ascii=False)
                                     yield f"data: {content}\n\n"
                             except json.JSONDecodeError as e:
-                                logger.error(f"JSON decode error: {str(e)}")
+                                logger.error("JSON decode error: {}", str(e))
                                 continue
 
             # 如果有回调函数，调用它
@@ -59,7 +59,7 @@ class OllamaService:
                 await on_complete(user_id, conversation_id, messages, complete_response)
 
         except Exception as e:
-            logger.error(f"Stream generation error: {str(e)}")
+            logger.error("Stream generation error: {}", str(e))
             error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
             raise
@@ -84,5 +84,5 @@ class OllamaService:
                     return result["message"]["content"]
 
         except Exception as e:
-            logger.error(f"Generation error: {str(e)}")
+            logger.error("Generation error: {}", str(e))
             raise 

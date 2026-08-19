@@ -121,14 +121,14 @@ async def chat_endpoint(request: ChatMessage):
             media_type="text/event-stream"
         )
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        logger.error("Chat error: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/reason")
 async def reason_endpoint(request: ReasonRequest):
     """推理接口"""
     try:
-        logger.info(f"Processing reasoning request for user {request.user_id}")
+        logger.info("Processing reasoning request for user {}", request.user_id)
         reasoner = LLMFactory.create_reasoner_service()
         
         log_structured("reason_request", {
@@ -143,7 +143,7 @@ async def reason_endpoint(request: ReasonRequest):
         )
     
     except Exception as e:
-        logger.error(f"Reasoning error for user {request.user_id}: {str(e)}", exc_info=True)
+        logger.error("Reasoning error for user {}: {}", request.user_id, str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/search")
@@ -224,14 +224,14 @@ async def upload_file(
         return result
         
     except Exception as e:
-        logger.error(f"Upload failed for user {user_id}: {str(e)}", exc_info=True)
+        logger.error("Upload failed for user {}: {}", user_id, str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat-rag")
 async def rag_chat_endpoint(request: RAGChatRequest):
     """基于文档的问答接口"""
     try:
-        logger.info(f"Processing RAG chat request for user {request.user_id}")
+        logger.info("Processing RAG chat request for user {}", request.user_id)
         rag_chat_service = RAGChatService()
         
         return StreamingResponse(
@@ -242,7 +242,7 @@ async def rag_chat_endpoint(request: RAGChatRequest):
             media_type="text/event-stream"
         )
     except Exception as e:
-        logger.error(f"RAG chat error for user {request.user_id}: {str(e)}", exc_info=True)
+        logger.error("RAG chat error for user {}: {}", request.user_id, str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/conversations")
@@ -252,7 +252,7 @@ async def create_conversation(request: CreateConversationRequest):
         conversation_id = await ConversationService.create_conversation(request.user_id)
         return {"conversation_id": conversation_id}
     except Exception as e:
-        logger.error(f"Error creating conversation: {str(e)}", exc_info=True)
+        logger.error("Error creating conversation: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/user/{user_id}")
@@ -262,7 +262,7 @@ async def get_user_conversations(user_id: int):
         conversations = await ConversationService.get_user_conversations(user_id)
         return conversations
     except Exception as e:
-        logger.error(f"Error getting conversations: {str(e)}", exc_info=True)
+        logger.error("Error getting conversations: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/messages")
@@ -274,7 +274,7 @@ async def get_conversation_messages(conversation_id: int, user_id: int):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Error getting messages: {str(e)}", exc_info=True)
+        logger.error("Error getting messages: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/conversations/{conversation_id}")
@@ -285,7 +285,7 @@ async def delete_conversation(conversation_id: int):
         await conversation_service.delete_conversation(conversation_id)
         return {"message": "会话已删除"}
     except Exception as e:
-        logger.error(f"删除会话失败: {str(e)}", exc_info=True)
+        logger.error("删除会话失败: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/conversations/{conversation_id}/name")
@@ -299,7 +299,7 @@ async def update_conversation_name(
         await conversation_service.update_conversation_name(conversation_id, request.name)
         return {"message": "会话名称已更新"}
     except Exception as e:
-        logger.error(f"更新会话名称失败: {str(e)}", exc_info=True)
+        logger.error("更新会话名称失败: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 class SaveMessagesRequest(BaseModel):
@@ -319,7 +319,7 @@ async def save_messages(request: SaveMessagesRequest):
         )
         return {"message": "消息已保存"}
     except Exception as e:
-        logger.error(f"保存消息失败: {str(e)}", exc_info=True)
+        logger.error("保存消息失败: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/langgraph/query")
@@ -356,7 +356,7 @@ async def langgraph_query(
             with open(image_path, "wb") as f:
                 f.write(content)
             
-            logger.info(f"Saved image {new_filename} for user {user_id}")
+            logger.info("Saved image {} for user {}", new_filename, user_id)
         
         # 使用conversation_id作为thread_id，如果没有提供则创建新的
         thread_id = conversation_id if conversation_id else new_uuid()
@@ -375,7 +375,7 @@ async def langgraph_query(
             if thread_id:
                 state_history = await graph.aget_state(thread_config)
                 if state_history:
-                    logger.info(f"Found existing conversation state for thread_id: {thread_id}")
+                    logger.info("Found existing conversation state for thread_id: {}", thread_id)
                     # 检查是否有未处理的中断（human-in-the-loop）
                     if (state_history.values and
                         hasattr(state_history, 'tasks') and state_history.tasks):
@@ -384,7 +384,7 @@ async def langgraph_query(
                                 has_pending_interrupt = True
                                 break
         except Exception as e:
-            logger.warning(f"Error retrieving state: {e}. Starting with fresh state.")
+            logger.warning("Error retrieving state: {}. Starting with fresh state.", e)
 
         # 准备输入状态
         if has_pending_interrupt:
@@ -401,11 +401,11 @@ async def langgraph_query(
                         yield f"data: {content_json}\n\n"
                     elif c.additional_kwargs.get("tool_calls"):
                         tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                        logger.debug(f"Tool call: {tool_data}")
+                        logger.debug("Tool call: {}", tool_data)
         else:
             # 新会话或正常多轮对话，始终用 InputState 输入
             # LangGraph 通过 thread_id 自动维护上下文状态
-            logger.info("Processing with InputState" + (f" (continuing thread {thread_id})" if state_history else " (new thread)"))
+            logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
             input_state = InputState(messages=query)
 
             async def process_stream():
@@ -419,7 +419,7 @@ async def langgraph_query(
                         yield f"data: {content_json}\n\n"
                     elif c.additional_kwargs.get("tool_calls"):
                         tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                        logger.debug(f"Tool call: {tool_data}")
+                        logger.debug("Tool call: {}", tool_data)
 
                 # 处理中断情况
                 state = await graph.aget_state(thread_config)
@@ -439,7 +439,7 @@ async def langgraph_query(
         return response
         
     except Exception as e:
-        logger.error(f"LangGraph query error: {str(e)}", exc_info=True)
+        logger.error("LangGraph query error: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/langgraph/resume")
@@ -467,7 +467,7 @@ async def langgraph_resume(request: LangGraphResumeRequest):
                 # 工具调用单独处理，不发送给前端
                 elif c.additional_kwargs.get("tool_calls"):
                     tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                    logger.debug(f"Tool call: {tool_data}")
+                    logger.debug("Tool call: {}", tool_data)
         
         return StreamingResponse(
             process_resume(),
@@ -475,7 +475,7 @@ async def langgraph_resume(request: LangGraphResumeRequest):
         )
         
     except Exception as e:
-        logger.error(f"LangGraph resume error: {str(e)}", exc_info=True)
+        logger.error("LangGraph resume error: {}", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload/image")
@@ -515,12 +515,12 @@ async def upload_image(
             "upload_time": timestamp
         }
         
-        logger.info(f"Image uploaded: {image_info}")
+        logger.info("Image uploaded: {}", image_info)
         
         return image_info
         
     except Exception as e:
-        logger.error(f"Image upload failed for user {user_id}: {str(e)}", exc_info=True)
+        logger.error("Image upload failed for user {}: {}", user_id, str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # 最后挂载静态文件，并确保使用绝对路径

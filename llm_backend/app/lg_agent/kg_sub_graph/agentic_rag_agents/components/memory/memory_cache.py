@@ -90,12 +90,12 @@ class MemoryCache:
         try:
             self.redis.set(key, json.dumps(data, ensure_ascii=False), ex=self.ttl)
             logger.info(
-                f"摘要已缓存: {conversation_id}, "
-                f"已压缩 {compressed_turns}/{total_turns} 轮, TTL={self.ttl}s"
+                "摘要已缓存: {}, 已压缩 {}/{} 轮, TTL={}s",
+                conversation_id, compressed_turns, total_turns, self.ttl,
             )
             return True
         except Exception as e:
-            logger.error(f"缓存摘要失败: {e}")
+            logger.error("缓存摘要失败: {}", e)
             return False
 
     def load_summary(self, conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -109,17 +109,17 @@ class MemoryCache:
         try:
             raw = self.redis.get(key)
             if raw is None:
-                logger.info(f"摘要缓存未命中: {conversation_id}")
+                logger.info("摘要缓存未命中: {}", conversation_id)
                 return None
 
             data = json.loads(raw)
             logger.info(
-                f"摘要缓存命中: {conversation_id}, "
-                f"已压缩 {data.get('compressed_turns', 0)}/{data.get('total_turns', 0)} 轮"
+                "摘要缓存命中: {}, 已压缩 {}/{} 轮",
+                conversation_id, data.get("compressed_turns", 0), data.get("total_turns", 0),
             )
             return data
         except Exception as e:
-            logger.error(f"加载摘要缓存失败: {e}")
+            logger.error("加载摘要缓存失败: {}", e)
             return None
 
     def delete_summary(self, conversation_id: str) -> bool:
@@ -127,10 +127,10 @@ class MemoryCache:
         key = self._make_key(conversation_id)
         try:
             self.redis.delete(key)
-            logger.info(f"摘要缓存已删除: {conversation_id}")
+            logger.info("摘要缓存已删除: {}", conversation_id)
             return True
         except Exception as e:
-            logger.error(f"删除摘要缓存失败: {e}")
+            logger.error("删除摘要缓存失败: {}", e)
             return False
 
     def reconstruct_summary(

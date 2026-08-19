@@ -185,9 +185,9 @@ async def context_aware_rewrite(
     })
 
     if result.is_context_dependent:
-        logger.info(f"上下文感知改写: '{current_query}' → '{result.rewritten_query}'")
+        logger.info("上下文感知改写: '{}' → '{}'", current_query, result.rewritten_query)
     else:
-        logger.info(f"当前问题不依赖上下文，保持原样: '{current_query}'")
+        logger.info("当前问题不依赖上下文，保持原样: '{}'", current_query)
 
     return result.rewritten_query
 
@@ -217,9 +217,9 @@ async def generate_multi_queries(
     # 原始问题放在头部，保证不会被丢掉
     all_queries = [question] + result.queries
 
-    logger.info(f"多查询生成完成，共 {len(all_queries)} 个版本:")
+    logger.info("多查询生成完成，共 {} 个版本:", len(all_queries))
     for i, q in enumerate(all_queries):
-        logger.info(f"  Query[{i}]: {q}")
+        logger.info("  Query[{}]: {}", i, q)
 
     return all_queries
 
@@ -257,8 +257,8 @@ async def generate_hypothetical_answer(
     result = await chain.ainvoke({"question": question})
     hypothetical_answer = result.content
 
-    logger.info(f"HyDE 假设性答案生成完成 ({len(hypothetical_answer)}字):")
-    logger.info(f"  {hypothetical_answer[:100]}...")
+    logger.info("HyDE 假设性答案生成完成 ({}字):", len(hypothetical_answer))
+    logger.info("  {}...", hypothetical_answer[:100])
 
     return hypothetical_answer
 
@@ -284,7 +284,7 @@ async def rewrite_query(
     Returns:
         RewrittenQuery 对象，包含所有改写结果
     """
-    logger.info(f"开始查询改写，原始问题: {question}")
+    logger.info("开始查询改写，原始问题: {}", question)
 
     # 并行执行，节省一轮 LLM 调用的时间
     multi_queries, hypothetical_answer = await asyncio.gather(
@@ -303,5 +303,5 @@ async def rewrite_query(
         enhanced_query=enhanced_query,
     )
 
-    logger.info(f"查询改写完成")
+    logger.info("查询改写完成")
     return result
