@@ -1,8 +1,8 @@
 # LangGraph 客服 Agent Context 工程完整实施规格
 
 > **用途**: 多轮 RAG-Agent 智能客服，解决长会话 Token 膨胀、上下文溢出、工具消息累积、服务重启会话恢复、对话归档  
-> **技术栈**: LangGraph + RedisSaver + SQLite 业务库  
-> **状态**: 设计规格，待实施  
+> **技术栈**: LangGraph + PostgresSaver（已落地）+ PostgreSQL 业务库（现状）；本文方案原选型 RedisSaver + SQLite 业务库，**Checkpointer 选型已被 PostgresSaver 替代**（见 §3 更新）  
+> **状态**: 设计规格，待实施（前置条件 Checkpointer 已就绪：PostgresSaver + PostgreSQL）  
 > **关联文档**: [[PROJECT_ANALYSIS.md]] [[PLAN_GraphRAG_TO_StandardRAG.md]]
 
 ---
@@ -133,16 +133,16 @@ class CustomerServiceAgentState(MessagesState):
 ### 禁止事项
 
 ```
-❌ 生产禁止使用 InMemorySaver（当前项目使用中）
+❌ 生产禁止使用 InMemorySaver
    → 进程重启状态全部丢失，仅用于本地调试
 ```
 
-### 生产选型
+### 生产选型（✅ 已落地：PostgresSaver）
 
-| 方案 | 适用场景 | 本项目推荐 |
+| 方案 | 适用场景 | 本项目现状 |
 |------|---------|:--------:|
-| **RedisSaver** | 已有 Redis 基础设施 | ✅ 推荐 |
-| PostgresSaver | 已有 PostgreSQL | 备选 |
+| **RedisSaver** | 已有 Redis 基础设施 | 曾为推荐方案，因 PostgreSQL 为单一持久化来源而弃用 |
+| PostgresSaver | 已有 PostgreSQL | ✅ **已落地**（`lg_builder.py` AsyncPostgresSaver + psycopg 连接池，lifespan 初始化） |
 
 ### RedisSaver 配置要点
 
@@ -171,15 +171,16 @@ graph.astream(input, config={"configurable": {"thread_id": "session-123"}})
 | 数据恢复 | Key 过期后 Agent 状态丢失，走 SQLite 业务库降级兜底 |
 | 禁止业务查询 | Redis 内部序列化数据不做业务查询，业务查询全部走 SQLite |
 
-### 与当前项目对比
+### 与当前项目对比（现状已更新）
 
 ```
-当前：MemorySaver（进程内存）
-  → 重启丢失
-  → 无持久化
-  → 仅本地调试
+当前：PostgresSaver（PostgreSQL，已落地）
+  → 服务重启无损恢复
+  → 检查点与业务数据同一持久化来源（PostgreSQL）
+  → 表：checkpoints / checkpoint_blobs / checkpoint_writes / checkpoint_migrations
+  → 注意：子图禁用 checkpointer（Send map-reduce 序列化兼容，__pregel_checkpointer=None）
 
-目标：RedisSaver
+目标（本文档原方案）：RedisSaver
   → 服务重启无损恢复
   → Redis RDB/AOF 持久化
   → 生产可用
@@ -200,7 +201,7 @@ SQLite 职责：
   ❌ 正常会话恢复不回填 state（仅故障降级）
 ```
 
-**适配说明**：SQLite 适合单机部署，多并发高并发场景后续迁移 MySQL/PostgreSQL。当前项目已有 MySQL，可直接复用现有 `conversations` + `messages` 表结构，无需新建 SQLite。
+**适配说明**：SQLite 适合单机部署，多并发高并发场景后续迁移 MySQL/PostgreSQL。现状业务库为 **PostgreSQL**（`conversations` + `messages` 表已存在），若实施本文档方案无需新建 SQLite，直接复用现有表结构。
 
 ### 表结构设计
 
@@ -292,7 +293,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_log (
 | WAL 模式 | `PRAGMA journal_mode=WAL;` 提升并发读写 |
 | 事务控制 | 避免长事务，及时 commit |
 | JSON 字段 | 直接存 TEXT，读取时 `json.loads()` |
-| 单机限制 | 多实例部署需迁移 MySQL/PostgreSQL（当前项目已有 MySQL，可直接复用） |
+| 单机限制 | 多实例部署需迁移 MySQL/PostgreSQL（现状业务库即 PostgreSQL，无需迁移） |
 
 ---
 
@@ -534,13 +535,13 @@ sequenceDiagram
 
 | 编号 | 约束 | 严重程度 | 当前项目状态 |
 |:----:|------|:--------:|:-----------:|
-| 1 | ❌ 生产禁止使用 `InMemorySaver` | 🔴 致命 | **正在使用，必须改** |
+| 1 | ❌ 生产禁止使用 `InMemorySaver` | 🔴 致命 | **已解决**（PostgresSaver 已落地，见 §3） |
 | 2 | ❌ 不要修改/删除 `state["messages"]` 原始消息 | 🔴 致命 | 当前未修改 |
-| 3 | ❌ 不要解析 RedisSaver 内部序列化数据做业务查询 | 🟡 重要 | 当前用 MemorySaver |
-| 4 | ❌ 不要把摘要作为消息追加进 messages 列表 | 🟡 重要 | 当前以 SystemMessage 追加 |
-| 5 | ❌ 不要将 SQLite 业务库对话记录回填 state 做正常会话恢复 | 🟡 重要 | N/A |
+| 3 | ❌ 不要解析 Checkpointer 内部序列化数据做业务查询 | 🟡 重要 | 当前用 PostgresSaver（已符合） |
+| 4 | ❌ 不要把摘要作为消息追加进 messages 列表 | 🟡 重要 | 当前以 SystemMessage 追加（待改） |
+| 5 | ❌ 不要将业务库对话记录回填 state 做正常会话恢复 | 🟡 重要 | N/A |
 | 6 | ✅ 阈值不要贴近模型最大窗口 | 🟡 重要 | 当前 TokenBudget=8000 偏低 |
-| 7 | ✅ SQLite 适合单机，多实例需迁移 MySQL | 🟢 注意 | 项目已有 MySQL |
+| 7 | ✅ 业务库单机限制，多实例需迁移 | 🟢 注意 | 业务库已为 PostgreSQL（conversations/messages 表） |
 
 ---
 
@@ -620,12 +621,12 @@ flowchart TB
 
 | 维度 | 当前实现 | 目标规格 | 改造动作 |
 |------|---------|---------|---------|
-| **Checkpointer** | `MemorySaver()` | `RedisSaver` | `lg_builder.py` 替换 checkpointer |
+| **Checkpointer** | `PostgresSaver`（已落地，lg_builder.py AsyncPostgresSaver） | 持久化 Checkpointer（原方案 RedisSaver） | 已就绪，无需替换 |
 | **记忆管理** | 三层轮次驱动 + Token 预算 | Token 阈值驱动 compact（单层摘要） | 重写 `MemoryManager` → `CompactManager` |
 | **摘要存储** | SystemMessage 插入 messages | 独立 `state.summary` 字段 | State 增加字段，Prompt 注入逻辑调整 |
 | **Tool 消息过滤** | 未处理 | compact 时过滤老旧 tool 消息 | compact 流程中增加过滤器 |
-| **业务库** | MySQL (只存 user→conversation→message) | 增加 tool_log | 新增 `agent_tool_log` 表 |
-| **会话恢复** | MemorySaver 重启丢失 | RedisSaver 持久化恢复 + SQLite 降级 | 恢复逻辑实现 |
+| **业务库** | PostgreSQL (只存 user→conversation→message) | 增加 tool_log | 新增 `agent_tool_log` 表 |
+| **会话恢复** | PostgresSaver 持久化恢复 | 持久化恢复（原方案 SQLite 降级） | 恢复逻辑实现（Checkpointer 已满足） |
 | **RAG 上下文** | 查询预处理管道（5步） | 保持不变 + 与 compact 解耦 | 无冲突，独立运行 |
 | **State 字段** | 当前 `AgentState` | 增加 `summary`/`biz_context`/`need_transfer_human` | State 扩展 |
 

@@ -1,8 +1,8 @@
 # 实体识别与并行 RAG 检索流程设计规格
 
 > **用途**: 深入设计纯 RAG 链路的两个核心机制——**实体识别**（LLM 实现，与任务拆解合并为一次调用）与**多实体并行 RAG 检索流程**（子 query → HyDE → 向量/混合检索 → 合并去重 → 相关性评分 → 汇总回答），含数据模型、提示词规则、回退策略、验证方案与未来演进路线  
-> **技术栈**: LangGraph 0.3.x（Send map-reduce）+ ChromaDB/pgvector + SentenceTransformer + DeepSeek/Ollama  
-> **状态**: 设计规格，待审查后实施  
+> **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector + Redis + DeepSeek/Ollama + qwen text-embedding-v4（向量统一走 DashScope API；SentenceTransformer 仅 LOCAL 分支预留）  
+> **状态**: 设计规格，待审查后实施（结构前提已满足：阶段 0 单例化与阶段 3 子图简化均已落地）  
 > **关联文档**: [[SPEC_ENTITY_PARALLEL_RAG.md]]（主线改造规格，本文为其 §4.2/§4.4 的机制展开）[[PLAN_GraphRAG_TO_StandardRAG.md]] [[PROJECT_ANALYSIS.md]]
 
 ---
@@ -160,11 +160,11 @@ resolved_question（入口指代消解后，含原始意图）
 ```
 子 query (task)
   → ① HyDE（可选，开关控制）
-  → ② 向量检索（ChromaDB/pgvector top_k）
+  → ② 向量检索（pgvector top_k）
   → ③ 混合检索（BM25 + 向量 RRF，语料来自向量库全量文档缓存）
   → ④ 按文档 id 合并去重（多路结果）
   → ⑤ 相关性评分（LLM 批量一次调用，过滤 irrelevant）
-  → ⑥ records 打包 → cyphers 累加器
+  → ⑥ records 打包 → searches 累加器（现状状态字段名，早期设计稿写作 cyphers）
 ```
 
 ### 5.1 ① HyDE（每个子 query 独立生成）
@@ -354,9 +354,9 @@ N 个子任务 → N 个 `customer_tools` 实例并行执行（LangGraph superst
 
 | 维度 | 现状 | 本方案 |
 |---|---|---|
-| 实体识别 | 独立 LLM 调用 + Neo4j 链接，结果仅打日志 | 并入 planner 一次调用，结果驱动拆解 |
+| 实体识别 | 已删除（lg_builder 中无实体识别步骤，Neo4j 已整体移除） | 并入 planner 一次调用，结果驱动拆解 |
 | 拆解触发 | LLM 自由决定（planner 提示词无实体约束） | entity_count ≥ 2 确定性触发 |
-| HyDE | 预处理阶段对整句一次，拼接进 enhanced_query | 分支内每个子 query 独立生成，独立检索合并 |
-| 工具选择 | LLM 在 2 个工具中选择 | 单工具直连，无选择调用 |
+| HyDE | 预处理阶段对整句一次，拼接进 enhanced_query（现状仍如此） | 分支内每个子 query 独立生成，独立检索合并 |
+| 工具选择 | 单工具直连已实现（阶段 3 落地，无选择调用） | 保持直连 |
 | 汇总输入 | 预处理后的 question | original_question（对比意图完整） |
-| 资源 | 每请求重建向量库客户端/模型/语料 | 单例 + 语料缓存 |
+| 资源 | 向量库客户端已单例（阶段 0）；**语料缓存未实施**（每请求仍全量拉取，node.py:158） | 单例 + 语料缓存 |

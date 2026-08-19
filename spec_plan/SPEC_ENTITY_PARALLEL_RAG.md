@@ -1,8 +1,8 @@
 # 多实体并行 RAG 检索链路重构实施规格
 
 > **用途**: 去除 Cypher 查询、纯 RAG 检索后，重构查询预处理与子图链路——入口指代消解（正则门控 + LLM）+ 实体识别与任务拆解合并为一次 LLM 调用 + 多实体并行 RAG 检索（HyDE 内置于检索工具），并配套 LLM 调用成本与响应时间优化  
-> **技术栈**: LangGraph 0.3.x + FastAPI + ChromaDB/pgvector + Redis + DeepSeek/Ollama  
-> **状态**: 设计规格（方案已敲定），待人工审查后实施  
+> **技术栈**: LangGraph 0.3.x + FastAPI + pgvector + Redis + DeepSeek/Ollama + qwen text-embedding-v4（向量统一走 DashScope API，无本地 SentenceTransformer 主链路）  
+> **状态**: **部分实施** —— 阶段 0（customer_tools 单例化）与阶段 3（子图简化/删除 Cypher 遗留）已落地；阶段 1（入口指代消解）/2（planner 实体识别+拆解）/4（HyDE 入内 + original_question）/5（语义缓存前置）及阶段 3 的"模块级单次编译 + 预处理管道缩减"未实施  
 > **关联文档**: [[PROJECT_ANALYSIS.md]] [[PLAN_GraphRAG_TO_StandardRAG.md]] [[SPEC_CONTEXT_ENGINEERING.md]] [[docs/SHOP_SAGE_ANALYSIS.md]]
 
 ---
@@ -27,10 +27,10 @@
 
 1. 已去除 Cypher 查询（Text2Cypher/预定义 Cypher 模板），知识库检索收敛为**纯 RAG**（向量检索 + 混合检索 + 相关性评分），Neo4j 不再参与查询链路
 2. 现状一次知识库查询需 **10~13 次 LLM 调用**（路由、改写、纠错、实体识别、扩展、Multi-Query+HyDE、guardrails、planner、tool_selection、相关性评分、summarize），其中多处已失去存在意义（实体识别结果仅打日志、单工具场景的 LLM 工具选择、与顶层路由重复的 guardrails）
-3. 已确认的运行期问题（详见 docs/SHOP_SAGE_ANALYSIS.md P0 清单）：
-   - `tool_selection` 无工具可选时 `Send("error_tool_selection")` 到未注册节点（`tool_selection/node.py:128` vs `multi_tool.py:107-113`）
-   - `tool_preference="predefined_cypher"` 快路径传空参数恒失败（`lg_builder.py:444-446` + `predefined_cypher/node.py:53-57`）
-   - `customer_tools` 每请求重建 ChromaDB client + SentenceTransformer + 全量拉取文档（`customer_tools/node.py:126-151`）
+3. 已确认的运行期问题（详见 docs/SHOP_SAGE_ANALYSIS.md P0 清单，**均已随阶段 0/3 落地修复**）：
+   - `tool_selection` 无工具可选时 `Send("error_tool_selection")` 到未注册节点 —— 已随 tool_selection 组件删除
+   - `tool_preference="predefined_cypher"` 快路径传空参数恒失败 —— 已随 predefined_cypher 组件删除
+   - `customer_tools` 每请求重建 ChromaDB client + SentenceTransformer + 全量拉取文档 —— 客户端已单例化（`get_vector_store()`，node.py:104-119）；**"每请求全量拉取文档（语料缓存）"仍存在**（node.py:158）
 
 ### 1.2 目标
 
@@ -54,6 +54,8 @@
 ## 2. 现状链路与问题
 
 ### 2.1 现状调用链（一次 graphrag-query）
+
+> ⚠️ 本节描述写于阶段 3 落地前。当前实际结构：guardrails / tool_selection / predefined_cypher / Neo4j 实体识别**均已删除**（阶段 3 完成），子图为 `planner → Send → customer_tools → summarize → final_answer`；预处理 5 步与"指代消解在路由之后"的描述仍准确。
 
 ```
 analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count）
@@ -109,7 +111,7 @@ analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count
   → SSE 流式输出
 ```
 
-**关键结构变化**：删除 guardrails、tool_selection、predefined_cypher 三个节点；planner 直连 customer_tools；保留 map-reduce `Send` 并行结构与 `cyphers` 累加器（`state.py:67`）。
+**关键结构变化**：删除 guardrails、tool_selection、predefined_cypher 三个节点；planner 直连 customer_tools；保留 map-reduce `Send` 并行结构与 `searches` 累加器（现状状态字段名为 `searches`，`state.py:62`；早期设计稿写作 `cyphers`）。**本段描述的子图结构已落地**（multi_tool.py:68-78），剩余未实施项见阶段 3 备注。
 
 ---
 
@@ -366,13 +368,13 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 > 每阶段独立可验证、可提交。提交信息遵循项目规范 `[类型] 简述`，推送 `origin main`（远程无 dev 分支）。
 
-### 阶段 0：前置修复——customer_tools 单例化（并行前提）
+### 阶段 0：前置修复——customer_tools 单例化（并行前提）✅ 已落地
 
 **Files**: `llm_backend/app/lg_agent/kg_sub_graph/agentic_rag_agents/components/customer_tools/node.py`
 
-- [ ] **Step 1**: 新增 `get_vector_store()` 模块级懒加载单例（代码见 §4.4），节点内两处 `VectorStoreQuery()` 替换
-- [ ] **Step 2**: 验证：连续两次请求日志中 `VectorStoreQuery.__init__` 只出现一次；`uv run python -c "from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools.node import get_vector_store; a=get_vector_store(); b=get_vector_store(); assert a is b"`
-- [ ] **Step 3**: 提交 `[fix] customer_tools 向量库客户端单例化，消除每请求重建 ChromaDB/Embedding 开销`
+- [x] **Step 1**: 新增 `get_vector_store()` 模块级懒加载单例（代码见 §4.4，实现含 `threading.Lock` 双重检查，node.py:104-119），节点内 `VectorStoreQuery()` 替换
+- [x] **Step 2**: 验证：连续两次请求日志中 `VectorStoreQuery.__init__` 只出现一次；`uv run python -c "from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools.node import get_vector_store; a=get_vector_store(); b=get_vector_store(); assert a is b"`
+- [x] **Step 3**: 提交 `[fix] customer_tools 向量库客户端单例化，消除每请求重建 ChromaDB/Embedding 开销`
 
 ### 阶段 1：入口指代消解
 
@@ -400,16 +402,18 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
   - 构造拆解失败（临时改低 temperature 或用模糊问题观察）→ 回退单分支
 - [ ] **Step 5**: 提交 `[feat] planner 合并实体识别与任务拆解为一次调用，含一致性校验与单分支回退`
 
-### 阶段 3：子图简化 + lg_builder 清理 + 删 Cypher 遗留
+### 阶段 3：子图简化 + lg_builder 清理 + 删 Cypher 遗留 ◐ 大部分已落地
 
 **Files**: `.../workflows/multi_agent/multi_tool.py`、`.../workflows/multi_agent/edges.py`、`llm_backend/app/lg_agent/lg_builder.py`；删除清单见 §4.3
 
-- [ ] **Step 1**: `multi_tool.py` 删 guardrails / predefined_cypher / tool_selection 节点与对应边，START 直连 planner；签名简化为 `create_multi_tool_workflow(llm)`
-- [ ] **Step 2**: `edges.py` 的 `map_reduce_planner_to_tool_selection` 改 Send 到 `"customer_tools"`（代码见 §4.3）
-- [ ] **Step 3**: `lg_builder.py` create_research_plan 清理（清单见 §4.3）：删 tool_preference 三分支、tool_schemas、cypher_dict、scope_description、neo4j 连接、实体识别调用；`input_state` 增加 `original_question`（见 §4.5）；子图改为模块级单次编译
-- [ ] **Step 4**: 删除 §4.3 文件清单（独立提交）
-- [ ] **Step 5**: 验证：`uv run python -c "import llm_backend.app.lg_agent.lg_builder"` 无导入错误；端到端查询走通；日志无 guardrails/tool_selection/predefined_cypher 记录；`error_tool_selection` 未注册 bug 随代码删除
-- [ ] **Step 6**: 提交 `[feat] 子图简化：去 guardrails/tool_selection/predefined_cypher，planner 直连 RAG 检索节点` + `[fix] 删除 Cypher 遗留组件与死代码`
+- [x] **Step 1**: `multi_tool.py` 删 guardrails / predefined_cypher / tool_selection 节点与对应边，START 直连 planner；签名简化为 `create_multi_tool_workflow(llm)`（multi_tool.py:68-78）
+- [x] **Step 2**: `edges.py` 的 `map_reduce_planner_to_tool_selection` 改 Send 到 `"customer_tools"`（edges.py:10-22）
+- [◐] **Step 3**: `lg_builder.py` create_research_plan 清理：删 tool_preference 三分支、tool_schemas、cypher_dict、scope_description、neo4j 连接、实体识别调用 **已完成**；`input_state` 增加 `original_question`（见 §4.5）与**子图改为模块级单次编译**（lg_builder.py:416-418 目前仍每请求 compile）**未实施**
+- [x] **Step 4**: 删除 §4.3 文件清单（组件目录已删除）
+- [x] **Step 5**: 验证：`uv run python -c "import llm_backend.app.lg_agent.lg_builder"` 无导入错误；端到端查询走通；日志无 guardrails/tool_selection/predefined_cypher 记录；`error_tool_selection` 未注册 bug 随代码删除
+- [x] **Step 6**: 提交 `[feat] 子图简化：去 guardrails/tool_selection/predefined_cypher，planner 直连 RAG 检索节点` + `[fix] 删除 Cypher 遗留组件与死代码`
+
+> **后续实施注意**：Step 3 剩余两项（`original_question` 透传属阶段 4、模块级单次编译）实施前请先核对现状代码；§2.1 现状链路图已标注过期。
 
 ### 阶段 4：HyDE 移入 customer_tools + 原 query 透传
 
@@ -433,7 +437,7 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 ### 阶段 6：收尾验证与文档
 
 - [ ] **Step 1**: 按 §7 验证方案跑完整场景清单，记录调用次数对比表
-- [ ] **Step 2**: 更新 README 与 docs/PROJECT_ANALYSIS.md 中已过期的 Cypher/GraphRAG 描述
+- [ ] **Step 2**: 更新 README、docs/PROJECT_ANALYSIS.md 与本规格文档状态行中已过期的 Cypher/GraphRAG 描述（本项目当前已执行至该步的 spec 状态同步，后续步骤按 §7 验证后继续）
 - [ ] **Step 3**: 提交 `[docs] 同步纯 RAG 链路改造后的文档描述`
 
 ---

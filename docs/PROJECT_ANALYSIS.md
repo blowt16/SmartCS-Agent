@@ -49,7 +49,7 @@ graph TB
 
     subgraph "LLM 服务层"
         D1[DeepSeek V3<br/>主对话/推理/路由]
-        D2[EmbeddingProvider<br/>local/ollama/qwen 三后端<br/>bge-m3 1024 维]
+        D2[EmbeddingProvider<br/>qwen text-embedding-v4 API<br/>1024 维（local/ollama 分支保留）]
         D3[Qwen-VL (qwen-vl-max)<br/>图片分析 Vision]
     end
 
@@ -87,14 +87,14 @@ graph TB
 | **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理、相关性评分 |
 | **本地 LLM** | Ollama | - | 可切换的本地 LLM 替代方案 |
 | **文档检索** | pgvector | 0.5+ | 向量表 document_chunks（HNSW 索引），标准 RAG 索引管道 |
-| **Embedding** | EmbeddingProvider | local/ollama/qwen | 统一向量接口（bge-m3，1024 维），后端可切换 |
-| **本地 Embedding** | sentence-transformers | bge-m3 | 混合检索与向量入库的本地向量编码 |
+| **Embedding** | EmbeddingProvider | qwen text-embedding-v4 | 统一向量接口（DashScope API，1024 维，默认 qwen；local/ollama 分支保留） |
+| **Embedding 通道** | DashScope OpenAI-compatible API | text-embedding-v4 | 索引/检索/混合检索/语义缓存统一走 qwen API（aiohttp，无本地模型主链路） |
 | **向量缓存** | Redis | 7 Alpine | 语义缓存（余弦相似度 ≥ 0.90 命中） |
 | **关系数据库** | PostgreSQL | 16（pgvector 镜像） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | **LLM SDK** | OpenAI SDK (AsyncOpenAI) | - | 兼容 DeepSeek API |
 | **LangChain** | langchain-core/deepseek/ollama | - | LLM 抽象层，结构化输出 |
 | **前端** | Vue | 编译静态 dist | 聊天 UI 界面（非主要重点） |
-| **部署** | Docker + Docker Compose | - | 3 服务（PostgreSQL(pgvector)/Redis/App）一键编排 |
+| **部署** | Docker + Docker Compose | - | 2 基础服务（PostgreSQL(pgvector)/Redis）；App 应用本地运行（uvicorn/run.py） |
 | **搜索** | SerpAPI | - | Function Calling 联网搜索 |
 | **图片处理** | Pillow (PIL) | - | 上传图片压缩/格式转换 |
 | **异步 HTTP** | aiohttp | - | 视觉 API 异步调用 |
@@ -200,9 +200,8 @@ SmartCS-Agent/
 │       │               ├── memory/         # 三层记忆管理器
 │       │               ├── agent_safety/   # 护栏（Scope/Budget/Timeout/Hallucination）
 │       │               ├── query_rewriting/# 查询预处理管道
-│       │               ├── guardrails/     # 业务边界护栏
 │       │               ├── planner/        # 任务分解
-│       │               └── tool_selection/ # 工具选择
+│       │               └── hybrid_retrieval/ # 混合检索（BM25 + 向量 RRF）
 │       ├── models/                     # SQLAlchemy 模型
 │       │   ├── conversation.py
 │       │   ├── message.py
@@ -217,7 +216,7 @@ SmartCS-Agent/
 │   ├── download_datasets.py           # 下载电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 对话数据集
 ├── chat.html                          # 独立聊天页面
-├── docker-compose.yml                 # 4 服务编排
+├── docker-compose.yml                 # 2 基础服务编排（PostgreSQL/Redis，App 本地运行）
 ├── Dockerfile                         # Python 3.13-slim 镜像（uv 安装锁定依赖）
 ├── pyproject.toml                     # Python 依赖清单（uv 管理）
 ├── uv.lock                            # 依赖锁定文件
@@ -293,7 +292,7 @@ sequenceDiagram
 
 **核心机制**:
 
-- **向量存储**: 用户消息 → EmbeddingProvider（bge-m3，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`
+- **向量存储**: 用户消息 → EmbeddingProvider（qwen text-embedding-v4，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`
 - **相似度计算**: 余弦相似度 `cos(θ) = A·B / (|A|·|B|)`
 - **自动清理**: 异步任务按 LRU 策略清理超量缓存
 - **元数据追踪**: 访问次数、创建时间、最后访问时间
@@ -329,9 +328,8 @@ stateDiagram-v2
         }
 
         state MultiToolWorkflow {
-            [*] --> Guardrails: 护栏检查
-            Guardrails --> Planner: 任务分解
-            Planner --> VectorSearch: 向量检索
+            [*] --> Planner: 任务分解
+            Planner --> VectorSearch: 向量检索（Send 并行）
             VectorSearch --> Summarize: 结果汇总
             Summarize --> FinalAnswer: 最终回答
             FinalAnswer --> [*]
@@ -350,19 +348,18 @@ stateDiagram-v2
 
 ### 4.5 Multi-Tool 工作流 (`workflows/multi_agent/multi_tool.py`)
 
-子图结构，实现知识库查询的核心编排：
+子图结构，实现知识库查询的核心编排（guardrails/tool_selection/predefined_cypher 节点已于子图简化中删除）：
 
 ```
-Guardrails → Planner → 向量检索（pgvector）→ Summarize → FinalAnswer
+Planner → Send 并行 → 向量检索（pgvector）→ Summarize → FinalAnswer
 ```
 
 各环节职责：
 
 | 环节 | 流程 |
 |------|------|
-| Guardrails | LLM 范围检查，越界直接返回"不相关" |
-| Planner | LLM 任务分解为独立子任务，并发发送到检索节点 |
-| 向量检索 | VectorStoreQuery 查询 pgvector → 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
+| Planner | LLM 任务分解为独立子任务，Send map-reduce 并发派发到检索节点 |
+| 向量检索 | VectorStoreQuery 查询 pgvector（qwen 向量）→ 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
 | Summarize | 汇总多路检索结果，生成客服风格回答 |
 | FinalAnswer | 组装最终输出 + 会话历史记录 |
 
@@ -371,7 +368,7 @@ Guardrails → Planner → 向量检索（pgvector）→ Summarize → FinalAnsw
 ```mermaid
 flowchart TB
     Q["用户查询"] --> BM25["BM25 关键词检索<br/>精确匹配型号/编号"]
-    Q --> VEC["向量语义检索<br/>sentence-transformers 编码<br/>余弦相似度匹配"]
+    Q --> VEC["向量语义检索<br/>qwen text-embedding-v4 API 编码<br/>余弦相似度匹配"]
     BM25 --> RRF["RRF 倒数排名融合<br/>score = Σ 1/(k+rank)"]
     VEC --> RRF
     RRF --> TOPK["Top-K 融合结果"]
@@ -532,23 +529,20 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>create_research_plan"] --> B["构建 Multi-Tool 子图<br/>Guardrails → Planner → 向量检索<br/>→ Summarize → FinalAnswer"]
+    A["进入节点<br/>create_research_plan"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
     A --> P["查询预处理管道<br/>（BudgetGuard 预算控制）"]
     P --> P1["① 上下文改写（必要）<br/>多轮代词消解 / 主语补全"]
     P1 --> P2["② 查询纠错（非必要）<br/>错别字修正"]
     P2 --> P3["③ 查询扩展（非必要）<br/>同义词补充"]
     P3 --> P4["④ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
     P4 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
-    R --> S1["Guardrails 范围检查"]
-    S1 -->|"end"| S1A["直接返回「暂无此商品」"]
-    S1 -->|"planner"| S2["Planner 任务分解<br/>Send 并发派发子任务"]
+    R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
     S2 --> S3["向量检索（每子任务）<br/>pgvector 余弦 Top-K"]
     S3 --> S4["混合检索<br/>BM25 + 向量 RRF 融合"]
     S4 --> S5["LLM 相关性评分过滤"]
     S5 --> S6["Summarize 结果汇总<br/>客服风格生成"]
     S6 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
     R -->|"超时"| S1B["降级回答<br/>「抱歉，系统处理超时，请稍后再试」"]
-    S1A --> OUT["返回 {messages: [AIMessage(answer)]}"]
     S1B --> OUT
     S7 --> OUT
     OUT --> END["SSE 流式返回前端"]
@@ -622,7 +616,7 @@ flowchart TD
   → 文档解析 (PyPDF2 / python-docx / TXT)
   → 文本清洗
   → RecursiveCharacterTextSplitter 分块 (500/50)
-  → Embedding (EmbeddingProvider, bge-m3 1024 维)
+  → Embedding (EmbeddingProvider, qwen text-embedding-v4 API 1024 维, 分批 ≤10 条/请求)
   → pgvector 入库 (document_chunks 表, HNSW 索引)
 ```
 
@@ -650,7 +644,7 @@ class Router(TypedDict):
 **创新点**: 不是简单的 BM25+向量双路检索，而是一个**4 步闭环**：
 
 1. **BM25 精确匹配** (型号 "X1-Pro")
-2. **向量语义匹配** (sentence-transformers 本地编码)
+2. **向量语义匹配** (qwen text-embedding-v4 API 编码)
 3. **RRF 倒数排名融合** (不依赖绝对分数，数学上更鲁棒)
 4. **LLM 逐条相关性评分** (relevant/irrelevant 二值判断)
 
@@ -888,26 +882,25 @@ class ChatMessage(BaseModel):
 
 ```mermaid
 graph TB
-    subgraph "Docker Network: smartcs-agent_default"
-        APP["smartcs-agent-app<br/>uvicorn :8000<br/>Python 3.13-slim"]
+    subgraph "Docker Network: smartcs-agent_default（仅基础服务）"
         PG["smartcs-agent-postgres<br/>pgvector/pgvector:pg16 :5432<br/>healthcheck: pg_isready"]
         REDIS["smartcs-agent-redis<br/>Redis 7-alpine :6379<br/>healthcheck: redis-cli ping"]
+    end
+
+    subgraph "本地运行（非 Docker）"
+        APP["应用：uvicorn main:app :8000<br/>Python 3.13（run.py 启动）"]
     end
 
     subgraph "Volumes"
         V1["pg_data"]
         V2["redis_data"]
-        V4["app_logs"]
-        V5["app_uploads"]
     end
 
     Browser -->|":8000"| APP
-    APP -->|"DB_HOST=postgres"| PG
-    APP -->|"REDIS_HOST=redis"| REDIS
+    APP -->|"DB_HOST=localhost"| PG
+    APP -->|"REDIS_HOST=localhost"| REDIS
     PG --- V1
     REDIS --- V2
-    APP --- V4
-    APP --- V5
 ```
 
 ### 11.2 启动流程
@@ -917,7 +910,7 @@ sequenceDiagram
     participant DC as Docker Compose
     participant M as PostgreSQL
     participant R as Redis
-    participant A as App
+    participant A as App (本地)
 
     DC->>M: 启动 PostgreSQL(pgvector) 容器
     M->>M: pg_isready (每10s)
@@ -927,9 +920,8 @@ sequenceDiagram
     R->>R: redis-cli ping (每10s)
     R-->>DC: healthy ✓
 
-    DC->>A: 所有依赖就绪，启动 App
-    A->>A: python -m scripts.init_db (建表 + pgvector 扩展 + HNSW 索引)
-    A->>A: uvicorn main:app --host 0.0.0.0 --port 8000
+    A->>A: cd llm_backend && python -m scripts.init_db (建表 + pgvector 扩展 + HNSW 索引)
+    A->>A: python run.py（Windows 事件循环补丁 + uvicorn main:app --reload :8000）
     A-->>DC: 服务就绪 ✓
 ```
 

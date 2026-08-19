@@ -1,5 +1,11 @@
 # GraphRAG → 标准 RAG 改造实施计划
 
+> **状态**: ✅ **已完成归档**（2026-08 前全部落地）。与计划的三处系统性偏差，后续改造已按实际方案演进：
+> 1. **向量库**：计划选 ChromaDB，实际落地 **pgvector**（PostgreSQL 16 + pgvector 扩展，`document_chunks` 表）
+> 2. **Embedding**：计划用 SiliconFlow/bge-m3 或本地 Ollama bge-m3，实际为 **qwen text-embedding-v4**（DashScope API，`embedding_provider.py` 统一 Provider）
+> 3. **依赖管理**：计划改 `requirements.txt`，实际已迁 **pyproject.toml + uv.lock**（无 requirements.txt）
+> 另外 Neo4j 知识图谱（Text2Cypher/PredefinedCypher）在本文档之后被**整体删除**（纯 RAG 收敛，见 SPEC_ENTITY_PARALLEL_RAG.md 阶段 3）；`kg_tools_list.py` 与 `tool_selection/` 组件已随子图简化删除。
+
 ## Context
 
 ### 为什么要做这个改造
@@ -22,8 +28,8 @@ SmartCS-Agent 的核心业务场景是**智能家居电商客服**，用户问�
 - ✅ 消除 GraphRAG 依赖（80+ 源码文件、`graphrag` pip 包）
 - ✅ 事实查询效果持平（向量检索 + 混合检索 + 相关性评分不受影响）
 - ✅ 降低维护复杂度
-- ✅ 保留现有的 Neo4j 知识图谱（Text2Cypher/PredefinedCypher 不受影响）
-- ✅ 保留现有的混合检索（BM25 + 向量 + RRF）、相关性评分、语义缓存
+- ✅ 保留现有的 Neo4j 知识图谱（Text2Cypher/PredefinedCypher 不受影响）—— ⚠️ 已过期：Neo4j/Text2Cypher/PredefinedCypher 已在后续纯 RAG 收敛中整体删除（见头部归档说明）
+- ✅ 保留现有的混合检索（BM25 + 向量 + RRF）、相关性评分、语义缓存—— 混合检索/相关性评分仍在；语义缓存仍在但仅服务 /api/chat（未接入 /api/langgraph/query）
 
 ---
 

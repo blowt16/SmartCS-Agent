@@ -2,8 +2,8 @@
 
 > **用途**: 解决多轮对话中指代/省略导致语义缓存命中率塌陷的问题  
 > **技术栈**: Redis + Embedding 向量 + LLM 指代消解 + 规则引擎  
-> **状态**: 设计规格，待实施  
-> **关联文档**: [[PROJECT_ANALYSIS.md]] [[SPEC_CONTEXT_ENGINEERING.md]]
+> **状态**: 设计规格，待实施。**前置条件未满足**：现状缓存实现存在三项已知缺陷需先修复（见 SPEC_ENTITY_PARALLEL_RAG.md §4.6/阶段 5）——① 同步 `redis` 客户端阻塞事件循环（redis_semantic_cache.py:2,27）；② `lookup` 用 `keys()` 全量扫描（:77,144）；③ `__init__` 内 `asyncio.create_task(self._auto_cleanup())` 任务泄漏（:36）。主链路向量模型已为 qwen text-embedding-v4（bge-m3 仅 ollama/local 分支）。  
+> **关联文档**: [[PROJECT_ANALYSIS.md]] [[SPEC_CONTEXT_ENGINEERING.md]] [[SPEC_ENTITY_PARALLEL_RAG.md]]
 
 ---
 
@@ -111,8 +111,8 @@ except (TimeoutError, LLMError):
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │  LLM 后端     │    │  消解模块     │    │  Embedding   │
-│ (DeepSeek/   │◄───│  (独立单元)   │───►│  (bge-m3/    │
-│  Ollama/...) │    │              │    │  qwen/...)   │
+│ (DeepSeek/   │◄───│  (独立单元)   │───►│  (qwen/      │
+│  Ollama/...) │    │              │    │  bge-m3 分支) │
 └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
