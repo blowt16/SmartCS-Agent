@@ -182,7 +182,9 @@ SmartCS-Agent/
 │       │   ├── deepseek_service.py      # DeepSeek + 语义缓存
 │       │   ├── ollama_service.py        # Ollama 备选
 │       │   ├── search_service.py        # SerpAPI 联网搜索
-│       │   ├── redis_semantic_cache.py  # Redis 语义缓存
+│       │   ├── redis_semantic_cache.py  # Redis 语义缓存（asyncio + ZSET 索引 + 分级指代消解）
+│       │   ├── pronoun_detector.py      # 指代检测器（三层规则引擎，缓存/入口共用门控）
+│       │   ├── pronoun_resolver.py      # 指代消解器（LLM 补全，temperature=0，失败降级）
 │       │   ├── conversation_service.py  # 会话 CRUD
 │       │   └── indexing_service.py      # 标准 RAG 索引构建（解析→分块→pgvector 入库）
 │       ├── lg_agent/                     # LangGraph Agent 层
@@ -270,14 +272,25 @@ sequenceDiagram
     participant User as 用户请求
     participant Service as DeepseekService
     participant Cache as RedisSemanticCache
+    participant Detect as 指代检测器(规则)
+    participant Resolver as 指代消解器(LLM)
     participant Embed as EmbeddingProvider
     participant LLM as DeepSeek API
 
     User->>Service: 发送消息
     Service->>Cache: lookup(messages)
-    Cache->>Embed: 获取最后用户消息向量
+    Cache->>Detect: 分级指代检测
+    alt 纯语气词（"好的"）
+        Cache-->>Service: None（不查不写）
+    else 含指代/省略（"那个有货吗"）
+        Cache->>Resolver: LLM 消解 → 完整问题
+        Resolver-->>Cache: "扫地机器人X1有货吗"
+    else 完整问题（80%）
+        Cache->>Cache: 原样透传（零开销）
+    end
+    Cache->>Embed: 消解后消息向量
     Embed-->>Cache: 1024 维向量
-    Cache->>Cache: 遍历所有缓存向量<br/>计算余弦相似度
+    Cache->>Cache: ZSET 索引遍历<br/>计算余弦相似度
     alt 相似度 ≥ 0.90 (命中)
         Cache-->>Service: 返回缓存响应
         Service-->>User: 模拟流式返回
@@ -292,10 +305,13 @@ sequenceDiagram
 
 **核心机制**:
 
-- **向量存储**: 用户消息 → EmbeddingProvider（qwen text-embedding-v4，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`
+- **向量存储**: 用户消息 → 分级指代消解（规则门控，仅 15% 含指代消息调 LLM，失败降级透传）→ EmbeddingProvider（qwen text-embedding-v4，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`（key 基于**消解后**消息生成，保证 lookup/update 同源命中）
 - **相似度计算**: 余弦相似度 `cos(θ) = A·B / (|A|·|B|)`
-- **自动清理**: 异步任务按 LRU 策略清理超量缓存
+- **索引结构**: 按用户分桶的 ZSET `{prefix}:index`（member=hash_id, score=last_access），替代 `keys()` 全库扫描；存量键首次访问时 scan_iter 一次性重建
+- **客户端**: `redis.asyncio` 异步客户端（消除事件循环阻塞）；实例按 (prefix, user_id) 池化，每个用户仅一个清理任务（`start_cleanup()` 幂等启动）
+- **自动清理**: 后台任务按 last_access 升序淘汰超量缓存（ZSET 排序）
 - **元数据追踪**: 访问次数、创建时间、最后访问时间
+- **开关**: `RESOLVE_ENABLED=false` 完全退化为原始行为（一键回滚）
 
 ### 4.4 LangGraph Agent 路由器 (`app/lg_agent/lg_builder.py`)
 
@@ -423,14 +439,13 @@ flowchart LR
 
 ### 4.9 查询预处理管道
 
-4 步管道式查询增强，在进入 Multi-Tool 工作流之前完成：
+3 步管道式查询增强，在进入 Multi-Tool 工作流之前完成（指代消解已前置到系统入口，图内不再重复处理）：
 
 | 步骤 | 组件 | 必要性 | 功能 |
 |------|------|--------|------|
-| 1 | `context_aware_rewrite` | **必要** | 多轮对话补全（代词消解、主语补全） |
-| 2 | `correct_query` | 非必要 | 错别字修正（"扫第"→"扫地"） |
-| 3 | `expand_query` | 非必要 | 同义词扩展（"灯泡"→"LED灯"） |
-| 4 | `rewrite_query` (Multi-Query+HyDE) | 非必要 | 多查询生成 + 假设文档嵌入 |
+| 1 | `correct_query` | 非必要 | 错别字修正（"扫第"→"扫地"） |
+| 2 | `expand_query` | 非必要 | 同义词扩展（"灯泡"→"LED灯"） |
+| 3 | `rewrite_query` (Multi-Query+HyDE) | 非必要 | 多查询生成 + 假设文档嵌入 |
 
 ---
 
@@ -468,16 +483,20 @@ flowchart TD
 **关键说明**:
 
 1. **入口三态**：同一端点根据 thread_id 区分新会话 / 多轮续聊 / 中断恢复（human-in-the-loop）
-2. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
-3. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
-4. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
+2. **入口前置指代消解**：多轮代词/省略（"那个有货吗"）在 `graph.astream` 前完成改写（规则门控 + LLM 补全），首条消息无历史直接透传；图内意图识别与检索拿到的均为完整问题
+3. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
+4. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
+5. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
 
 ### 5.2 意图路由决策流程
 
 ```mermaid
 flowchart TD
     Q["用户输入"]
+    RESOLVE["入口指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
     SG["ScopeGuard<br/>关键词预检"]
+    Q --> RESOLVE
+    RESOLVE --> SG
     SG -->|不通过| GEN["general-query<br/>回复: 超出经营范围"]
     SG -->|通过| ROUTER["LLM 路由器<br/>4路分类+复杂度评估"]
 
@@ -525,17 +544,16 @@ flowchart TD
 
 ### 5.5 graphrag-query 知识库查询意图运行流程
 
-节点 `create_research_plan`：先跑 4 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。
+节点 `create_research_plan`：先跑 3 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。指代消解（多轮代词/主语补全）已前置到系统入口（main.py `/api/langgraph/query`，图执行前完成），进入本节点的 query 已是完整问题。
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>create_research_plan"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
+    A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
     A --> P["查询预处理管道<br/>（BudgetGuard 预算控制）"]
-    P --> P1["① 上下文改写（必要）<br/>多轮代词消解 / 主语补全"]
-    P1 --> P2["② 查询纠错（非必要）<br/>错别字修正"]
-    P2 --> P3["③ 查询扩展（非必要）<br/>同义词补充"]
-    P3 --> P4["④ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
-    P4 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
+    P --> P1["① 查询纠错（非必要）<br/>错别字修正"]
+    P1 --> P2["② 查询扩展（非必要）<br/>同义词补充"]
+    P2 --> P3["③ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
+    P3 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
     R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
     S2 --> S3["向量检索（每子任务）<br/>pgvector 余弦 Top-K"]
     S3 --> S4["混合检索<br/>BM25 + 向量 RRF 融合"]
@@ -603,10 +621,12 @@ flowchart TD
 ### 7.2 语义缓存存储
 
 ```
-用户问题 → EmbeddingProvider → Redis:
-  {prefix}:vec:{md5}  → JSON 向量
+用户问题 → 分级指代消解 → EmbeddingProvider → Redis:
+  {prefix}:vec:{md5}  → JSON 向量（md5 基于消解后消息）
   {prefix}:resp:{md5} → 回复文本
   {prefix}:meta:{md5} → 访问元数据
+  {prefix}:index      → ZSET 有序索引（member=hash_id, score=last_access）
+                        替代 keys() 全库扫描；cleanup 按 score 升序淘汰
 ```
 
 ### 7.3 标准 RAG 索引管道
@@ -684,17 +704,18 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 **工程细节**:
 
 - 按用户隔离缓存 (`prefix:user_id:...`)
-- LRU 自动清理 + 访问次数统计
+- **分级指代消解**：三层规则引擎（显性指代 / 省略主语 / 纯语气词）先过滤，80% 完整问题零开销透传、15% 含指代消息才调 LLM 补全（temperature=0 保证确定性、2s 超时失败降级透传）、纯语气词不查不写避免污染
+- **lookup/update 同源消解**：缓存 key 基于消解后消息 MD5，保证"那个有货吗"与"扫地机器人X1有货吗"命中同一缓存
+- **ZSET 有序索引** + `redis.asyncio` 异步客户端 + 实例池化（消除 keys 全库扫描与事件循环阻塞）
+- LRU 自动清理（ZSET score 排序）+ 访问次数统计
 - 模拟流式返回保持前端体验一致
-- 异步任务自动维护，不阻塞请求
 
 ### 8.5 🌟 查询预处理管道 + 预算控制
 
-**创新点**: 4 步查询增强 + 每步 LLM 调用前检查 Token 预算，实现**成本可控的质量增强**：
+**创新点**: 3 步查询增强 + 每步 LLM 调用前检查 Token 预算，实现**成本可控的质量增强**（指代消解已前置系统入口，不占管道预算）：
 
 | 步骤 | 必要性 | 原因 |
 |------|--------|------|
-| 上下文改写 | **必要** | 多轮对话代词消解是刚需 |
 | 查询纠错 | 非必要 | 大多数场景下正确率已高 |
 | 查询扩展 | 非必要 | 扩展覆盖面但有额外成本 |
 | Multi-Query+HyDE | 非必要 | 质量提升显著但 Token 消耗大 |
