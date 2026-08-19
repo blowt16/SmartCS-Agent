@@ -468,9 +468,16 @@ async def create_research_plan(
     }
 
     # ⑥ 超时保护：包装工作流调用，30 秒超时返回降级回答
+    # 子图禁用 checkpointer（__pregel_checkpointer=None）：
+    #   langgraph 0.3.25 + PostgresSaver 下子图 Send(map-reduce) 的 checkpoint 序列化
+    #   会抛 "Object of type Send is not JSON serializable"（已最小复现）；
+    #   子图纯 RAG 检索无中断/恢复需求，会话记忆由主图 checkpoint 承担。
     timeout = TimeoutGuard(timeout_seconds=30)
     response = await timeout.wrap(
-        multi_tool_workflow.ainvoke(input_state),
+        multi_tool_workflow.ainvoke(
+            input_state,
+            config={"configurable": {"__pregel_checkpointer": None}},
+        ),
         fallback={"answer": "抱歉，系统处理超时，请稍后再试。"},
         conversation_id=conversation_id or "",
     )
