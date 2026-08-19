@@ -26,7 +26,6 @@ import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
-from langgraph.types import Command
 import json
 
 
@@ -89,11 +88,6 @@ class LangGraphRequest(BaseModel):
     user_id: int
     conversation_id: Optional[str] = None
     image: Optional[UploadFile] = None
-
-class LangGraphResumeRequest(BaseModel):
-    query: str
-    user_id: int
-    conversation_id: str
 
 
 @app.get("/health")
@@ -368,65 +362,33 @@ async def langgraph_query(
             }
         }
         
-        # 获取当前线程状态
+        # 获取当前线程状态（用于判断是延续线程还是新线程）
         state_history = None
-        has_pending_interrupt = False
         try:
             if thread_id:
                 state_history = await graph.aget_state(thread_config)
                 if state_history:
                     logger.info("Found existing conversation state for thread_id: {}", thread_id)
-                    # 检查是否有未处理的中断（human-in-the-loop）
-                    if (state_history.values and
-                        hasattr(state_history, 'tasks') and state_history.tasks):
-                        for task in state_history.tasks:
-                            if task.interrupts:
-                                has_pending_interrupt = True
-                                break
         except Exception as e:
             logger.warning("Error retrieving state: {}. Starting with fresh state.", e)
 
-        # 准备输入状态
-        if has_pending_interrupt:
-            # 有人工确认中断等待回复，使用 resume 继续
-            logger.info("Resuming from interrupt")
-            async def process_stream():
-                async for c, metadata in graph.astream(
-                    Command(resume=query),
-                    stream_mode="messages",
-                    config=thread_config
-                ):
-                    if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
-                        content_json = json.dumps(c.content, ensure_ascii=False)
-                        yield f"data: {content_json}\n\n"
-                    elif c.additional_kwargs.get("tool_calls"):
-                        tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                        logger.debug("Tool call: {}", tool_data)
-        else:
-            # 新会话或正常多轮对话，始终用 InputState 输入
-            # LangGraph 通过 thread_id 自动维护上下文状态
-            logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
-            input_state = InputState(messages=query)
+        # 新会话或正常多轮对话，始终用 InputState 输入
+        # LangGraph 通过 thread_id 自动维护上下文状态
+        logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
+        input_state = InputState(messages=query)
 
-            async def process_stream():
-                async for c, metadata in graph.astream(
-                    input=input_state,
-                    stream_mode="messages",
-                    config=thread_config
-                ):
-                    if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
-                        content_json = json.dumps(c.content, ensure_ascii=False)
-                        yield f"data: {content_json}\n\n"
-                    elif c.additional_kwargs.get("tool_calls"):
-                        tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                        logger.debug("Tool call: {}", tool_data)
-
-                # 处理中断情况
-                state = await graph.aget_state(thread_config)
-                if len(state) > 0 and len(state[-1]) > 0:
-                    if len(state[-1][0].interrupts) > 0:
-                        interrupt_json = json.dumps({"interruption": True, "conversation_id": thread_id})
-                        yield f"data: {interrupt_json}\n\n"
+        async def process_stream():
+            async for c, metadata in graph.astream(
+                input=input_state,
+                stream_mode="messages",
+                config=thread_config
+            ):
+                if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
+                    content_json = json.dumps(c.content, ensure_ascii=False)
+                    yield f"data: {content_json}\n\n"
+                elif c.additional_kwargs.get("tool_calls"):
+                    tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
+                    logger.debug("Tool call: {}", tool_data)
 
         response = StreamingResponse(
             process_stream(),
@@ -440,42 +402,6 @@ async def langgraph_query(
         
     except Exception as e:
         logger.exception("LangGraph query error: {}", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/langgraph/resume")
-async def langgraph_resume(request: LangGraphResumeRequest):
-    """继续执行LangGraph流程"""
-    try:
-        log_structured("langgraph_resume", {
-            "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
-            "query": request.query[:200],
-        })
-        
-        # 使用会话ID作为线程ID
-        thread_config = {"configurable": {"thread_id": request.conversation_id}}
-        
-        # 流式处理恢复
-        async def process_resume():
-            async for c, metadata in graph.astream(Command(resume=request.query), stream_mode="messages", config=thread_config):
-                # 只处理最终展示给用户的内容
-                if c.content and not c.additional_kwargs.get("tool_calls"):
-                    # 同样使用json.dumps处理内容
-                    content_json = json.dumps(c.content, ensure_ascii=False)
-                    yield f"data: {content_json}\n\n"
-                
-                # 工具调用单独处理，不发送给前端
-                elif c.additional_kwargs.get("tool_calls"):
-                    tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                    logger.debug("Tool call: {}", tool_data)
-        
-        return StreamingResponse(
-            process_resume(),
-            media_type="text/event-stream"
-        )
-        
-    except Exception as e:
-        logger.exception("LangGraph resume error: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload/image")

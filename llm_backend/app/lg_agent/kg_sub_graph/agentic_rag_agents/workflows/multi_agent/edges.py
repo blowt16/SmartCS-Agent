@@ -1,24 +1,10 @@
 """LangGraph edges that are used in multiple workflows."""
 
-from typing import List, Literal
+from typing import List
 
 from langgraph.types import Send
 
 from ...components.state import OverallState
-
-
-def guardrails_conditional_edge(
-    state: OverallState,
-) -> Literal["planner", "final_answer"]:
-    match state.get("next_action"):
-        case "final_answer":
-            return "final_answer"
-        case "end":
-            return "final_answer"
-        case "planner":
-            return "planner"
-        case _:
-            return "final_answer"
 
 
 def map_reduce_planner_to_customer_tools(state: OverallState) -> List[Send]:

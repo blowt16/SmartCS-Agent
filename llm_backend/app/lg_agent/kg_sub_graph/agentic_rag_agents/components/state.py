@@ -59,7 +59,6 @@ class OverallState(TypedDict):
 
     question: str
     tasks: Annotated[List[Task], add]
-    next_action: str
     searches: Annotated[List[Any], add]   # 向量检索结果（VectorSearchOutputState 列表）
     summary: str
     steps: Annotated[List[str], add]

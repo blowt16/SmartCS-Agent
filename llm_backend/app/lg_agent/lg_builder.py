@@ -5,9 +5,6 @@ from app.lg_agent.lg_prompts import (
     GENERAL_QUERY_SYSTEM_PROMPT,
     GET_IMAGE_SYSTEM_PROMPT,
     GUARDRAILS_SYSTEM_PROMPT,
-    RAGSEARCH_SYSTEM_PROMPT,
-    CHECK_HALLUCINATIONS,
-    GENERATE_QUERIES_SYSTEM_PROMPT
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
@@ -19,7 +16,7 @@ from langchain_core.messages import BaseMessage
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
-from app.lg_agent.lg_states import AgentState, InputState, Router, GradeHallucinations
+from app.lg_agent.lg_states import AgentState, InputState, Router
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import create_planner_node
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.workflows.multi_agent.multi_tool import create_multi_tool_workflow
 from pydantic import BaseModel
@@ -40,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryManager
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.agent_safety import (
-    ScopeGuard, TimeoutGuard, BudgetGuard, HallucinationGuard,
+    ScopeGuard, TimeoutGuard, BudgetGuard,
 )
 
 
@@ -415,23 +412,9 @@ async def create_research_plan(
     else:
         model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
 
-    # 定义电商经营范围
-    scope_description = """
-    个人电商经营范围：智能家居产品，包括但不限于：
-    - 智能照明（灯泡、灯带、开关）
-    - 智能安防（摄像头、门锁、传感器）
-    - 智能控制（温控器、遥控器、集线器）
-    - 智能音箱（语音助手、音响）
-    - 智能厨电（电饭煲、冰箱、洗碗机）
-    - 智能清洁（扫地机器人、洗衣机）
-
-    不包含：服装、鞋类、体育用品、化妆品、食品等非智能家居产品。
-    """
-
-    # 创建多工具工作流（guardrails → planner → 向量检索 → summarize → final_answer）
+    # 创建多工具工作流（planner → 向量检索 → summarize → final_answer）
     multi_tool_workflow = create_multi_tool_workflow(
         llm=model,
-        scope_description=scope_description,
     )
 
     # ====== 查询预处理管道（改写 → 纠错 → 扩展 → Multi-Query + HyDE）======
@@ -492,42 +475,6 @@ async def create_research_plan(
         conversation_id=conversation_id or "",
     )
     return {"messages": [AIMessage(content=response["answer"])]}
-
-async def check_hallucinations(
-    state: AgentState, *, config: RunnableConfig
-) -> dict[str, Any]:
-    """Analyze the user's query and checks if the response is supported by the set of facts based on the document retrieved,
-    providing a binary score result.
-
-    This function uses a language model to analyze the user's query and gives a binary score result.
-
-    Args:
-        state (AgentState): The current state of the agent, including conversation history.
-        config (RunnableConfig): Configuration with the model used for query analysis.
-
-    Returns:
-        dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
-    """
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["hallucinations"])
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["hallucinations"])
-    
-    system_prompt = CHECK_HALLUCINATIONS.format(
-        documents=state.documents,
-        generation=state.messages[-1]
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt}
-    ] + state.messages
-
-    logger.info("---CHECK HALLUCINATIONS---")
-    
-    response = cast(GradeHallucinations, await model.with_structured_output(GradeHallucinations).ainvoke(messages))
-    
-    return {"hallucination": response} 
-
 
 # 定义持久化存储：会话检查点存 PostgreSQL（PostgresSaver）
 # LangGraph官方地址：https://langchain-ai.github.io/langgraph/how-tos/persistence/
