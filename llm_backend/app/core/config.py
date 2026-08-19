@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     REDIS_CACHE_PREFIX: str = "cache"                       # 缓存键前缀
     REDIS_CACHE_MAX_SIZE: int = 1000                        # 最大缓存条目数
     REDIS_CACHE_CLEANUP_INTERVAL: int = 3600                # 缓存清理间隔（秒）
+
+    # Semantic cache resolve settings（语义缓存分级指代消解）
+    RESOLVE_ENABLED: bool = True                            # 总开关，false 时完全退化为现有行为（一键回滚）
+    RESOLVE_MAX_TURNS: int = 5                              # 消解时参考的最大对话轮数（1轮=1用户+1助手）
+    RESOLVE_LLM_TEMPERATURE: float = 0.0                   # 消解 LLM 温度（必须为 0，保证同输入同输出）
+    RESOLVE_TIMEOUT_MS: int = 2000                          # 消解调用超时（毫秒），超时降级为原始消息
+    RESOLVE_SKIP_FILLER: bool = True                        # 是否跳过纯语气词（不查不写，避免缓存污染）
     
     # Embedding settings
     EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen
