@@ -29,34 +29,6 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
-    build: .
-    container_name: smartcs-agent-app
-    ports:
-      - "8000:8000"
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: smartcs_agent_pwd
-      DB_NAME: smartcs_agent
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_DB: 0
-      REDIS_PASSWORD: ""
-    env_file:
-      - .env.docker
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - app_logs:/app/llm_backend/logs
-      - app_uploads:/app/llm_backend/uploads
-
 volumes:
   pg_data:
   redis_data:
-  app_logs:
-  app_uploads:

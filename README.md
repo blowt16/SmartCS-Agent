@@ -69,29 +69,9 @@
 
 - Python 3.13+
 - uv（Python 包管理器，用于本地安装依赖）
-- Docker & Docker Compose（推荐）
+- Docker & Docker Compose（仅用于启动 PostgreSQL / Redis 基础服务）
 
-### Docker Compose 一键部署（推荐）
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/blowt16/SmartCS-Agent.git
-cd SmartCS-Agent
-
-# 2. 编辑 .env.docker 填入 API Key
-#    必填：DEEPSEEK_API_KEY
-#    可选：SERPAPI_KEY、VISION_API_KEY
-
-# 3. 一键启动
-docker compose up -d
-
-# 4. 查看日志
-docker compose logs -f app
-```
-
-服务将在 `http://localhost:8000` 启动。
-
-### 手动部署
+### 本地运行（推荐）
 
 ```bash
 # 1. 克隆项目
@@ -102,17 +82,17 @@ cd SmartCS-Agent
 uv sync
 
 # 3. 配置环境变量
-cp llm_backend/.env llm_backend/.env
-# 编辑 llm_backend/.env 填入 API Key 和数据库连接信息
+#    编辑项目根目录 .env，填入 API Key 和数据库连接信息
+#    DB_HOST / REDIS_HOST 保持 localhost（对应下方 Docker 启动的基础服务）
 
-# 4. 启动 PostgreSQL、Redis（可用 Docker 单独启动）
-docker compose up -d postgres redis
+# 4. 启动 PostgreSQL、Redis（Docker 仅承载基础服务，应用在本地运行调试）
+docker compose up -d
 
 # 5. 初始化数据库（建表 + 启用 pgvector 扩展 + HNSW 索引）
 cd llm_backend
 python -m scripts.init_db
 
-# 6. 启动服务
+# 6. 启动服务（uvicorn，开发模式热重载）
 cd llm_backend
 python run.py
 ```
@@ -173,9 +153,7 @@ python scripts/download_jddc.py
 │   ├── generate_product_knowledge.py # 从 CSV 生成产品知识文档
 │   ├── download_datasets.py          # 下载开源电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 客服对话数据集
-├── docker-compose.yml                # Docker Compose 配置（postgres/redis/app）
-├── Dockerfile                        # Docker 镜像构建
-├── .env.docker                       # Docker 环境变量
+├── docker-compose.yml                # Docker Compose 配置（仅 postgres/redis）
 └── STUDY_NOTES.md                    # 项目学习文档（面试准备）
 ```
 
