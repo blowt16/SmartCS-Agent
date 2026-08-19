@@ -25,6 +25,8 @@ async def init_db():
         async with engine.begin() as conn:
             # 启用 pgvector 扩展（需先于建表，document_chunks 使用 vector 类型）
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            # 启用 pg_jieba 中文分词扩展（BM25 全文检索，需自定义镜像构建，见 docker/postgres/Dockerfile）
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_jieba"))
             # 删除所有表（如果存在）
             await conn.run_sync(Base.metadata.drop_all)
             # 创建所有表
@@ -33,6 +35,16 @@ async def init_db():
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding "
                 "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
+            ))
+            # BM25 全文检索：content_tsv 生成列（jiebacfg 精确模式分词）+ GIN 倒排索引
+            # （Base.metadata.create_all 不覆盖生成列，须显式执行；存量数据 ALTER 时自动回填）
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector "
+                "GENERATED ALWAYS AS (to_tsvector('jiebacfg', content)) STORED"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_chunks_tsv "
+                "ON document_chunks USING GIN (content_tsv)"
             ))
         logger.info("Database initialization completed successfully!")
     except Exception as e:

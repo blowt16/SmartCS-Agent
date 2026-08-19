@@ -92,9 +92,6 @@ class Settings(BaseSettings):
     # Vector DB settings (pgvector)
     VECTOR_TABLE_NAME: str = "document_chunks"           # pgvector 文档块表名
 
-    # Relevance grading settings
-    RELEVANCE_GRADING_ENABLED: bool = True                  # 是否启用相关性评分
-
     # Chunking settings
     CHUNK_SIZE: int = 500                                   # 文本分块大小
     CHUNK_OVERLAP: int = 50                                 # 分块重叠大小
@@ -106,16 +103,23 @@ class Settings(BaseSettings):
 
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
-    LLM_GRADER_TEMPERATURE: float = 0.0                     # 评分/评估 LLM 温度
     LLM_GENERATION_TEMPERATURE: float = 0.8                 # 测试数据生成温度
 
     # Streaming settings
     STREAM_DELAY: float = 0.05                              # 流式响应延迟（秒）
 
     # Reranker settings
+    RERANKER_ENABLED: bool = True                            # 精排开关（替代 LLM 相关性评分）
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"        # 重排序模型
     RERANKER_TOP_K: int = 5                                  # 重排序返回数
+    RERANKER_INPUT_TOP_K: int = 20                           # 精排输入候选数（RRF 融合后截取）
     RERANKER_MAX_LENGTH: int = 512                           # 重排序最大长度
+    RERANKER_DEVICE: str = "auto"                            # 精排设备: auto / cuda / cpu
+    RERANKER_BATCH_SIZE: int = 8                             # 精排批处理大小
+    RERANKER_HALF_PRECISION: bool = True                     # fp16 半精度（6GB 显存必需）
+
+    # HF 模型缓存目录（reranker 等本地模型下载落点）
+    HF_HOME: str = ""                                        # 留空走系统默认缓存（Windows: %USERPROFILE%\.cache\huggingface）
 
     # Hybrid retrieval settings
     RRF_FUSION_K: int = 60                                   # RRF 融合参数

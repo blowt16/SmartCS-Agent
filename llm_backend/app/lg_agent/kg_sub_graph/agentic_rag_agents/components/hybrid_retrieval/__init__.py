@@ -1,7 +1,6 @@
 # Hybrid retrieval module
 
-from .hybrid_retriever import HybridRetriever
-from .bm25_retriever import BM25Retriever
+from .bm25_sql_retriever import BM25SQLRetriever
 from .rrf_fusion import rrf_fuse
 
-__all__ = ["HybridRetriever", "BM25Retriever", "rrf_fuse"]
+__all__ = ["BM25SQLRetriever", "rrf_fuse"]

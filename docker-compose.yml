@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    build: ./docker/postgres
     container_name: smartcs-agent-postgres
     environment:
       POSTGRES_DB: smartcs_agent
