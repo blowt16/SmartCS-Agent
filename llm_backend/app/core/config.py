@@ -98,8 +98,9 @@ class Settings(BaseSettings):
 
     # RAG retrieval settings
     VECTOR_SEARCH_TOP_K: int = 10                           # 向量检索返回数
+    BM25_TOP_K: int = 20                                    # BM25 检索候选数
     HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数
-    HYBRID_RETRIEVAL_TOP_N: int = 20                        # 混合检索候选数
+    HYBRID_RETRIEVAL_TOP_N: int = 20                        # 向量检索候选数（混合检索候选）
 
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度

@@ -120,10 +120,10 @@ class RAGRetrieverService:
 
         logger.info("开始混合检索: query='{}', retrieval_top_n={}, top_k={}", query, retrieval_top_n, top_k)
 
-        # ① 两路并行（互不依赖，耗时 = max 非 sum）
+        # ① 两路并行（互不依赖，耗时 = max 非 sum；每路候选数独立配置）
         vector_results, bm25_results = await asyncio.gather(
             self._safe(self._vector_search(query, retrieval_top_n)),
-            self._safe(self.bm25.search(query, retrieval_top_n)),
+            self._safe(self.bm25.search(query, settings.BM25_TOP_K)),
         )
 
         # ② RRF 融合（只消费排名，候选集 = RERANKER_INPUT_TOP_K）
