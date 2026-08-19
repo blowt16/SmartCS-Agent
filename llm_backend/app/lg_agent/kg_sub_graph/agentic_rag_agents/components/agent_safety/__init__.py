@@ -8,15 +8,11 @@ Agent 安全护栏
     ④ 响应超时 — 防止请求卡死
 """
 
-from .safety_guards import (
-    MaxIterationGuard,
-    TimeoutGuard,
-)
+from .safety_guards import TimeoutGuard
 from .scope_guard import ScopeGuard
 from .budget_guard import BudgetGuard
 
 __all__ = [
-    "MaxIterationGuard",
     "TimeoutGuard",
     "ScopeGuard",
     "BudgetGuard",
