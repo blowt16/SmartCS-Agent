@@ -84,7 +84,7 @@ class SearchService:
             return response.choices[0]
             
         except Exception as e:
-            logger.error("Error in _call_with_tool: {}", str(e), exc_info=True)
+            logger.exception("Error in _call_with_tool: {}", str(e))
             raise
 
     async def generate_stream(
@@ -212,5 +212,5 @@ class SearchService:
                     await on_complete(user_id, conversation_id, [{"role": "user", "content": query}], complete_response)
                 
         except Exception as e:
-            logger.error("Error in generate_stream: {}", str(e), exc_info=True)
+            logger.exception("Error in generate_stream: {}", str(e))
             raise

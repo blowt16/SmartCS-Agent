@@ -121,7 +121,7 @@ async def chat_endpoint(request: ChatMessage):
             media_type="text/event-stream"
         )
     except Exception as e:
-        logger.error("Chat error: {}", str(e), exc_info=True)
+        logger.exception("Chat error: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/reason")
@@ -143,7 +143,7 @@ async def reason_endpoint(request: ReasonRequest):
         )
     
     except Exception as e:
-        logger.error("Reasoning error for user {}: {}", request.user_id, str(e), exc_info=True)
+        logger.exception("Reasoning error for user {}: {}", request.user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/search")
@@ -224,7 +224,7 @@ async def upload_file(
         return result
         
     except Exception as e:
-        logger.error("Upload failed for user {}: {}", user_id, str(e), exc_info=True)
+        logger.exception("Upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat-rag")
@@ -242,7 +242,7 @@ async def rag_chat_endpoint(request: RAGChatRequest):
             media_type="text/event-stream"
         )
     except Exception as e:
-        logger.error("RAG chat error for user {}: {}", request.user_id, str(e), exc_info=True)
+        logger.exception("RAG chat error for user {}: {}", request.user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/conversations")
@@ -252,7 +252,7 @@ async def create_conversation(request: CreateConversationRequest):
         conversation_id = await ConversationService.create_conversation(request.user_id)
         return {"conversation_id": conversation_id}
     except Exception as e:
-        logger.error("Error creating conversation: {}", str(e), exc_info=True)
+        logger.exception("Error creating conversation: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/user/{user_id}")
@@ -262,7 +262,7 @@ async def get_user_conversations(user_id: int):
         conversations = await ConversationService.get_user_conversations(user_id)
         return conversations
     except Exception as e:
-        logger.error("Error getting conversations: {}", str(e), exc_info=True)
+        logger.exception("Error getting conversations: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/conversations/{conversation_id}/messages")
@@ -274,7 +274,7 @@ async def get_conversation_messages(conversation_id: int, user_id: int):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error("Error getting messages: {}", str(e), exc_info=True)
+        logger.exception("Error getting messages: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/conversations/{conversation_id}")
@@ -285,7 +285,7 @@ async def delete_conversation(conversation_id: int):
         await conversation_service.delete_conversation(conversation_id)
         return {"message": "会话已删除"}
     except Exception as e:
-        logger.error("删除会话失败: {}", str(e), exc_info=True)
+        logger.exception("删除会话失败: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/conversations/{conversation_id}/name")
@@ -299,7 +299,7 @@ async def update_conversation_name(
         await conversation_service.update_conversation_name(conversation_id, request.name)
         return {"message": "会话名称已更新"}
     except Exception as e:
-        logger.error("更新会话名称失败: {}", str(e), exc_info=True)
+        logger.exception("更新会话名称失败: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 class SaveMessagesRequest(BaseModel):
@@ -319,7 +319,7 @@ async def save_messages(request: SaveMessagesRequest):
         )
         return {"message": "消息已保存"}
     except Exception as e:
-        logger.error("保存消息失败: {}", str(e), exc_info=True)
+        logger.exception("保存消息失败: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/langgraph/query")
@@ -439,7 +439,7 @@ async def langgraph_query(
         return response
         
     except Exception as e:
-        logger.error("LangGraph query error: {}", str(e), exc_info=True)
+        logger.exception("LangGraph query error: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/langgraph/resume")
@@ -475,7 +475,7 @@ async def langgraph_resume(request: LangGraphResumeRequest):
         )
         
     except Exception as e:
-        logger.error("LangGraph resume error: {}", str(e), exc_info=True)
+        logger.exception("LangGraph resume error: {}", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload/image")
@@ -520,7 +520,7 @@ async def upload_image(
         return image_info
         
     except Exception as e:
-        logger.error("Image upload failed for user {}: {}", user_id, str(e), exc_info=True)
+        logger.exception("Image upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 # 最后挂载静态文件，并确保使用绝对路径

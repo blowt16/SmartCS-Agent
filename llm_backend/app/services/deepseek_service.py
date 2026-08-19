@@ -91,7 +91,7 @@ class DeepseekService:
                 await on_complete(user_id, conversation_id, messages, complete_response)
                 
         except Exception as e:
-            logger.error("Error in generate_stream: {}", str(e), exc_info=True)
+            logger.exception("Error in generate_stream: {}", str(e))
             error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
 

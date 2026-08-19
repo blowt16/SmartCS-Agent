@@ -112,7 +112,7 @@ class IndexingService:
             }
 
         except Exception as e:
-            logger.error("处理文件时发生错误: {}", str(e), exc_info=True)
+            logger.exception("处理文件时发生错误: {}", str(e))
             return {
                 'original_file_path': file_path,
                 'status': 'error',
@@ -141,7 +141,7 @@ class IndexingService:
             }
 
         except Exception as e:
-            logger.error("处理目录时发生错误: {}", str(e), exc_info=True)
+            logger.exception("处理目录时发生错误: {}", str(e))
             return {
                 'status': 'error',
                 'error': str(e),

@@ -83,7 +83,7 @@ class ConversationService:
                 await db.commit()
                 
         except Exception as e:
-            logger.error("Error saving conversation: {}", str(e), exc_info=True)
+            logger.exception("Error saving conversation: {}", str(e))
             logger.error("Error details - user_id: {}, conversation_id: {}", user_id, conversation_id)
             logger.error("Messages: {}", messages)
 
@@ -113,7 +113,7 @@ class ConversationService:
                 ]
                 
         except Exception as e:
-            logger.error("Error getting conversations for user {}: {}", user_id, str(e), exc_info=True)
+            logger.exception("Error getting conversations for user {}: {}", user_id, str(e))
             raise
 
     @staticmethod
@@ -152,7 +152,7 @@ class ConversationService:
                 ]
                 
         except Exception as e:
-            logger.error("Error getting messages for conversation {}: {}", conversation_id, str(e), exc_info=True)
+            logger.exception("Error getting messages for conversation {}: {}", conversation_id, str(e))
             raise
 
     @staticmethod
@@ -174,7 +174,7 @@ class ConversationService:
                 
                 logger.info("已删除会话 {} 及其所有消息", conversation_id)
         except Exception as e:
-            logger.error("删除会话失败: {}", str(e), exc_info=True)
+            logger.exception("删除会话失败: {}", str(e))
             raise
 
     @staticmethod
@@ -196,5 +196,5 @@ class ConversationService:
                 
                 logger.info("已更新会话 {} 的名称为 {}", conversation_id, name)
         except Exception as e:
-            logger.error("更新会话名称失败: {}", str(e), exc_info=True)
+            logger.exception("更新会话名称失败: {}", str(e))
             raise 

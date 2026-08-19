@@ -43,7 +43,7 @@ class RedisSemanticCache:
                 raise ValueError("Failed to get embedding")
             return embeddings[0]
         except Exception as e:
-            logger.error("Error in get_embedding: {}", str(e), exc_info=True)
+            logger.exception("Error in get_embedding: {}", str(e))
             raise
         
     def _get_vector_key(self, message: str) -> str:
@@ -95,7 +95,7 @@ class RedisSemanticCache:
                 logger.info("Cache cleanup completed for prefix {}", self.prefix)
                 
             except Exception as e:
-                logger.error("Error in cache cleanup: {}", str(e), exc_info=True)
+                logger.exception("Error in cache cleanup: {}", str(e))
                 
             await asyncio.sleep(self.cleanup_interval)
 
@@ -109,7 +109,7 @@ class RedisSemanticCache:
                 f"{self.prefix}:meta:{hash_id}".encode('utf-8')
             )
         except Exception as e:
-            logger.error("Error removing cache item: {}", str(e), exc_info=True)
+            logger.exception("Error removing cache item: {}", str(e))
 
     async def _update_metadata(self, message: str):
         """更新缓存项的元数据"""
@@ -128,7 +128,7 @@ class RedisSemanticCache:
             }
             self.redis.set(meta_key, json.dumps(metadata), ex=settings.REDIS_CACHE_EXPIRE)
         except Exception as e:
-            logger.error("Error updating metadata: {}", str(e), exc_info=True)
+            logger.exception("Error updating metadata: {}", str(e))
 
     async def lookup(self, messages: List[Dict]) -> Optional[str]:
         """查找缓存的响应"""
@@ -169,7 +169,7 @@ class RedisSemanticCache:
             return None
             
         except Exception as e:
-            logger.error("Error in lookup: {}", str(e), exc_info=True)
+            logger.exception("Error in lookup: {}", str(e))
             return None
 
     async def update(self, messages: List[Dict], response: str, expire: int = None):
@@ -201,4 +201,4 @@ class RedisSemanticCache:
             logger.info("Cache updated for message: {}...", user_message[:50])
             
         except Exception as e:
-            logger.error("Error in update: {}", str(e), exc_info=True)
+            logger.exception("Error in update: {}", str(e))
