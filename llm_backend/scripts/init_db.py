@@ -5,18 +5,19 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent.parent
 sys.path.append(str(ROOT_DIR))
 
+from app.core.logger import get_logger
+
+logger = get_logger(service="init_db")
+
 # 确保能找到 app 模块
-print(f"Python path: {sys.path}")
-print(f"Current directory: {Path.cwd()}")
-print(f"Root directory: {ROOT_DIR}")
+logger.info("Python path: {}", sys.path)
+logger.info("Current directory: {}", Path.cwd())
+logger.info("Root directory: {}", ROOT_DIR)
 
 import asyncio
 from sqlalchemy import text
 from app.core.database import engine, Base
 from app.models import User, Conversation, Message, DocumentChunk
-from app.core.logger import get_logger
-
-logger = get_logger(service="init_db")
 
 async def init_db():
     try:

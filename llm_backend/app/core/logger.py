@@ -1,4 +1,5 @@
 from loguru import logger
+import logging
 import sys
 from pathlib import Path
 import os
@@ -100,3 +101,29 @@ def get_logger(service: str):
 def log_structured(event_type: str, data: dict):
     """结构化日志记录 — 自动附加 request_id 和服务信息"""
     logger.bind(event_type=event_type).info(data)
+
+
+# ============================================================================
+# stdlib logging → loguru 桥接
+# uvicorn / SQLAlchemy 等第三方库使用标准 logging 模块输出日志，
+# 若不桥接会绕过统一管理器直接写 stderr。InterceptHandler 把全部
+# stdlib 日志转发到 loguru，统一进入控制台 / app.log / error.log。
+# ============================================================================
+class InterceptHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+
+logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _uv_logger = logging.getLogger(_name)
+    _uv_logger.handlers = [InterceptHandler()]
+    _uv_logger.propagate = False

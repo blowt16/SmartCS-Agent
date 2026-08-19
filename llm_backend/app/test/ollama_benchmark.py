@@ -1,14 +1,21 @@
 import aiohttp
 import asyncio
+import sys
 import time
 from pathlib import Path
-from loguru import logger
 import random
 from tqdm import tqdm
 import json
 from datetime import datetime
 import psutil
 import GPUtil
+
+# 将 llm_backend 加入 sys.path，使脚本可从任意目录直接运行，并接入统一日志管理器
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from app.core.logger import get_logger
+
+logger = get_logger(service="ollama_benchmark")
 
 # 配置日志
 log_dir = Path("logs")
