@@ -417,28 +417,22 @@ async def create_research_plan(
         llm=model,
     )
 
-    # ====== 查询预处理管道（改写 → 纠错 → 扩展 → Multi-Query + HyDE）======
+    # ====== 查询预处理管道（纠错 → 扩展 → Multi-Query + HyDE）======
     # ④ 预算控制：每步 LLM 调用前检查预算，超预算跳过非必要步骤
+    # 注：指代消解（上下文改写）已前置到系统入口（main.py /api/langgraph/query），
+    #     进入本节点的 query 已是消解后的完整问题，无需在此重复消解
     budget = BudgetGuard()
 
-    # 第一步：上下文感知改写（必要）
-    # 多轮对话中用户可能用代词（"那个""它"）或省略主语（"有货吗"），
-    # 需要结合历史消息把问题补全为独立、完整的查询，否则后续检索无法匹配
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.node import (
-        context_aware_rewrite,
-        rewrite_query,
-    )
-    resolved_question = state.messages[-1].content if state.messages else ""  # 默认用原始问题
-    if budget.can_call("context_rewrite", essential=True):
-        resolved_question = await context_aware_rewrite(model, state.messages)
-        budget.record("context_rewrite", tokens=500, essential=True)
-
-    # 第二步：查询纠错（非必要，可跳过）
+    # 第一步：查询纠错（非必要，可跳过）
     # 修正错别字（如"扫第机器人"→"扫地机器人"），确保实体识别基于正确文本
     from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.query_correction import (
         correct_query,
         expand_query,
     )
+    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.node import (
+        rewrite_query,
+    )
+    resolved_question = state.messages[-1].content if state.messages else ""  # 入口已消解，直接取当前问题
     corrected_question = resolved_question
     if budget.can_call("query_correction", essential=False):
         corrected_question = await correct_query(model, resolved_question)

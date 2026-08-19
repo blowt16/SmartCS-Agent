@@ -26,6 +26,9 @@ import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
+from app.services.pronoun_detector import detect_pronoun, DetectionDecision
+from app.services.pronoun_resolver import resolve_pronouns
+from langchain_core.messages import HumanMessage, AIMessage
 import json
 
 
@@ -36,6 +39,17 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # logger 变量就被初始化为一个日志记录器实例。
 # 之后，便可以在当前文件中直接使用 logger.info()、logger.error() 等方法来记录日志，而不需要进行其他操作。
 logger = get_logger(service="main")
+
+# 入口指代消解用的 LLM 服务（懒加载复用，避免每请求重建客户端）
+_resolve_llm_service = None
+
+
+def _get_resolve_llm():
+    """获取指代消解的 LLM 服务（DeepseekService/OllamaService，具备 generate 鸭子类型）"""
+    global _resolve_llm_service
+    if _resolve_llm_service is None:
+        _resolve_llm_service = LLMFactory.create_chat_service()
+    return _resolve_llm_service
 
 # 启动时初始化 LangGraph Postgres 检查点（连接池 + 检查点表 + 编译 graph）
 @asynccontextmanager
@@ -372,10 +386,30 @@ async def langgraph_query(
         except Exception as e:
             logger.warning("Error retrieving state: {}. Starting with fresh state.", e)
 
+        # ===== 入口前置指代消解（多轮代词/省略统一在此补全）=====
+        # 含指代消息（"那个有货吗"）在进入意图模块前改写为完整问题，
+        # 因此图内不再重复消解；首条消息（无历史）无上下文依赖，直接透传
+        resolved_query = query
+        history_messages = []
+        if state_history:
+            for m in state_history.values.get("messages", []):
+                if isinstance(m, (HumanMessage, AIMessage)):
+                    history_messages.append({
+                        "role": "assistant" if isinstance(m, AIMessage) else "user",
+                        "content": m.content,
+                    })
+        if history_messages and detect_pronoun(query, skip_filler=settings.RESOLVE_SKIP_FILLER) == DetectionDecision.NEED_RESOLVE:
+            resolved_query = await resolve_pronouns(
+                _get_resolve_llm(),
+                history_messages + [{"role": "user", "content": query}],
+                query,
+            )
+            logger.info("入口指代消解: '{}' → '{}'", query, resolved_query)
+
         # 新会话或正常多轮对话，始终用 InputState 输入
         # LangGraph 通过 thread_id 自动维护上下文状态
         logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
-        input_state = InputState(messages=query)
+        input_state = InputState(messages=resolved_query)
 
         async def process_stream():
             async for c, metadata in graph.astream(
