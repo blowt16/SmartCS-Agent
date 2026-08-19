@@ -273,39 +273,28 @@ class Settings(BaseSettings):
 基于 **Redis + Embedding 向量余弦相似度** 的语义缓存系统：
 
 ```mermaid
-sequenceDiagram
-    participant User as 用户请求
-    participant Service as DeepseekService
-    participant Cache as RedisSemanticCache
-    participant Detect as 指代检测器(规则)
-    participant Resolver as 指代消解器(LLM)
-    participant Embed as EmbeddingProvider
-    participant LLM as DeepSeek API
+flowchart TD
+    Q["用户消息到达"]
+    Q --> DETECT["① 规则引擎指代检测<br/>（O(n) 字符串匹配，毫秒级）"]
 
-    User->>Service: 发送消息
-    Service->>Cache: lookup(messages)
-    Cache->>Detect: 分级指代检测
-    alt 纯语气词（"好的"）
-        Cache-->>Service: None（不查不写）
-    else 含指代/省略（"那个有货吗"）
-        Cache->>Resolver: LLM 消解 → 完整问题
-        Resolver-->>Cache: "扫地机器人X1有货吗"
-    else 完整问题（80%）
-        Cache->>Cache: 原样透传（零开销）
-    end
-    Cache->>Embed: 消解后消息向量
-    Embed-->>Cache: 1024 维向量
-    Cache->>Cache: ZSET 索引遍历<br/>计算余弦相似度
-    alt 相似度 ≥ 0.90 (命中)
-        Cache-->>Service: 返回缓存响应
-        Service-->>User: 模拟流式返回
-    else 相似度 < 0.90 (未命中)
-        Cache-->>Service: None
-        Service->>LLM: 调用 API
-        LLM-->>Service: 流式响应
-        Service->>Cache: update(messages, response)
-        Service-->>User: 流式返回
-    end
+    DETECT -->|"纯语气词<br/>（好的/知道了/谢谢）"| SKIP["⏭️ 跳过缓存<br/>不查不写（避免污染）"]
+    DETECT -->|"含指代/省略<br/>（那个有货吗）"| RESOLVE["② LLM 消解<br/>temperature=0 / 2s 超时"]
+    DETECT -->|"完整问题（80%）"| PASSTHROUGH["原样透传<br/>零额外开销"]
+
+    RESOLVE -->|"失败/超时/空"| DEGRADE["⚠️ 降级为原始消息"]
+    RESOLVE -->|"成功"| RESOLVED["消解后完整问题<br/>（扫地机器人X1有货吗）"]
+    DEGRADE --> EMBED
+    RESOLVED --> EMBED
+    PASSTHROUGH --> EMBED
+
+    EMBED["③ Embedding<br/>qwen text-embedding-v4 1024 维"] --> LOOKUP
+
+    LOOKUP{"④ ZSET 索引遍历<br/>余弦相似度 ≥ 0.90 ?"} -->|"命中"| HIT["🎯 返回缓存响应<br/>模拟流式 SSE"]
+    LOOKUP -->|"未命中"| LLM["⑤ 调用 LLM 生成"]
+
+    LLM --> WRITE["⑥ update 回写<br/>key = 消解后消息 MD5<br/>写入 vec/resp/meta + ZSET 索引"]
+    WRITE --> END
+    HIT --> END
 ```
 
 **核心机制**:
@@ -465,9 +454,14 @@ flowchart TD
     API -->|"无 thread_id"| NEW["新会话<br/>生成 thread_id + InputState"]
     API -->|"已有 thread_id"| CTD["多轮会话<br/>PostgresSaver 加载检查点"]
     API -->|"存在中断"| RSM["中断恢复<br/>Command(resume) 继续人工确认"]
-    NEW --> STREAM["graph.astream<br/>stream_mode=messages"]
-    CTD --> STREAM
-    RSM --> STREAM
+    NEW --> RESOLVE["入口前置指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    CTD --> RESOLVE
+    RSM --> RESOLVE
+
+    RESOLVE --> CACHE{"语义缓存检索<br/>key=消解后消息<br/>按 user_id 隔离"}
+    CACHE -->|"命中"| HIT["⚡ 短路返回缓存回答<br/>模拟流式 SSE（不进图）"]
+    CACHE -->|"未命中"| STREAM["graph.astream<br/>stream_mode=messages"]
+    HIT --> SSE
 
     STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
     SG -->|"不通过"| GQ["兜底回复<br/>提示超出经营范围"]
@@ -483,15 +477,17 @@ flowchart TD
     KG --> SSE
     IMG --> SSE
     GQ --> SSE
+    KG -.->|"完整回答生成后"| WRITEBACK["语义缓存回写<br/>update（非空才写）"]
 ```
 
 **关键说明**:
 
 1. **入口三态**：同一端点根据 thread_id 区分新会话 / 多轮续聊 / 中断恢复（human-in-the-loop）
 2. **入口前置指代消解**：多轮代词/省略（"那个有货吗"）在 `graph.astream` 前完成改写（规则门控 + LLM 补全），首条消息无历史直接透传；图内意图识别与检索拿到的均为完整问题
-3. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
-4. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
-5. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
+3. **入口语义缓存检索**：消解后、进图前按 user_id 查缓存（key=消解后消息），命中短路返回不进图；未命中走图，完整回答生成后回写（非空才写，语气词/失败不写）；含指代且无历史可消解时跳过缓存检索
+4. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
+5. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
+6. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
 
 ### 5.2 意图路由决策流程
 
@@ -499,9 +495,12 @@ flowchart TD
 flowchart TD
     Q["用户输入"]
     RESOLVE["入口指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    CACHE{"语义缓存检索<br/>key=消解后消息"}
     SG["ScopeGuard<br/>关键词预检"]
     Q --> RESOLVE
-    RESOLVE --> SG
+    RESOLVE --> CACHE
+    CACHE -->|"命中"| SHORT["⚡ 短路返回缓存回答<br/>不进图"]
+    CACHE -->|"未命中"| SG
     SG -->|不通过| GEN["general-query<br/>回复: 超出经营范围"]
     SG -->|通过| ROUTER["LLM 路由器<br/>4路分类+复杂度评估"]
 
@@ -549,7 +548,7 @@ flowchart TD
 
 ### 5.5 graphrag-query 知识库查询意图运行流程
 
-节点 `create_research_plan`：先跑 3 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。指代消解（多轮代词/主语补全）已前置到系统入口（main.py `/api/langgraph/query`，图执行前完成），进入本节点的 query 已是完整问题。
+节点 `create_research_plan`：先跑 3 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
 
 ```mermaid
 flowchart TD
@@ -712,6 +711,7 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 - 按用户隔离缓存 (`prefix:user_id:...`)
 - **分级指代消解**：三层规则引擎（显性指代 / 省略主语 / 纯语气词）先过滤，80% 完整问题零开销透传、15% 含指代消息才调 LLM 补全（temperature=0 保证确定性、2s 超时失败降级透传）、纯语气词不查不写避免污染
 - **lookup/update 同源消解**：缓存 key 基于消解后消息 MD5，保证"那个有货吗"与"扫地机器人X1有货吗"命中同一缓存
+- **graphrag 入口前置检索**：`/api/langgraph/query` 消解后、进图前查缓存，命中短路跳过整个图流程；未命中走图、完整回答后回写（两条链路共享按 user_id 的缓存池）
 - **ZSET 有序索引** + `redis.asyncio` 异步客户端 + 实例池化（消除 keys 全库扫描与事件循环阻塞）
 - LRU 自动清理（ZSET score 排序）+ 访问次数统计
 - 模拟流式返回保持前端体验一致
