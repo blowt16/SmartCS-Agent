@@ -55,9 +55,6 @@ class Settings(BaseSettings):
     DB_PASSWORD: str
     DB_NAME: str
 
-    # Logging settings
-    LOG_LEVEL: str = "INFO"                                 # 日志级别: DEBUG / INFO / WARNING / ERROR
-
     # JWT settings
     SECRET_KEY: str = "your-secret-key"  # 在生产环境中使用安全的密钥
     ALGORITHM: str = "HS256"
@@ -85,7 +82,6 @@ class Settings(BaseSettings):
     EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen
     EMBEDDING_MODEL: str = "text-embedding-v4"      # 本地模型名（TYPE=local 时改回 bge-m3；qwen 类型走 QWEN_EMBEDDING_MODEL）
     EMBEDDING_DIMENSION: int = 1024                 # 向量维度（text-embedding-v4 默认 1024）
-    EMBEDDING_THRESHOLD: float = 0.90               # 语义相似度阈值
     EMBEDDING_TIMEOUT: int = 30                     # Embedding API 请求超时（秒）
 
     # Qwen Embedding API（OpenAI-compatible / DashScope）
@@ -101,16 +97,14 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 50                                 # 分块重叠大小
 
     # RAG retrieval settings
-    VECTOR_SEARCH_TOP_K: int = 10                           # 向量检索返回数
     BM25_TOP_K: int = 20                                    # BM25 检索候选数
-    HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数
+    HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数（精排关闭时兜底）
     HYBRID_RETRIEVAL_TOP_N: int = 20                        # 向量检索候选数（混合检索候选）
     RAG_TIMEOUT_SECONDS: int = 30                           # RAG 子图超时（秒），超时降级兜底回答
 
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
     ROUTER_TEMPERATURE: float = 0.0                         # 意图识别/路由温度（分类任务，低温保证确定性）
-    LLM_GENERATION_TEMPERATURE: float = 0.8                 # 测试数据生成温度
 
     # Streaming settings
     STREAM_DELAY: float = 0.05                              # 流式响应延迟（秒）
@@ -119,23 +113,17 @@ class Settings(BaseSettings):
     RERANKER_ENABLED: bool = True                            # 精排开关（替代 LLM 相关性评分）
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"        # 重排序模型
     RERANKER_TOP_K: int = 5                                  # 重排序返回数
-    RERANKER_INPUT_TOP_K: int = 20                           # 精排输入候选数（RRF 融合后截取）
     RERANKER_MAX_LENGTH: int = 512                           # 重排序最大长度
     RERANKER_DEVICE: str = "auto"                            # 精排设备: auto / cuda / cpu
     RERANKER_BATCH_SIZE: int = 8                             # 精排批处理大小
     RERANKER_HALF_PRECISION: bool = True                     # fp16 半精度（6GB 显存必需）
 
-    # HF 模型缓存目录（reranker 等本地模型下载落点）
-    HF_HOME: str = ""                                        # 留空走系统默认缓存（Windows: %USERPROFILE%\.cache\huggingface）
-
     # Hybrid retrieval settings
     RRF_FUSION_K: int = 60                                   # RRF 融合平滑常数
     RRF_TOP_K: int = 20                                      # RRF 融合后输出候选数（精排输入）
-    HYBRID_EMBEDDING_MODEL: str = "text-embedding-v4"  # 混合检索向量模型（与主 embedding 保持一致）
 
     # Memory & Token settings
     MEMORY_CACHE_TTL: int = 86400                            # 摘要缓存 TTL（秒）
-    CONVERSATION_HISTORY_MAX_RECORDS: int = 5                # 对话历史最大记录数
 
     @property
     def DATABASE_URL(self) -> str:
