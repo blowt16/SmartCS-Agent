@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from app.services.llm_factory import LLMFactory
@@ -530,6 +530,11 @@ async def upload_image(
     except Exception as e:
         logger.exception("Image upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chat.html", include_in_schema=False)
+async def chat_page():
+    """LangGraph 智能客服独立页面（人工测试入口：/api/langgraph/query 的图形化前端）"""
+    return FileResponse(Path(__file__).parent.parent / "chat.html")
 
 # 最后挂载静态文件，并确保使用绝对路径
 STATIC_DIR = Path(__file__).parent / "static" / "dist"
