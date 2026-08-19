@@ -262,7 +262,8 @@ def rag_retrieval(query: str) -> str:
 | `VECTOR_SEARCH_TOP_K` | 有/有消费 | 保留（HNSW 路 top-k 语义随 HYBRID_RETRIEVAL_TOP_N 收口，视实施定存废） |
 | `HYBRID_RETRIEVAL_TOP_K=5` | 有/有消费 | 保留（融合最终输出） |
 | `HYBRID_RETRIEVAL_TOP_N=20` | 有/有消费 | 保留（每路候选数） |
-| `RRF_FUSION_K=60` | 有/有消费 | 保留 |
+| `RRF_FUSION_K=60` | 有/有消费 | 保留（平滑常数） |
+| `RRF_TOP_K=20` | **无** | **新增**（融合输出候选数，精排输入） |
 | `RERANKER_ENABLED` | **无** | **新增**（默认 true，精排开关） |
 | `RERANKER_MODEL=BAAI/bge-reranker-v2-m3` | 有/零消费 | 接线 |
 | `RERANKER_TOP_K=5` | 有/零消费 | 接线 |

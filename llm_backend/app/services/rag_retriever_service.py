@@ -126,11 +126,11 @@ class RAGRetrieverService:
             self._safe(self.bm25.search(query, settings.BM25_TOP_K)),
         )
 
-        # ② RRF 融合（只消费排名，候选集 = RERANKER_INPUT_TOP_K）
+        # ② RRF 融合（只消费排名，输出候选数 = RRF_TOP_K）
         fused = rrf_fuse(
             result_lists=[vector_results, bm25_results],
             id_key="id",
-            top_k=settings.RERANKER_INPUT_TOP_K,
+            top_k=settings.RRF_TOP_K,
         )
 
         # ③ 精排（失败/关闭 → 直接用融合 top-K）

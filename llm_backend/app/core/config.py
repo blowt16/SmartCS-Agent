@@ -123,7 +123,8 @@ class Settings(BaseSettings):
     HF_HOME: str = ""                                        # 留空走系统默认缓存（Windows: %USERPROFILE%\.cache\huggingface）
 
     # Hybrid retrieval settings
-    RRF_FUSION_K: int = 60                                   # RRF 融合参数
+    RRF_FUSION_K: int = 60                                   # RRF 融合平滑常数
+    RRF_TOP_K: int = 20                                      # RRF 融合后输出候选数（精排输入）
     HYBRID_EMBEDDING_MODEL: str = "text-embedding-v4"  # 混合检索向量模型（与主 embedding 保持一致）
 
     # Memory & Token settings
