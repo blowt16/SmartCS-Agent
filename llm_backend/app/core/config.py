@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     VISION_API_KEY: str
     VISION_BASE_URL: str
     VISION_MODEL: str
+    VISION_MAX_TOKENS: int = 4000                           # 视觉模型最大输出 token
+    VISION_TIMEOUT: int = 60                                # 视觉模型请求超时（秒）
     
     # Ollama settings
     OLLAMA_BASE_URL: str
@@ -44,6 +46,7 @@ class Settings(BaseSettings):
     SEARCH_RESULT_COUNT: int = 3
     SEARCH_LANGUAGE: str = "zh-CN"                          # 搜索语言
     SEARCH_REGION: str = "cn"                               # 搜索地区
+    SEARCH_TIMEOUT: int = 15                                # 联网搜索超时（秒）
     
     # Database settings
     DB_HOST: str
@@ -83,6 +86,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "text-embedding-v4"      # 本地模型名（TYPE=local 时改回 bge-m3；qwen 类型走 QWEN_EMBEDDING_MODEL）
     EMBEDDING_DIMENSION: int = 1024                 # 向量维度（text-embedding-v4 默认 1024）
     EMBEDDING_THRESHOLD: float = 0.90               # 语义相似度阈值
+    EMBEDDING_TIMEOUT: int = 30                     # Embedding API 请求超时（秒）
 
     # Qwen Embedding API（OpenAI-compatible / DashScope）
     QWEN_EMBEDDING_API_KEY: str = ""
@@ -101,6 +105,7 @@ class Settings(BaseSettings):
     BM25_TOP_K: int = 20                                    # BM25 检索候选数
     HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数
     HYBRID_RETRIEVAL_TOP_N: int = 20                        # 向量检索候选数（混合检索候选）
+    RAG_TIMEOUT_SECONDS: int = 30                           # RAG 子图超时（秒），超时降级兜底回答
 
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度

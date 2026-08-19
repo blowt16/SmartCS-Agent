@@ -345,17 +345,17 @@ async def create_image_query(
                     ]
                 }
             ],
-            "max_tokens": 4000,
+            "max_tokens": settings.VISION_MAX_TOKENS,
             "temperature": 0.7
         }
-        
+
         # 发送API请求
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=60  # 增加超时时间
+                timeout=settings.VISION_TIMEOUT
             ) as response:
                 if response.status == 200:
                     result = await response.json()
@@ -467,7 +467,7 @@ async def create_research_plan(
     #   langgraph 0.3.25 + PostgresSaver 下子图 Send(map-reduce) 的 checkpoint 序列化
     #   会抛 "Object of type Send is not JSON serializable"（已最小复现）；
     #   子图纯 RAG 检索无中断/恢复需求，会话记忆由主图 checkpoint 承担。
-    timeout = TimeoutGuard(timeout_seconds=30)
+    timeout = TimeoutGuard(timeout_seconds=settings.RAG_TIMEOUT_SECONDS)
     response = await timeout.wrap(
         multi_tool_workflow.ainvoke(
             input_state,

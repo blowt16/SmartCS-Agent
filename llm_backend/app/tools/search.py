@@ -29,7 +29,7 @@ class SearchTool:
             response = requests.get(
                 settings.SERPAPI_BASE_URL,
                 params=params,
-                timeout=15
+                timeout=settings.SEARCH_TIMEOUT
             )
             response.raise_for_status()
             

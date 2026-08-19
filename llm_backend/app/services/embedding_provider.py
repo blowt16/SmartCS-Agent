@@ -81,7 +81,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
     def embed_sync(self, texts: List[str]) -> List[List[float]]:
         payload = {"model": self.model, "input": texts}
         try:
-            resp = requests.post(self.api_url, json=payload, timeout=30)
+            resp = requests.post(self.api_url, json=payload, timeout=settings.EMBEDDING_TIMEOUT)
             resp.raise_for_status()
             return resp.json()["embeddings"]
         except Exception as e:
@@ -92,7 +92,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
         payload = {"model": self.model, "input": texts}
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(self.api_url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                async with session.post(self.api_url, json=payload, timeout=aiohttp.ClientTimeout(total=settings.EMBEDDING_TIMEOUT)) as resp:
                     resp.raise_for_status()
                     result = await resp.json()
                     return result["embeddings"]
@@ -138,7 +138,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.api_url, json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30),
+                    timeout=aiohttp.ClientTimeout(total=settings.EMBEDDING_TIMEOUT),
                 ) as resp:
                     resp.raise_for_status()
                     result = await resp.json()
@@ -159,7 +159,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
             "dimensions": settings.EMBEDDING_DIMENSION,  # 显式锁定输出维度，与表 Vector(dim) 一致
         }
         try:
-            resp = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
+            resp = requests.post(self.api_url, json=payload, headers=headers, timeout=settings.EMBEDDING_TIMEOUT)
             resp.raise_for_status()
             result = resp.json()
             return [self._normalize(item["embedding"]) for item in result["data"]]
