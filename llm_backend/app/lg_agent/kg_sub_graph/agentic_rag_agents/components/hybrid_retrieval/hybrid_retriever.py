@@ -22,11 +22,11 @@
 
 from typing import List, Dict, Any, Optional
 
-from sentence_transformers import SentenceTransformer
 import numpy as np
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.services.embedding_provider import get_embedding_provider, embed_in_batches
 from .bm25_retriever import BM25Retriever
 from .rrf_fusion import rrf_fuse
 
@@ -52,44 +52,41 @@ class HybridRetriever:
         Args:
             documents: 文档语料列表（如向量库中的全部文档）
             text_key: 文档中用于检索的文本字段名
-            embedding_model: 向量编码模型名称
+            embedding_model: 兼容参数（已废弃，向量统一由 Provider 提供）
         """
-        if embedding_model is None:
-            embedding_model = settings.HYBRID_EMBEDDING_MODEL
         self.documents = documents
         self.text_key = text_key
-        self.embedding_model_name = embedding_model
 
         # BM25 检索器
         self.bm25 = BM25Retriever(documents, text_key=text_key)
 
         # 向量检索相关（懒加载）
-        self._encoder: Optional[SentenceTransformer] = None
         self._doc_embeddings: Optional[np.ndarray] = None
 
-    @property
-    def encoder(self) -> SentenceTransformer:
-        """懒加载向量编码模型"""
-        if self._encoder is None:
-            logger.info("加载向量编码模型: {}", self.embedding_model_name)
-            self._encoder = SentenceTransformer(self.embedding_model_name)
-        return self._encoder
-
-    def _get_doc_embeddings(self) -> np.ndarray:
-        """懒加载并缓存文档向量"""
+    async def _get_doc_embeddings(self) -> np.ndarray:
+        """懒加载并缓存文档向量：优先复用文档自带的库内向量，缺失时走 Provider 兜底编码"""
         if self._doc_embeddings is None:
-            texts = [
-                doc.get(self.text_key, "") if isinstance(doc, dict) else str(doc)
-                for doc in self.documents
-            ]
-            logger.info("编码 {} 个文档...", len(texts))
-            self._doc_embeddings = self.encoder.encode(
-                texts, convert_to_numpy=True, normalize_embeddings=True
+            arrays: List[np.ndarray] = []
+            missing_texts: List[str] = []
+            for doc in self.documents:
+                emb = doc.get("embedding") if isinstance(doc, dict) else None
+                if emb is not None:
+                    arrays.append(np.asarray(emb, dtype=np.float32))
+                else:
+                    missing_texts.append(
+                        doc.get(self.text_key, "") if isinstance(doc, dict) else str(doc)
+                    )
+            if missing_texts:
+                logger.info("兜底编码 {} 个文档向量...", len(missing_texts))
+                vectors = await embed_in_batches(missing_texts)
+                arrays.extend(np.asarray(v, dtype=np.float32) for v in vectors)
+            self._doc_embeddings = (
+                np.vstack(arrays) if arrays else np.zeros((0, settings.EMBEDDING_DIMENSION))
             )
-            logger.info("文档向量编码完成")
+            logger.info("文档向量就绪: 复用 {} 个 + 兜底编码 {} 个", len(arrays) - len(missing_texts), len(missing_texts))
         return self._doc_embeddings
 
-    def _vector_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    async def _vector_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
         向量语义检索。
 
@@ -98,10 +95,10 @@ class HybridRetriever:
             2. 计算 query 向量和所有文档向量的余弦相似度
             3. 返回最相似的 top-K 个文档
         """
-        doc_embeddings = self._get_doc_embeddings()
-        query_embedding = self.encoder.encode(
-            [query], convert_to_numpy=True, normalize_embeddings=True
-        )
+        doc_embeddings = await self._get_doc_embeddings()
+        query_embedding = np.asarray(
+            (await get_embedding_provider().embed([query]))[0], dtype=np.float32
+        ).reshape(1, -1)
 
         # 余弦相似度（已归一化，直接点积即可）
         similarities = np.dot(doc_embeddings, query_embedding.T).flatten()
@@ -113,6 +110,7 @@ class HybridRetriever:
             if similarities[idx] <= 0:
                 continue
             doc = dict(self.documents[idx]) if isinstance(self.documents[idx], dict) else {"text": self.documents[idx]}
+            doc.pop("embedding", None)  # 不把 1024 维向量带进下游响应
             doc["vector_score"] = float(similarities[idx])
             doc["vector_rank"] = rank
             results.append(doc)
@@ -120,7 +118,7 @@ class HybridRetriever:
         logger.info("向量检索完成: 返回 {} 条结果", len(results))
         return results
 
-    def search(
+    async def search(
         self,
         query: str,
         top_k: int = 10,
@@ -147,7 +145,7 @@ class HybridRetriever:
 
         # BM25 + 向量检索
         bm25_results = self.bm25.search(query, top_k=retrieval_top_n)
-        vector_results = self._vector_search(query, top_k=retrieval_top_n)
+        vector_results = await self._vector_search(query, top_k=retrieval_top_n)
 
         # RRF 融合
         fused = rrf_fuse(

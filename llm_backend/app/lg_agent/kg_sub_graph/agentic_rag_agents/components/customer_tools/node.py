@@ -1,10 +1,11 @@
-from typing import Any, Callable, Coroutine, Dict, List
+from typing import Any, Callable, Coroutine, Dict, List, Optional
+import threading
 from pydantic import BaseModel, Field
-from sentence_transformers import SentenceTransformer
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.document_chunk import DocumentChunk
+from app.services.embedding_provider import get_embedding_provider
 
 # 导入混合检索模块
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.hybrid_retrieval import HybridRetriever
@@ -44,13 +45,14 @@ class VectorSearchOutputState(BaseModel):
 class VectorStoreQuery:
     """向量库查询封装（pgvector），替代原 GraphRAGAPI"""
 
-    def __init__(self):
-        # Embedding 模型
-        model_name = getattr(settings, "EMBEDDING_MODEL", "bge-m3")
-        self.encoder = SentenceTransformer(model_name)
+    # 向量由统一 Provider 提供（qwen text-embedding-v4），无需本地加载模型
 
     @staticmethod
-    def _to_doc(chunk: DocumentChunk, score: float | None = None) -> Dict[str, Any]:
+    def _to_doc(
+        chunk: DocumentChunk,
+        score: float | None = None,
+        include_embedding: bool = False,
+    ) -> Dict[str, Any]:
         doc = {
             "text": chunk.content,
             "id": chunk.id,
@@ -59,6 +61,9 @@ class VectorStoreQuery:
             "user_id": chunk.user_id,
             "chunk_index": chunk.chunk_index,
         }
+        if include_embedding:
+            # 供 HybridRetriever 复用库内向量，避免重复编码
+            doc["embedding"] = list(chunk.embedding)
         if score is not None:
             # 归一化向量下 cosine_distance = 1 - 余弦相似度，score 取相似度（越大越相关）
             doc["score"] = 1.0 - float(score)
@@ -66,9 +71,10 @@ class VectorStoreQuery:
 
     async def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """执行 pgvector 向量检索（余弦距离 Top-K），返回文档列表"""
-        query_vec = self.encoder.encode(
-            [query], normalize_embeddings=True
-        ).tolist()[0]
+        query_vec = (await get_embedding_provider().embed([query]))[0]
+        if not any(query_vec):
+            logger.warning("查询向量全零（Embedding API 失败），跳过向量检索")
+            return []
 
         distance = DocumentChunk.embedding.cosine_distance(query_vec)
         async with AsyncSessionLocal() as session:
@@ -85,12 +91,32 @@ class VectorStoreQuery:
         return docs
 
     async def get_all_documents(self) -> List[Dict[str, Any]]:
-        """获取表中所有文档块（用于 HybridRetriever 构建语料库）"""
+        """获取表中所有文档块（用于 HybridRetriever 构建语料库），携带 embedding 供复用"""
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(DocumentChunk).order_by(DocumentChunk.id))
             chunks = result.scalars().all()
 
-        return [self._to_doc(chunk) for chunk in chunks]
+        return [self._to_doc(chunk, include_embedding=True) for chunk in chunks]
+
+
+# ==================== 向量库客户端单例 ====================
+
+_vector_store: Optional[VectorStoreQuery] = None
+_vector_store_lock = threading.Lock()
+
+
+def get_vector_store() -> VectorStoreQuery:
+    """模块级懒加载单例：ChromaDB/Embedding 客户端只初始化一次。
+
+    消除每请求重建查询客户端与全量文档拉取的开销（并行分支下放大）。
+    线程安全：并发首请求只允许一次初始化（见 SPEC_ENTITY_PARALLEL_RAG.md 风险 #4）。
+    """
+    global _vector_store
+    if _vector_store is None:
+        with _vector_store_lock:
+            if _vector_store is None:
+                _vector_store = VectorStoreQuery()
+    return _vector_store
 
 
 # ==================== LangGraph 节点工厂 ====================
@@ -122,7 +148,7 @@ def create_vector_search_query_node(
         if not query:
             errors.append("未提供查询文本")
         else:
-            vector_store = VectorStoreQuery()
+            vector_store = get_vector_store()
 
             # 1. 向量检索
             vector_results = await vector_store.search(query, top_k=settings.VECTOR_SEARCH_TOP_K)
@@ -135,7 +161,7 @@ def create_vector_search_query_node(
                         documents=all_docs,
                         text_key="text",
                     )
-                    hybrid_results = retriever.search(query, top_k=settings.HYBRID_RETRIEVAL_TOP_K, retrieval_top_n=settings.HYBRID_RETRIEVAL_TOP_N)
+                    hybrid_results = await retriever.search(query, top_k=settings.HYBRID_RETRIEVAL_TOP_K, retrieval_top_n=settings.HYBRID_RETRIEVAL_TOP_N)
                     logger.info("混合检索补充了 {} 条文档", len(hybrid_results))
             except Exception as e:
                 logger.warning("混合检索失败，跳过: {}", e)

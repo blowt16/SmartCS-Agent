@@ -1,15 +1,16 @@
 import os
 from typing import Dict, Any
 
+import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PyPDF2 import PdfReader
 from docx import Document
-from sentence_transformers import SentenceTransformer
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
 from app.models.document_chunk import DocumentChunk
+from app.services.embedding_provider import embed_in_batches
 
 logger = get_logger(service="indexing")
 
@@ -25,9 +26,7 @@ class IndexingService:
             separators=["\n\n", "\n", "。", "！", "？", "，", " ", ""],
         )
 
-        # Embedding 模型 — 优先用 settings 中的配置，兜底本地 bge-m3
-        embedding_model_name = getattr(settings, "EMBEDDING_MODEL", "bge-m3")
-        self.embedding_model = SentenceTransformer(embedding_model_name)
+        # Embedding 由统一 Provider 提供（qwen text-embedding-v4），不再本地加载模型
 
     # ==================== 文档解析 ====================
 
@@ -81,10 +80,12 @@ class IndexingService:
             chunks = self.text_splitter.split_text(text)
             logger.info("分块完成: {} 个文本块", len(chunks))
 
-            # 4. Embedding
-            embeddings = self.embedding_model.encode(
-                chunks, normalize_embeddings=True
-            ).tolist()
+            # 4. Embedding（qwen API 分批编码；全 0 向量说明 API 失败，显式报错避免静默投毒）
+            embeddings = await embed_in_batches(chunks)
+            if not embeddings or len(embeddings) != len(chunks) or any(
+                np.count_nonzero(v) == 0 for v in embeddings
+            ):
+                raise RuntimeError("Embedding 生成失败（API 返回全零向量）")
 
             # 5. 入库 pgvector（document_chunks 表）
             rows = [

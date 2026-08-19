@@ -73,8 +73,8 @@ class Settings(BaseSettings):
     
     # Embedding settings
     EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen
-    EMBEDDING_MODEL: str = "bge-m3"                 # 本地/通用 Embedding 模型名
-    EMBEDDING_DIMENSION: int = 1024                 # 向量维度（bge-m3=1024）
+    EMBEDDING_MODEL: str = "text-embedding-v4"      # 本地模型名（TYPE=local 时改回 bge-m3；qwen 类型走 QWEN_EMBEDDING_MODEL）
+    EMBEDDING_DIMENSION: int = 1024                 # 向量维度（text-embedding-v4 默认 1024）
     EMBEDDING_THRESHOLD: float = 0.90               # 语义相似度阈值
 
     # Qwen Embedding API（OpenAI-compatible / DashScope）
@@ -112,7 +112,7 @@ class Settings(BaseSettings):
 
     # Hybrid retrieval settings
     RRF_FUSION_K: int = 60                                   # RRF 融合参数
-    HYBRID_EMBEDDING_MODEL: str = "bge-m3"  # 混合检索向量模型
+    HYBRID_EMBEDDING_MODEL: str = "text-embedding-v4"  # 混合检索向量模型（与主 embedding 保持一致）
 
     # Memory & Token settings
     MEMORY_CACHE_TTL: int = 86400                            # 摘要缓存 TTL（秒）

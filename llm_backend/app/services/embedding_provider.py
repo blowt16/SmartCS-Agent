@@ -114,6 +114,15 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
         self.api_url = f"{self.base_url}/embeddings"
         logger.info("使用 Qwen Embedding: {} @ {}", self.model, self.base_url)
 
+    @staticmethod
+    def _normalize(vec: List[float]) -> List[float]:
+        """L2 归一化：qwen v4 不保证输出单位向量，而 pgvector/hybrid 余弦检索依赖单位向量"""
+        arr = np.asarray(vec, dtype=np.float32)
+        norm = np.linalg.norm(arr)
+        if norm == 0:
+            return vec  # 全 0 兜底向量原样返回，保留失败语义
+        return (arr / norm).tolist()
+
     async def embed(self, texts: List[str]) -> List[List[float]]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -123,6 +132,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
             "model": self.model,
             "input": texts,
             "encoding_format": "float",
+            "dimensions": settings.EMBEDDING_DIMENSION,  # 显式锁定输出维度，与表 Vector(dim) 一致
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -132,7 +142,7 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
                 ) as resp:
                     resp.raise_for_status()
                     result = await resp.json()
-                    return [item["embedding"] for item in result["data"]]
+                    return [self._normalize(item["embedding"]) for item in result["data"]]
         except Exception as e:
             logger.error("Qwen Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
@@ -146,12 +156,13 @@ class QwenEmbeddingProvider(BaseEmbeddingProvider):
             "model": self.model,
             "input": texts,
             "encoding_format": "float",
+            "dimensions": settings.EMBEDDING_DIMENSION,  # 显式锁定输出维度，与表 Vector(dim) 一致
         }
         try:
             resp = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
             resp.raise_for_status()
             result = resp.json()
-            return [item["embedding"] for item in result["data"]]
+            return [self._normalize(item["embedding"]) for item in result["data"]]
         except Exception as e:
             logger.error("Qwen Embedding 失败: {}", e)
             return [[0.0] * self.dimension] * len(texts)
@@ -182,3 +193,16 @@ def reset_embedding_provider():
     """重置单例（用于测试或配置热更新）"""
     global _provider
     _provider = None
+
+
+async def embed_in_batches(texts: List[str], batch_size: int = 10) -> List[List[float]]:
+    """分批调用 embedding API 并拼接结果。
+
+    text-embedding-v4 单请求文本数上限为 10 条，索引/兜底编码等批量场景
+    必须分批。provider 内部失败时返回全 0 向量（不抛错），由调用方检测。
+    """
+    provider = get_embedding_provider()
+    results: List[List[float]] = []
+    for i in range(0, len(texts), batch_size):
+        results.extend(await provider.embed(texts[i : i + batch_size]))
+    return results
