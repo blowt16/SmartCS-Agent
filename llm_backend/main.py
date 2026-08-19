@@ -28,8 +28,10 @@ from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
 from app.services.pronoun_detector import detect_pronoun, DetectionDecision
 from app.services.pronoun_resolver import resolve_pronouns
+from app.services.redis_semantic_cache import RedisSemanticCache
 from langchain_core.messages import HumanMessage, AIMessage
 import json
+import asyncio
 
 
 # 配置上传目录 - RAG 功能的
@@ -50,6 +52,17 @@ def _get_resolve_llm():
     if _resolve_llm_service is None:
         _resolve_llm_service = LLMFactory.create_chat_service()
     return _resolve_llm_service
+
+
+async def _stream_cached(response: str, delay: float = None):
+    """模拟流式返回缓存的响应（与 DeepseekService 行为一致，保持前端体验）"""
+    if delay is None:
+        delay = settings.STREAM_DELAY
+    # 每次返回4个字符
+    chunks = [response[i:i + 4] for i in range(0, len(response), 4)]
+    for chunk in chunks:
+        await asyncio.sleep(delay)
+        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 # 启动时初始化 LangGraph Postgres 检查点（连接池 + 检查点表 + 编译 graph）
 @asynccontextmanager
@@ -398,13 +411,37 @@ async def langgraph_query(
                         "role": "assistant" if isinstance(m, AIMessage) else "user",
                         "content": m.content,
                     })
-        if history_messages and detect_pronoun(query, skip_filler=settings.RESOLVE_SKIP_FILLER) == DetectionDecision.NEED_RESOLVE:
+        decision = detect_pronoun(query, skip_filler=settings.RESOLVE_SKIP_FILLER)
+        if history_messages and decision == DetectionDecision.NEED_RESOLVE:
             resolved_query = await resolve_pronouns(
                 _get_resolve_llm(),
                 history_messages + [{"role": "user", "content": query}],
                 query,
             )
             logger.info("入口指代消解: '{}' → '{}'", query, resolved_query)
+            # 消解失败降级时仍为 NEED_RESOLVE（无完整问题可作缓存 key）
+            decision = detect_pronoun(resolved_query)
+
+        # ===== 语义缓存检索（消解后、进图前；命中短路，跳过整个图流程）=====
+        # 缓存内容由 graphrag/chat 链路完整回答后写入（ScopeGuard 把关的范围内回答），
+        # 且 key 基于消解后消息——入口查缓存天然只命中经营范围内的完整问题
+        cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
+        cached_response = None
+        if decision == DetectionDecision.NEED_RESOLVE:
+            logger.info("含指代且无历史可消解，跳过缓存检索")
+        else:
+            cached_response = await cache.lookup(
+                history_messages + [{"role": "user", "content": resolved_query}],
+                resolve_llm=_get_resolve_llm(),
+            )
+        if cached_response:
+            logger.info("语义缓存命中，短路返回: '{}'", resolved_query)
+            response = StreamingResponse(
+                _stream_cached(cached_response),
+                media_type="text/event-stream"
+            )
+            response.headers["X-Conversation-ID"] = thread_id
+            return response
 
         # 新会话或正常多轮对话，始终用 InputState 输入
         # LangGraph 通过 thread_id 自动维护上下文状态
@@ -412,26 +449,37 @@ async def langgraph_query(
         input_state = InputState(messages=resolved_query)
 
         async def process_stream():
+            # 收集完整回答，图结束后回写语义缓存
+            complete_response = []
             async for c, metadata in graph.astream(
                 input=input_state,
                 stream_mode="messages",
                 config=thread_config
             ):
                 if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
+                    complete_response.append(c.content)
                     content_json = json.dumps(c.content, ensure_ascii=False)
                     yield f"data: {content_json}\n\n"
                 elif c.additional_kwargs.get("tool_calls"):
                     tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
                     logger.debug("Tool call: {}", tool_data)
+            # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存）
+            if decision != DetectionDecision.NEED_RESOLVE and complete_response:
+                await cache.update(
+                    history_messages + [{"role": "user", "content": resolved_query}],
+                    "".join(complete_response),
+                    resolve_llm=_get_resolve_llm(),
+                )
+                logger.info("语义缓存已回写: '{}'", resolved_query)
 
         response = StreamingResponse(
             process_stream(),
             media_type="text/event-stream"
         )
-        
+
         # 添加会话ID到响应头，方便前端获取
         response.headers["X-Conversation-ID"] = thread_id
-        
+
         return response
         
     except Exception as e:

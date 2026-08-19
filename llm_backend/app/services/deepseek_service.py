@@ -71,11 +71,10 @@ class DeepseekService:
 
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    # 使用 ensure_ascii=False 来保持中文字符
-                    content = json.dumps(chunk.choices[0].delta.content, ensure_ascii=False)
-
+                    # 收集原始文本（缓存/落库用完整原文）；SSE 传输时再 JSON 编码
+                    content = chunk.choices[0].delta.content
                     full_response.append(content)
-                    yield f"data: {content}\n\n"
+                    yield f"data: {json.dumps(content, ensure_ascii=False)}\n\n"
             
             # 完整响应
             complete_response = "".join(full_response)
