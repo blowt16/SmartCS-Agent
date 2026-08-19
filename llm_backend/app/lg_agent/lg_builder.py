@@ -77,11 +77,12 @@ async def analyze_and_route_query(
         return {"router": Router(type="general-query", logic=f"超出经营范围: {scope_reason}")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
+    # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.ROUTER_TEMPERATURE, tags=["router"])
         logger.info("Using DeepSeek model: {}", settings.DEEPSEEK_MODEL)
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.ROUTER_TEMPERATURE, tags=["router"])
         logger.info("Using Ollama model: {}", settings.OLLAMA_AGENT_MODEL)
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话）

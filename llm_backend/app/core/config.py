@@ -104,6 +104,7 @@ class Settings(BaseSettings):
 
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
+    ROUTER_TEMPERATURE: float = 0.0                         # 意图识别/路由温度（分类任务，低温保证确定性）
     LLM_GENERATION_TEMPERATURE: float = 0.8                 # 测试数据生成温度
 
     # Streaming settings
