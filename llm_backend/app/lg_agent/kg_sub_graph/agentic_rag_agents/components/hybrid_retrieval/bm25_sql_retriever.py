@@ -56,6 +56,7 @@ class BM25SQLRetriever:
             results.append(
                 {
                     "id": chunk.id,
+                    "chunk_id": chunk.chunk_id,
                     "source": chunk.source,
                     "file_path": chunk.file_path,
                     "user_id": chunk.user_id,

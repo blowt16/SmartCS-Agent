@@ -53,10 +53,11 @@ class RAGRetrieverService:
 
     @staticmethod
     def _to_doc(chunk: DocumentChunk, score: float | None = None) -> Dict[str, Any]:
-        """chunk → 检索结果文档（与下游消费结构对齐：id 必在，RRF 按 id 去重）"""
+        """chunk → 检索结果文档（与下游消费结构对齐：id 必在，RRF 按 chunk_id 去重）"""
         doc = {
             "text": chunk.content,
             "id": chunk.id,
+            "chunk_id": chunk.chunk_id,
             "source": chunk.source,
             "file_path": chunk.file_path,
             "user_id": chunk.user_id,
@@ -127,9 +128,11 @@ class RAGRetrieverService:
         )
 
         # ② RRF 融合（只消费排名，输出候选数 = RRF_TOP_K）
+        # 去重键用 chunk_id(内容确定性):PK 是 DB 行号,删除重传后漂移/复用,
+        # chunk_id 同文件同键、跨环境稳定(见 spec §4 RRF 去重键决策)
         fused = rrf_fuse(
             result_lists=[vector_results, bm25_results],
-            id_key="id",
+            id_key="chunk_id",
             top_k=settings.RRF_TOP_K,
         )
 
