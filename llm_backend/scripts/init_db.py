@@ -17,7 +17,7 @@ logger.info("Root directory: {}", ROOT_DIR)
 import asyncio
 from sqlalchemy import text
 from app.core.database import engine, Base
-from app.models import User, Conversation, Message, DocumentChunk
+from app.models import User, Conversation, Message, DocumentChunk, Document
 
 async def init_db():
     try:
@@ -27,17 +27,36 @@ async def init_db():
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             # 启用 pg_jieba 中文分词扩展（BM25 全文检索，需自定义镜像构建，见 docker/postgres/Dockerfile）
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_jieba"))
-            # 删除所有表（如果存在）
-            await conn.run_sync(Base.metadata.drop_all)
-            # 创建所有表
+            # 幂等建表:不 drop_all,保留存量数据(修复 P0-2)
             await conn.run_sync(Base.metadata.create_all)
-            # 向量检索索引（HNSW，余弦距离）
+            # 存量表增量加列(幂等)
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chunk_id VARCHAR(64)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS md5 VARCHAR(32)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS file_type VARCHAR(20)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS page INTEGER"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chapter VARCHAR(255)"
+            ))
+            # 唯一约束幂等(存量 null 允许多值)
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_user_md5 ON documents (user_id, md5)"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunks_chunk_id ON document_chunks (chunk_id)"
+            ))
+            # 向量/全文索引(原有)
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_document_chunks_embedding "
                 "ON document_chunks USING hnsw (embedding vector_cosine_ops)"
             ))
-            # BM25 全文检索：content_tsv 生成列（jiebacfg 精确模式分词）+ GIN 倒排索引
-            # （Base.metadata.create_all 不覆盖生成列，须显式执行；存量数据 ALTER 时自动回填）
             await conn.execute(text(
                 "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_tsv tsvector "
                 "GENERATED ALWAYS AS (to_tsvector('jiebacfg', content)) STORED"

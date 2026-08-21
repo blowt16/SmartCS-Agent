@@ -15,6 +15,11 @@ class DocumentChunk(Base):
     file_path = Column(String(500), nullable=False)   # 上传路径
     user_id = Column(String(50), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False)     # 块序号
+    chunk_id = Column(String(64), nullable=True, unique=True)  # RRF 去重键: {user_id}_{md5}_{index:04d}
+    md5 = Column(String(32), nullable=True)
+    file_type = Column(String(20), nullable=True)
+    page = Column(Integer, nullable=True)              # PDF 页号(MVP 为 null,演进 layout.json)
+    chapter = Column(String(255), nullable=True)       # 章节路径
     content = Column(Text, nullable=False)            # 文本块内容
     embedding = Column(Vector(settings.EMBEDDING_DIMENSION), nullable=False)
     # BM25 全文检索生成列（jiebacfg 分词，DB 端自动维护，ORM 只读使用）
