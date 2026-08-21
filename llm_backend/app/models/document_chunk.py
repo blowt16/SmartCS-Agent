@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, func, Computed
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
@@ -23,5 +23,10 @@ class DocumentChunk(Base):
     content = Column(Text, nullable=False)            # 文本块内容
     embedding = Column(Vector(settings.EMBEDDING_DIMENSION), nullable=False)
     # BM25 全文检索生成列（jiebacfg 分词，DB 端自动维护，ORM 只读使用）
-    content_tsv = Column(TSVECTOR, nullable=True)
+    # Computed() 标记:SQLAlchemy INSERT/UPDATE 不携带该列(PG 拒绝写入生成列)
+    content_tsv = Column(
+        TSVECTOR,
+        Computed("to_tsvector('jiebacfg', content)", persisted=True),
+        nullable=True,
+    )
     created_at = Column(DateTime, server_default=func.now())

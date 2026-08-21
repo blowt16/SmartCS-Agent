@@ -68,6 +68,9 @@ def _split_md_by_headings(content: str) -> list[Segment]:
     return segments
 
 
+parse_md_string = _split_md_by_headings  # 公开别名:供 MinerU 输出 markdown 复用章节逻辑
+
+
 def parse_docx(path: Path) -> list[Segment]:
     """docx:遍历 element.body 按原序取段落+表格(合并单元格按 id 去重)。"""
     from docx import Document
