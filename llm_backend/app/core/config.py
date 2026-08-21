@@ -96,6 +96,24 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 500                                   # 文本分块大小
     CHUNK_OVERLAP: int = 50                                 # 分块重叠大小
 
+    # Indexing settings (2026-08-21 索引构建重构)
+    MAX_FILE_SIZE_MB: int = 30                             # 上传大小上限(MB)
+    ALLOWED_FILE_TYPES: str = "txt,md,pdf,docx"            # 允许扩展名(逗号分隔,小写)
+    TEXT_CLEAN_ENABLED: bool = True                        # 清洗流水线开关
+    CHUNK_MIN_SIZE: int = 5                                # 过短 chunk 过滤(字符)
+    EMBEDDING_MAX_RETRIES: int = 3                         # 嵌入批次失败重试次数
+
+    # MinerU 云端 API(标准 API v4)
+    MINERU_API_TOKEN: str = ""                             # https://mineru.net/apiManage/token 申请
+    MINERU_BASE_URL: str = "https://mineru.net/api/v4"
+    MINERU_POLL_INTERVAL: int = 3                          # 轮询间隔(秒)
+    MINERU_TIMEOUT: int = 300                              # 轮询总超时(秒)
+    MINERU_MAX_RETRIES: int = 3                            # 提交请求失败重试次数
+
+    @property
+    def allowed_extensions(self) -> set[str]:
+        return {e.strip().lower() for e in self.ALLOWED_FILE_TYPES.split(",") if e.strip()}
+
     # RAG retrieval settings
     BM25_TOP_K: int = 20                                    # BM25 检索候选数
     HYBRID_RETRIEVAL_TOP_K: int = 5                         # 混合检索最终返回数（精排关闭时兜底）
