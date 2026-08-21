@@ -27,7 +27,6 @@ from langchain_core.prompts import ChatPromptTemplate
 import base64
 import os
 import aiohttp
-import asyncio
 import json
 import time
 from pathlib import Path
@@ -37,7 +36,7 @@ from pydantic import BaseModel, Field
 
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryManager
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.agent_safety import (
-    ScopeGuard, TimeoutGuard, BudgetGuard,
+    ScopeGuard, TimeoutGuard,
 )
 
 
@@ -418,46 +417,13 @@ async def create_research_plan(
         llm=model,
     )
 
-    # ====== 查询预处理管道（纠错 → 扩展 → Multi-Query + HyDE）======
-    # ④ 预算控制：每步 LLM 调用前检查预算，超预算跳过非必要步骤
-    # 注：指代消解（上下文改写）已前置到系统入口（main.py /api/langgraph/query），
-    #     进入本节点的 query 已是消解后的完整问题，无需在此重复消解
-    budget = BudgetGuard()
+    # 指代消解已前置到系统入口（main.py /api/langgraph/query），
+    # 进入本节点的 query 已是消解后的完整问题，直接取当前问题
+    resolved_question = state.messages[-1].content if state.messages else ""
 
-    # 第一步：查询纠错（非必要，可跳过）
-    # 修正错别字（如"扫第机器人"→"扫地机器人"），确保实体识别基于正确文本
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.query_correction import (
-        correct_query,
-        expand_query,
-    )
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.node import (
-        rewrite_query,
-    )
-    resolved_question = state.messages[-1].content if state.messages else ""  # 入口已消解，直接取当前问题
-    corrected_question = resolved_question
-    if budget.can_call("query_correction", essential=False):
-        corrected_question = await correct_query(model, resolved_question)
-        budget.record("query_correction", tokens=300, essential=False)
-
-    # 第三步：查询扩展（非必要，可跳过）
-    # 补充同义词（如"灯泡"→"LED灯"），扩大检索覆盖面
-    expanded_question = corrected_question
-    if budget.can_call("query_expansion", essential=False):
-        expanded_question = await expand_query(model, corrected_question)
-        budget.record("query_expansion", tokens=300, essential=False)
-
-    # 第四步：查询改写 Multi-Query + HyDE（非必要，可跳过）
-    enhanced_question = expanded_question
-    if budget.can_call("multi_query", essential=False):
-        rewritten = await rewrite_query(model, expanded_question)
-        enhanced_question = rewritten.enhanced_query
-        budget.record("multi_query", tokens=500, essential=False)
-
-    logger.info("预处理预算消耗: {} 次调用, {} tokens", budget.total_calls, budget.total_tokens)
-
-    # 准备输入状态 — 用增强后的问题替代原始问题
+    # 准备输入状态 — 直接使用消解后的问题
     input_state = {
-        "question": enhanced_question,
+        "question": resolved_question,
         "data": [],
         "history": []
     }

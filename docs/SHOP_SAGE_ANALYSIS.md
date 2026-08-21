@@ -56,9 +56,11 @@
 
 **SmartCS-Agent**（`/api/langgraph/query`）：
 
+> ⚠️ 该调用链描述滞后：guardrails / tool_selection / predefined_cypher 已随阶段 3 删除，查询预处理管道已移除（2026-08-21，见 SPEC_REMOVE_QUERY_PREPROCESSING.md）。当前 graphrag-query = create_research_plan（编译子图 + TimeoutGuard）→ multi_tool 子图（planner → Send map-reduce → customer_tools → summarize → final_answer）。
+
 ```
 路由 → LoggingMiddleware → analyze_and_route_query（ScopeGuard → LLM 5 路意图+复杂度）
-  → graphrag-query: 查询预处理 5 步 → multi_tool 子图
+  → graphrag-query: multi_tool 子图
      guardrails → planner(Send map-reduce) → tool_selection → predefined_cypher / customer_tools
      → summarize → final_answer
   → SSE stream_mode="messages"

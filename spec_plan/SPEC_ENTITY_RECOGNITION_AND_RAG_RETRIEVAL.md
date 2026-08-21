@@ -179,7 +179,7 @@ resolved_question（入口指代消解后，含原始意图）
 ```
 
 **流程**：
-1. LLM 为子 query 生成 100-200 字假想答案（含产品专业术语，`generate_hypothetical_answer` 复用现状函数）
+1. LLM 为子 query 生成 100-200 字假想答案（含产品专业术语，`generate_hypothetical_answer` 复用现状函数 ⚠️ 该函数已随 query_rewriting 目录删除（2026-08-21，见 SPEC_REMOVE_QUERY_PREPROCESSING.md），实施阶段 4 时需内置实现或另立函数）
 2. 假想答案单独执行向量检索（**不做混合检索**——BM25 对长文本假想答案无效）
 3. 两路检索结果按文档 id 合并去重，进入混合检索合并池
 

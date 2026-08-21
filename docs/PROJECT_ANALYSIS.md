@@ -199,8 +199,7 @@ SmartCS-Agent/
 │       │               ├── customer_tools/   # 检索节点（vector_search_query，调 RAGRetrieverService）
 │       │               ├── hybrid_retrieval/ # bm25_sql_retriever.py（pg_jieba SQL BM25）+ rrf_fusion.py
 │       │               ├── memory/         # 三层记忆管理器
-│       │               ├── agent_safety/   # 护栏（Scope/Budget/Timeout）
-│       │               ├── query_rewriting/# 查询预处理管道（纠错/扩展/Multi-Query+HyDE）
+│       │               ├── agent_safety/   # 护栏（Scope/Timeout）
 │       │               └── planner/        # 任务分解
 │       ├── models/                     # SQLAlchemy 模型
 │       │   ├── conversation.py
@@ -317,16 +316,8 @@ stateDiagram-v2
     create_image_query --> [*]: Qwen-VL 视觉分析
 
     state create_research_plan {
-        [*] --> QueryPreprocess: 查询预处理
-        QueryPreprocess --> MultiToolWorkflow: 多工具工作流
+        [*] --> MultiToolWorkflow: 多工具工作流
         MultiToolWorkflow --> [*]: 返回结果
-
-        state QueryPreprocess {
-            [*] --> QueryCorrect: 查询纠错
-            QueryCorrect --> QueryExpand: 查询扩展
-            QueryExpand --> MultiQueryHyDE: Multi-Query+HyDE
-            MultiQueryHyDE --> [*]
-        }
 
         state MultiToolWorkflow {
             [*] --> Planner: 任务分解
@@ -418,20 +409,9 @@ flowchart LR
 | 护栏 | 位置 | 机制 |
 |------|------|------|
 | **ScopeGuard** | 路由前 | 关键词预检，零延迟拦截非经营范围问题 |
-| **BudgetGuard** | 预处理管道 | 每步 LLM 调用前检查 Token 预算，超预算跳过非必要步骤 |
 | **TimeoutGuard** | 工作流执行 | 30 秒超时返回降级回答 |
 
-（HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担）
-
-### 4.9 查询预处理管道
-
-3 步管道式查询增强，在进入 Multi-Tool 工作流之前完成（指代消解已前置到系统入口，图内不再重复处理）：
-
-| 步骤 | 组件 | 必要性 | 功能 |
-|------|------|--------|------|
-| 1 | `correct_query` | 非必要 | 错别字修正（"扫第"→"扫地"） |
-| 2 | `expand_query` | 非必要 | 同义词扩展（"灯泡"→"LED灯"） |
-| 3 | `rewrite_query` (Multi-Query+HyDE) | 非必要 | 多查询生成 + 假设文档嵌入 |
+（HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担；查询预处理管道与 BudgetGuard 已于 2026-08-21 移除，见 spec_plan/SPEC_REMOVE_QUERY_PREPROCESSING.md）
 
 ---
 
@@ -461,7 +441,7 @@ flowchart TD
 
     RT -->|"闲聊/非业务"| GEN["5.3 general-query<br/>纯 LLM 闲聊"]
     RT -->|"信息不足"| ADD["5.4 additional-query<br/>护栏 + 追问"]
-    RT -->|"知识库查询"| KG["5.5 graphrag-query<br/>预处理 + 向量检索子图"]
+    RT -->|"知识库查询"| KG["5.5 graphrag-query<br/>向量检索子图"]
     RT -->|"图片分析"| IMG["5.6 image-query<br/>Qwen-VL + LLM"]
 
     GEN --> SSE["SSE 流式返回<br/>逐 chunk 推送 data: {content}"]
@@ -540,16 +520,12 @@ flowchart TD
 
 ### 5.5 graphrag-query 知识库查询意图运行流程
 
-节点 `create_research_plan`：先跑 3 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
+节点 `create_research_plan`：直接进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护），查询预处理管道（纠错/扩展/Multi-Query+HyDE）与 BudgetGuard 已移除（2026-08-21）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
 
 ```mermaid
 flowchart TD
     A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
-    A --> P["查询预处理管道<br/>（BudgetGuard 预算控制）"]
-    P --> P1["① 查询纠错（非必要）<br/>错别字修正"]
-    P1 --> P2["② 查询扩展（非必要）<br/>同义词补充"]
-    P2 --> P3["③ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
-    P3 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
+    A --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
     R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
     S2 --> S3["混合检索（每子任务）<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合 top-20"]
     S3 --> S4["Reranker 精排<br/>bge-reranker-v2-m3 top-5"]
@@ -708,19 +684,7 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 - LRU 自动清理（ZSET score 排序）+ 访问次数统计
 - 模拟流式返回保持前端体验一致
 
-### 8.5 🌟 查询预处理管道 + 预算控制
-
-**创新点**: 3 步查询增强 + 每步 LLM 调用前检查 Token 预算，实现**成本可控的质量增强**（指代消解已前置系统入口，不占管道预算）：
-
-| 步骤 | 必要性 | 原因 |
-|------|--------|------|
-| 查询纠错 | 非必要 | 大多数场景下正确率已高 |
-| 查询扩展 | 非必要 | 扩展覆盖面但有额外成本 |
-| Multi-Query+HyDE | 非必要 | 质量提升显著但 Token 消耗大 |
-
-**技术价值**: 区分必要/非必要步骤，在预算紧张时自动跳过非必要步骤，实现质量和成本的动态平衡。
-
-### 8.6 🌟 Docker Compose 一键部署 + Healthcheck
+### 8.5 🌟 Docker Compose 一键部署 + Healthcheck
 
 **创新点**: 3 个服务 (PostgreSQL/Redis/App) 通过 `depends_on` + `condition: service_healthy` 确保启动顺序：
 
@@ -755,9 +719,9 @@ app:
 | 优点 | 说明 |
 |------|------|
 | **检索质量闭环** | 混合检索 → Reranker 精排，DB 内检索 + 交叉编码器把关 |
-| **多层护栏** | 范围预检 + 预算控制 + 超时保护，层层保障 |
+| **多层护栏** | 范围预检 + 超时保护，层层保障 |
 | **内存管理成熟** | 三层摘要 + Token 预算 + Redis 缓存，处理长对话 |
-| **成本控制意识** | 语义缓存降本 + 预算控制非必要调用 |
+| **成本控制意识** | 语义缓存降本 + 入口指代消解门控（仅约 15% 含指代消息调 LLM） |
 
 ### 9.3 工程实践
 
@@ -968,7 +932,7 @@ sequenceDiagram
 | 电商客服原型 | ⭐⭐⭐⭐⭐ | 开箱即用，多轮对话+知识库完善 |
 | 学习 LangGraph | ⭐⭐⭐⭐⭐ | 完整的 StateGraph + 子图 + 多工具编排案例 |
 | 学习标准 RAG | ⭐⭐⭐⭐⭐ | pgvector 向量管道 + 混合检索的实际应用 |
-| 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、Reranker 精排、查询预处理等最佳实践 |
+| 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、Reranker 精排、混合检索等最佳实践 |
 | 生产部署 | ⭐⭐⭐ | 需补充测试、限流、监控后才能上生产 |
 
 ### 12.3 总结
@@ -978,7 +942,7 @@ SmartCS-Agent 是一个**技术深度优秀、工程完整性良好但生产就�
 1. **Agent 编排**: LangGraph StateGraph 的运用成熟，子图嵌套、条件路由、会话持久化、中断恢复等技术点处理得当
 2. **检索增强**: 混合检索（HNSW ∥ pg_jieba BM25）+ RRF 融合 + Reranker 精排形成完整的检索质量保障链路
 3. **工程降本**: 语义缓存的实现精细（按用户隔离、LRU清理、流式模拟），三层记忆管理的 Token 预算控制
-4. **系统思维**: 查询预处理管道的必要性分级、根据复杂度自动选择策略的量化决策
+4. **系统思维**: 入口指代消解 + 语义缓存前置（图执行前完成上下文处理与缓存短路），子图保持精简，冗余 LLM 调用持续收敛
 
 主要短板在于**测试缺失**和**生产级运维特性不足**（日志监控、限流降级、凭据管理），建议在这些方面投入改进后再用于生产环境。
 

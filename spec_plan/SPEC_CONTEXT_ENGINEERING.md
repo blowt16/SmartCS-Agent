@@ -627,7 +627,7 @@ flowchart TB
 | **Tool 消息过滤** | 未处理 | compact 时过滤老旧 tool 消息 | compact 流程中增加过滤器 |
 | **业务库** | PostgreSQL (只存 user→conversation→message) | 增加 tool_log | 新增 `agent_tool_log` 表 |
 | **会话恢复** | PostgresSaver 持久化恢复 | 持久化恢复（原方案 SQLite 降级） | 恢复逻辑实现（Checkpointer 已满足） |
-| **RAG 上下文** | 查询预处理管道（5步） | 保持不变 + 与 compact 解耦 | 无冲突，独立运行 |
+| **RAG 上下文** | 查询预处理管道（5步，⚠️ 已删除 2026-08-21，主链路以入口消解后问题直进子图，见 SPEC_REMOVE_QUERY_PREPROCESSING.md） | 保持不变 + 与 compact 解耦 | 无冲突，独立运行 |
 | **State 字段** | 当前 `AgentState` | 增加 `summary`/`biz_context`/`need_transfer_human` | State 扩展 |
 
 ### 实施优先级建议
