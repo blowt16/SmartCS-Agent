@@ -27,7 +27,9 @@
 | 文件列表/删除接口 | ✅ 迁移(新增) | 基于 documents 表实现,运营可删除错误上传 |
 | 商品知识种子导入脚本 | ✅ 新增(外仓库无此能力) | 修复 P0-1(语料无自动导入入口),本项目独有需求 |
 | init_db 幂等化(去 drop_all) | ✅ 新增(外仓库无此能力) | 修复 P0-2(初始化即清库) |
-| PDF 多模态/视觉理解(MinerU 流水线、VL 图片描述) | ❌ 排除 | 重依赖(视觉 API+图片存储+哈希去重),商品手册 MVP 无此需求 |
+| PDF 解析(原外部仓库本地 MinerU 流水线 → 云端 MinerU API) | ✅ 迁移(改用 API 版) | 扫描件/复杂版面/中文表格全场景覆盖;免本地 5-10GB 模型与 GPU;免费额度 1000 页/天足够运营小批量 |
+| 本地 MinerU 部署(模型 + GPU + 视觉管线) | ❌ 排除 | 重依赖(5-10GB 模型、PaddlePaddle 生态);云端 API 已达到同等解析能力,无自建必要 |
+| PDF 多模态/VL 图片描述 | ❌ 排除 | 商品说明书以文本+表格为主,无需图片理解 |
 | 语义合并(SentenceTransformer 二次嵌入) | ❌ 排除 | 外仓库默认关闭;增加本地模型依赖,收益不明确 |
 | SSE 异步进度(single_upload_tracker) | ❌ 排除 | 单文件同步上传对运营场景足够;是 zip 批量场景的配套 |
 | zip 批量导入 | ❌ 排除 | 未要求 |
@@ -42,7 +44,7 @@
 POST /api/upload
   1. 校验: 扩展名白名单 + 大小上限(env 配置)           → 400
   2. MD5 计算 → documents 表查重(同 user_id)            → 命中返回 duplicate,跳过
-  3. 解析: pdf→PyMuPDF(按页,记录页号) / docx→段落+表格(body 顺序) / txt,md→编码降级链
+  3. 解析: pdf→MinerU 云端 API(is_ocr=true,轮询取 full.md) / docx→段落+表格(body 顺序) / txt,md→编码降级链
   4. 清洗(TEXT_CLEAN_ENABLED 开关):
      控制字符清理 → 空白规范化 → 页码行清理 → 目录行清理
   5. 分块: RecursiveCharacterTextSplitter(500/50, 不变)
@@ -61,7 +63,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 
 **设计原则:全链路零中间态** —— 校验/解析/清洗/分块/嵌入全部在内存完成,**任何 DB 写入只发生在最后一步且只有一个事务**:
 
-- 任一阶段失败(校验、MD5、解析、清洗、分块、嵌入超限、事务回滚)→ **DB 零写入**(无 documents 行、无 chunk、MD5 未登记)→ 返回 failed + 明确错误分类
+- 任一阶段失败(校验、MD5、解析——含 MinerU API 不可达/超时/解析失败、清洗、分块、嵌入超限、事务回滚)→ **DB 零写入**(无 documents 行、无 chunk、MD5 未登记)→ 返回 failed + 明确错误分类
 - **失败后重传同一文件 = 全新重试**:因为失败无痕,MD5 查重不会命中,不会出现"库里没数据却提示已存在"的死锁
 - **并发防重(竞态兜底)**:`documents (user_id, md5)` 唯一约束;两个并发上传同文件时,后提交方 INSERT 触发 IntegrityError → 捕获后整体回滚 → 返回 duplicate(查重 SELECT 只是快速路径,唯一约束才是最终防线)
 - 嵌入分批:**全部批次成功才进事务**;任何一批重试 3 次仍失败即整体失败,无部分写入
@@ -77,8 +79,9 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | 并发防重 | `documents (user_id, md5)` 唯一约束,INSERT 冲突 → 回滚 → duplicate | 查重 SELECT 只是快速路径,唯一约束是并发下的最终防线 |
 | 原子性实现 | 全链路零中间态:内存完成解析/嵌入,最后一步 `documents` + `document_chunks` 同一 SQLAlchemy 事务 | 外仓库需"写库→记 MD5→失败手动回滚"三步,PG 事务一步完成;失败无痕 → 重传即重试 |
 | 失败语义 | 失败不落任何 DB 记录(无 documents 行/MD5 未登记),返回 failed + 错误分类 | 保证"回滚后重新上传"语义:同文件重传不会被残留记录拦截 |
-| PDF 解析器 | PyPDF2 → PyMuPDF(fitz) | 外仓库实践:提取能力显著强于 PyPDF2;商品说明书主力格式;单函数内替换 |
-| PDF 元数据 | PyMuPDF 按页提取文本,chunk 记录 `page` 页号 | 说明书按页引用,溯源需要 |
+| PDF 解析器 | PyPDF2 → MinerU 云端 API(标准 API v4) | 扫描件(OCR)/复杂版面/中文表格全场景覆盖;免本地模型与 GPU;免费额度 1000 页/天;与 qwen 嵌入 API 同为云端依赖,有先例 |
+| MinerU 接入方式 | 异步客户端:批量上传(`/file-urls/batch` + PUT)→ 提交任务 → 轮询 `state` → 取 `full.md`;`is_ocr=true`、`language=ch` | 标准 API 为官方稳定路径;免 SDK,复用现有 aiohttp;失败分类对齐 API 错误码(A0202 鉴权 / -60002 格式 / 超时) |
+| PDF 元数据 | MinerU 输出 markdown 无页边界 → `page`/`page_count` 置 null;演进:需要时解析结果 zip 中 `layout.json` | MVP 不做 zip 解包;页码溯源记为演进项,不阻塞 |
 | docx 提取 | python-docx 遍历 `element.body` 按原序取段落+表格(合并单元格跳过续格) | `doc.paragraphs`/`doc.tables` 分离列表丢失文档顺序;body 迭代零新依赖 |
 | docx/md 元数据 | `chapter` 章节上下文:docx 取 Heading 样式,md 取 `#` 标题正则 | 商品文档按产品/系列分节,章节溯源价值高;实现为 ~20 行纯函数 |
 | 删除语义 | `DELETE /documents/{md5}` 级联删 chunks | 外仓库三层联动(向量→MD5→图片)在 PG 下简化为级联删除 |
@@ -90,7 +93,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 
 ### 数据模型
 - 新增 `app/models/document.py`:`documents` 表
-  - 列:`id`、`md5`(String(32))、`original_filename`、`user_id`(String(50))、`file_type`(String(20))、`file_size`(Integer)、`page_count`(Integer, 可空, 仅 PDF 填写)、`chunk_count`(Integer)、`created_at`
+  - 列:`id`、`md5`(String(32))、`original_filename`、`user_id`(String(50))、`file_type`(String(20))、`file_size`(Integer)、`page_count`(Integer, 可空, MVP 全为 null,演进从 MinerU layout.json 解析)、`chunk_count`(Integer)、`created_at`
   - 约束:`UNIQUE (user_id, md5)`(并发防重最终防线)
 - `app/models/document_chunk.py`:增加 `md5`(String(32), 可空)、`file_type`(String(20), 可空)、`page`(Integer, 可空, PDF 页号)、`chapter`(String(255), 可空, 章节路径如 "一、智能沙发系列 > 云享智能沙发 SF-2000")
 
@@ -102,15 +105,16 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | `original_filename` | 文件 | 上传原始文件名 |
 | `file_type` | 文件/块 | 扩展名(txt/md/pdf/docx) |
 | `file_size` | 文件 | 上传字节数 |
-| `page_count` | 文件 | PDF 页数(其他格式为 null) |
+| `page_count` | 文件 | 仅 md/txt/docx 为 null;PDF 经 MinerU 无页边界,同样为 null(演进:解析 layout.json) |
 | `chunk_count` | 文件 | 分块完成后回填 |
-| `page` | 块 | PDF:PyMuPDF 按页提取,每块记录来源页;其他格式为 null |
+| `page` | 块 | MinerU markdown 无页边界 → PDF 为 null(演进:解析 layout.json);其他格式为 null |
 | `chapter` | 块 | md:`^(#{1,6})\s+` 标题正则维护章节栈;docx:段落 Heading 样式;txt/pdf 为 null |
 | `chunk_index` | 块 | 文件内块序号(已有) |
 | `created_at` | 文件/块 | 入库时间(已有) |
 
 ### 索引服务(重构 indexing_service.py)
-- `_parse_document`:按类型分发 → pdf(PyMuPDF 按页,返回 [(text, page_no)]) / docx(body 顺序段落+表格)/ txt、md(编码降级链 + 标题正则)
+- 新增 `app/services/mineru_client.py`:MinerU API 客户端(异步,上传→轮询→full.md;失败分类:auth_error / unsupported_format / api_timeout / parse_error;指数退避重试)
+- `_parse_document`:按类型分发 → pdf(MinerU API,is_ocr=true) / docx(body 顺序段落+表格)/ txt、md(编码降级链 + 标题正则)
 - `_clean_text`:升级为开关控制的多步流水线(控制字符、空白、页码行、目录行)
 - `process_file` 重排:校验 → MD5 查重 → 解析 → 清洗 → 分块(min_size 过滤)→ 注入元数据(page/chapter/md5/file_type)→ 嵌入(退避重试,全部成功才进事务)→ 单事务入库
 - 新增:空文件检测、错误分类返回(empty_file / parse_error / unsupported / embedding_failed / duplicate);任何失败路径零 DB 写入
@@ -127,12 +131,13 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 
 ### 配置(.env + config.py)
 - `MAX_FILE_SIZE=30`(MB)、`ALLOWED_FILE_TYPES=txt,md,pdf,docx`、`TEXT_CLEAN_ENABLED=true`、`CHUNK_MIN_SIZE=5`、`EMBEDDING_MAX_RETRIES=3`
+- `MINERU_API_TOKEN`(必填)、`MINERU_BASE_URL=https://mineru.net/api/v4`(默认)、`MINERU_POLL_INTERVAL=3`(轮询间隔,秒)、`MINERU_TIMEOUT=300`(轮询总超时,秒)、`MINERU_MAX_RETRIES=3`(提交失败重试)
 
 ### 死代码清理(修复 P3-10)
 - 删除 `app/services/embedding_service.py`(全项目零引用,与 qwen 切换不同步的遗留)
 
 ### 依赖
-- `pyproject.toml`:`pymupdf`(替代 PyPDF2;PyPDF2 若无其他引用则移除)
+- **无新依赖**:MinerU 走 HTTP API,复用现有 aiohttp;移除 `PyPDF2`(确认无其他引用后);不安装 mineru 本地包
 
 ## 6. 验收标准(逐项映射核查清单全部问题,全部实测)
 
@@ -146,10 +151,10 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | 4 | 上传 .exe / .png 伪改名 / 超 MAX_FILE_SIZE 文件 | 400 明确报错(unsupported/too_large),库零写入 | P2-7 |
 | 5 | 上传 GBK 编码 txt | 解析成功进库(编码降级链) | P2-9 |
 | 6 | 上传"段落-表格-段落"交替的 docx | 表格文本进库且位置顺序正确(body 迭代),合并单元格不重复 | P2-8 |
-| 7 | 上传扫描版 PDF(无可提取文本) | 返回 failed + 明确诊断(疑似扫描件),库零写入,非静默空库 | P1-4 |
-| 8 | 上传损坏 PDF(魔数错误) | 返回 failed + parse_error 诊断,库零写入 | P1-4 |
+| 7 | 上传扫描版 PDF | MinerU OCR 解析成功进库(非静默报错,非空 chunk) | P1-4 |
+| 8 | 上传损坏 PDF(非法文件) | 返回 failed + 明确分类(auth_error/unsupported_format/parse_error),库零写入 | P1-4 |
 | 9 | 上传含 `##` 标题的 md | 每块 `chapter` 字段为所在章节路径 | P1-5 |
-| 10 | 上传多页 PDF | 每块 `page` 字段为来源页号;documents.page_count 正确 | P1-5 |
+| 10 | 上传多页 PDF | 成功入库,chunks 正常;`page`/`page_count` 为 null 不阻塞(演进项,见 §8) | P1-5 |
 | 11 | `GET /api/documents` | 每条记录含 md5/original_filename/file_type/file_size/page_count/chunk_count | P1-5 |
 | 12 | `DELETE /api/documents/{md5}` | chunks 与记录同事务删除,库内无残留;删后再传同文件成功(success) | — |
 | 13 | 全库 grep 无 `embedding_service` 引用 | 死代码已删,导入不报错 | P3-10 |
@@ -164,11 +169,13 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | 17 | 故障注入:解析中途抛错(损坏文件) | 返回 failed(parse_error),库零残留;同文件重传可重试 |
 | 18 | 并发上传同一文件 ×2(asyncio.gather 双请求) | 恰好 1 个 success + 1 个 duplicate,chunks 不重复(唯一约束兜底) |
 | 19 | 上传失败后 `GET /api/documents` | 列表不含失败文件(失败无痕) |
-| 20 | 端到端回归:上传 → `/api/langgraph/query` 检索命中新内容 | 原 RAG 链路不受影响,新 chunk 可检索(BM25 + 向量双路径)
+| 20 | 端到端回归:上传 → `/api/langgraph/query` 检索命中新内容 | 原 RAG 链路不受影响,新 chunk 可检索(BM25 + 向量双路径) |
+| 21 | 故障注入:MinerU API 不可达 / Token 无效 | 返回 failed + 明确分类(api_unreachable / auth_error),库零写入;同文件重传可重试 |
 
 ## 7. 明确不做(防过度设计)
 
-- 不做多模态 PDF(视觉理解/图片描述/扫描件 OCR)
+- 不做本地 MinerU 部署(5-10GB 模型 / GPU / PaddlePaddle 生态)
+- 不做多模态 PDF 图片理解(商品说明书以文本+表格为主,云端 MinerU OCR 已覆盖扫描件)
 - 不做语义合并、不做 zip 批量导入、不做 SSE 进度
 - 不做 MIME 魔数检测、不做文档多租户权限
 - 不做增量同步/文件变更监听(商品文档由运营显式上传/重传)
@@ -176,6 +183,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 ## 8. 已知风险与备注
 
 - **存量数据**:现有 10 条 chunk 无 md5,加列后可空;`documents` 表从零开始,旧数据在文档列表不可见,建议审核后重跑一次 `ingest_knowledge.py`(同 md5 命中去重,天然不产生重复)
-- **PyMuPDF 替换(已确认)**:替换 PyPDF2,需在验证计划中确认既有 pdf 样例解析行为;PyPDF2 若无其他引用则随依赖清理移除
+- **MinerU API 依赖(已确认)**:PDF 解析新增云端依赖——网络抖动/Token 失效/额度耗尽(免费 1000 页/天,超出降级低优先级)时上传返回明确错误并可重传,不影响已入库数据;批量 ingest 注意提交限流(50 次/分)
+- **PDF 页码元数据**:MinerU markdown 无页边界,`page`/`page_count` 暂为 null;需要页码溯源时演进解析结果 zip 中 `layout.json`
 - **md 解析**:MVP 不做 mistune 结构化解析(外仓库主路径),按 txt 编码链处理即可——商品文档多为纯文本/markdown 简单结构,结构化解析收益有限
 - 本文档不涉及检索侧(混合检索/RRF/精排)改动;documents 表为文件级入口,检索仍走 document_chunks
