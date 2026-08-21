@@ -114,7 +114,7 @@ async def health_check():
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    user_id: int = Form(...)
+    user_id: str = Form(...)
 ):
     """上传文件并准备 RAG 处理"""
     try:
@@ -160,14 +160,68 @@ async def upload_file(
         indexing_service = IndexingService()
         index_result = await indexing_service.process_file(file_info)
 
+        # 契约:处理类错误 200+status;校验类错误 400(见 spec §3 API 响应契约)
+        if index_result.get("status") == "failed" and index_result.get("error") in (
+            "unsupported", "too_large", "empty_file",
+        ):
+            raise HTTPException(status_code=400, detail=index_result.get("detail", index_result.get("error")))
+
         # 合并结果
         result = {**file_info, "index_result": index_result}
 
         return result
-        
+
+    except HTTPException:
+        raise  # 内层已明确的 HTTP 契约错误(如校验类 400),不套 500
     except Exception as e:
         logger.exception("Upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/documents")
+async def list_documents(user_id: str = Query(...)):
+    """文件级文档列表(按 user_id 过滤,时间倒序)。"""
+    from sqlalchemy import select, desc
+    from app.models.document import Document
+
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(Document).where(Document.user_id == user_id).order_by(desc(Document.created_at))
+        )).scalars().all()
+    return {
+        "user_id": user_id,
+        "total": len(rows),
+        "documents": [
+            {
+                "md5": d.md5, "original_filename": d.original_filename,
+                "file_type": d.file_type, "file_size": d.file_size,
+                "page_count": d.page_count, "chunk_count": d.chunk_count,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            }
+            for d in rows
+        ],
+    }
+
+
+@app.delete("/api/documents/{md5}")
+async def delete_document(md5: str, user_id: str = Query(...)):
+    """按文件删除:chunks 与记录同事务删除;md5 不存在返回 404。"""
+    from sqlalchemy import delete
+    from app.models.document import Document
+    from app.models.document_chunk import DocumentChunk
+
+    async with AsyncSessionLocal() as session:
+        doc = (await session.execute(
+            select(Document).where(Document.user_id == user_id, Document.md5 == md5)
+        )).scalar_one_or_none()
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"文档不存在: {md5}")
+        await session.execute(delete(DocumentChunk).where(
+            DocumentChunk.user_id == user_id, DocumentChunk.md5 == md5
+        ))
+        await session.delete(doc)
+        await session.commit()
+    return {"md5": md5, "deleted": True}
+
 
 @app.post("/chat-rag")
 async def rag_chat_endpoint(request: RAGChatRequest):
