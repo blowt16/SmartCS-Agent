@@ -42,12 +42,14 @@
 POST /api/upload
   1. 校验: 扩展名白名单 + 大小上限(env 配置)           → 400
   2. MD5 计算 → documents 表查重(同 user_id)            → 命中返回 duplicate,跳过
-  3. 解析: pdf→PyMuPDF / docx→段落+表格 / txt,md→编码降级链
+  3. 解析: pdf→PyMuPDF(按页,记录页号) / docx→段落+表格(body 顺序) / txt,md→编码降级链
   4. 清洗(TEXT_CLEAN_ENABLED 开关):
      控制字符清理 → 空白规范化 → 页码行清理 → 目录行清理
   5. 分块: RecursiveCharacterTextSplitter(500/50, 不变)
      + 过滤 < CHUNK_MIN_SIZE 的噪声块
+     + 注入标准元数据(见 §5 元数据设计)
   6. Embedding: 分批 10 条 + 指数退避重试 3 次 + 全零检测
+     (必须全部批次成功,不允许部分批次先行写入)
   7. 单事务原子写入: documents(文件记录) + document_chunks(块)
   8. 返回 success / duplicate / failed(含错误分类与原因)
 
@@ -55,31 +57,63 @@ GET  /api/documents?user_id=      文档列表(来自 documents 表)
 DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 ```
 
+### 原子性与失败恢复(根本性保证)
+
+**设计原则:全链路零中间态** —— 校验/解析/清洗/分块/嵌入全部在内存完成,**任何 DB 写入只发生在最后一步且只有一个事务**:
+
+- 任一阶段失败(校验、MD5、解析、清洗、分块、嵌入超限、事务回滚)→ **DB 零写入**(无 documents 行、无 chunk、MD5 未登记)→ 返回 failed + 明确错误分类
+- **失败后重传同一文件 = 全新重试**:因为失败无痕,MD5 查重不会命中,不会出现"库里没数据却提示已存在"的死锁
+- **并发防重(竞态兜底)**:`documents (user_id, md5)` 唯一约束;两个并发上传同文件时,后提交方 INSERT 触发 IntegrityError → 捕获后整体回滚 → 返回 duplicate(查重 SELECT 只是快速路径,唯一约束才是最终防线)
+- 嵌入分批:**全部批次成功才进事务**;任何一批重试 3 次仍失败即整体失败,无部分写入
+- 磁盘文件:`uploads/` 下源文件保留(失败也保留,供排查),**一致性以 DB 为准**,不参与原子性
+- documents 表**不含 status/error 列**(失败不落行,状态通过 HTTP 响应与日志表达),从结构上杜绝"半成功"记录
+
 ## 4. 关键技术决策
 
 | 决策点 | 选择 | 理由 |
 |---|---|---|
 | 去重粒度与存储 | 文件级 MD5;存 PostgreSQL `documents` 表 | 外仓库用 JSONL(md5_store),本项目已有 PG,表存储天然支持事务原子与查询 |
 | 去重触发时机 | 解析前(先 MD5 后解析) | 命中即跳过,省解析/嵌入成本(与外仓库一致) |
-| 原子性实现 | `documents` + `document_chunks` 同一 SQLAlchemy 事务 | 外仓库需"写库→记 MD5→失败手动回滚"三步,PG 事务一步完成,更简单 |
+| 并发防重 | `documents (user_id, md5)` 唯一约束,INSERT 冲突 → 回滚 → duplicate | 查重 SELECT 只是快速路径,唯一约束是并发下的最终防线 |
+| 原子性实现 | 全链路零中间态:内存完成解析/嵌入,最后一步 `documents` + `document_chunks` 同一 SQLAlchemy 事务 | 外仓库需"写库→记 MD5→失败手动回滚"三步,PG 事务一步完成;失败无痕 → 重传即重试 |
+| 失败语义 | 失败不落任何 DB 记录(无 documents 行/MD5 未登记),返回 failed + 错误分类 | 保证"回滚后重新上传"语义:同文件重传不会被残留记录拦截 |
 | PDF 解析器 | PyPDF2 → PyMuPDF(fitz) | 外仓库实践:提取能力显著强于 PyPDF2;商品说明书主力格式;单函数内替换 |
-| docx 提取 | python-docx 直接读 paragraphs + tables | 零新依赖(Docx2txtLoader 需 langchain-community);段落+表格按原序拼接 |
+| PDF 元数据 | PyMuPDF 按页提取文本,chunk 记录 `page` 页号 | 说明书按页引用,溯源需要 |
+| docx 提取 | python-docx 遍历 `element.body` 按原序取段落+表格(合并单元格跳过续格) | `doc.paragraphs`/`doc.tables` 分离列表丢失文档顺序;body 迭代零新依赖 |
+| docx/md 元数据 | `chapter` 章节上下文:docx 取 Heading 样式,md 取 `#` 标题正则 | 商品文档按产品/系列分节,章节溯源价值高;实现为 ~20 行纯函数 |
 | 删除语义 | `DELETE /documents/{md5}` 级联删 chunks | 外仓库三层联动(向量→MD5→图片)在 PG 下简化为级联删除 |
-| 元数据列 | document_chunks 增加 `md5`、`file_type`;新增 documents 表 | 支撑去重、按文件删除、文档列表;存量数据列可空,不阻塞 |
+| 元数据列 | documents 表:md5/original_filename/file_type/file_size/page_count;chunk 表:md5/file_type/page/chapter | 支撑去重、按文件删除、文档列表、按页/按章节溯源;存量数据列可空,不阻塞 |
 | 重试 | `embed_in_batches` 内加 3 次指数退避([1,2,4]s) | 瞬断自愈;超过即返回失败+明确错误,不做自动重试队列 |
 | 配置入口 | 全部入 `.env`(settings 增加字段) | 遵循本项目"配置统一入 env"的既有约定(见近期 commit 系列) |
 
 ## 5. 主要改动清单
 
 ### 数据模型
-- 新增 `app/models/document.py`:`documents` 表(id, md5 唯一, original_filename, user_id, file_type, chunk_count, status, error, created_at)
-- `app/models/document_chunk.py`:增加 `md5`(String(32), 可空)、`file_type`(String(20), 可空)列
+- 新增 `app/models/document.py`:`documents` 表
+  - 列:`id`、`md5`(String(32))、`original_filename`、`user_id`(String(50))、`file_type`(String(20))、`file_size`(Integer)、`page_count`(Integer, 可空, 仅 PDF 填写)、`chunk_count`(Integer)、`created_at`
+  - 约束:`UNIQUE (user_id, md5)`(并发防重最终防线)
+- `app/models/document_chunk.py`:增加 `md5`(String(32), 可空)、`file_type`(String(20), 可空)、`page`(Integer, 可空, PDF 页号)、`chapter`(String(255), 可空, 章节路径如 "一、智能沙发系列 > 云享智能沙发 SF-2000")
+
+### 标准元数据设计(§3 流程第 5 步注入)
+
+| 字段 | 级别 | 提取来源 |
+|---|---|---|
+| `md5` | 文件/块 | 上传时对文件字节计算 |
+| `original_filename` | 文件 | 上传原始文件名 |
+| `file_type` | 文件/块 | 扩展名(txt/md/pdf/docx) |
+| `file_size` | 文件 | 上传字节数 |
+| `page_count` | 文件 | PDF 页数(其他格式为 null) |
+| `chunk_count` | 文件 | 分块完成后回填 |
+| `page` | 块 | PDF:PyMuPDF 按页提取,每块记录来源页;其他格式为 null |
+| `chapter` | 块 | md:`^(#{1,6})\s+` 标题正则维护章节栈;docx:段落 Heading 样式;txt/pdf 为 null |
+| `chunk_index` | 块 | 文件内块序号(已有) |
+| `created_at` | 文件/块 | 入库时间(已有) |
 
 ### 索引服务(重构 indexing_service.py)
-- `_parse_document`:按类型分发 → pdf(PyMuPDF)/docx(段落+表格)/txt、md(编码降级链)
+- `_parse_document`:按类型分发 → pdf(PyMuPDF 按页,返回 [(text, page_no)]) / docx(body 顺序段落+表格)/ txt、md(编码降级链 + 标题正则)
 - `_clean_text`:升级为开关控制的多步流水线(控制字符、空白、页码行、目录行)
-- `process_file` 重排:校验 → MD5 查重 → 解析 → 清洗 → 分块(min_size 过滤)→ 嵌入(退避重试)→ 单事务入库
-- 新增:空文件检测、错误分类返回(empty_file / parse_error / unsupported / embedding_failed / duplicate)
+- `process_file` 重排:校验 → MD5 查重 → 解析 → 清洗 → 分块(min_size 过滤)→ 注入元数据(page/chapter/md5/file_type)→ 嵌入(退避重试,全部成功才进事务)→ 单事务入库
+- 新增:空文件检测、错误分类返回(empty_file / parse_error / unsupported / embedding_failed / duplicate);任何失败路径零 DB 写入
 
 ### API(扩展 main.py)
 - `/api/upload`:返回增加 `status`(success/duplicate/failed)与 `md5`;校验失败 400
@@ -94,20 +128,43 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 ### 配置(.env + config.py)
 - `MAX_FILE_SIZE=30`(MB)、`ALLOWED_FILE_TYPES=txt,md,pdf,docx`、`TEXT_CLEAN_ENABLED=true`、`CHUNK_MIN_SIZE=5`、`EMBEDDING_MAX_RETRIES=3`
 
+### 死代码清理(修复 P3-10)
+- 删除 `app/services/embedding_service.py`(全项目零引用,与 qwen 切换不同步的遗留)
+
 ### 依赖
 - `pyproject.toml`:`pymupdf`(替代 PyPDF2;PyPDF2 若无其他引用则移除)
 
-## 6. 验证计划(全部实测)
+## 6. 验收标准(逐项映射核查清单全部问题,全部实测)
 
-1. `init_db.py` 连续运行两次 → 数据不丢、无报错(修复 P0-2)
-2. 上传 `智能家具产品知识文档.txt` 两次 → 第二次返回 `duplicate`(修复 P2-6)
-3. 上传 GBK 编码 txt → 解析成功(修复 P2-9)
-4. 上传含表格的 docx → 表格文本进库(修复 P2-8)
-5. 上传非白名单扩展名/超限文件 → 400 明确报错(修复 P2-7)
-6. `ingest_knowledge.py` 跑通 → 商品语料可复现入库(P0-1),且入库后 `GET /documents` 可见
-7. `DELETE /documents/{md5}` → chunks 与记录同事务删除,库内无残留
-8. 存量 10 条无 md5 数据:不阻塞新链路,文档列表正确(旧数据标记,待重传)
-9. 端到端:上传→检索,原 RAG 查询链路不受影响
+### 问题回归验收(对应 docs/索引链路核查问题清单.md)
+
+| # | 验收用例 | 预期 | 对应问题 |
+|---|---|---|---|
+| 1 | `init_db.py` 连续运行两次(含有数据时) | 数据不丢、无报错、幂等 | P0-2 |
+| 2 | `ingest_knowledge.py` 跑通;再跑第二次 | 首次全部 success;二次全部 duplicate(chunks 不翻倍) | P0-1 |
+| 3 | 上传 `智能家具产品知识文档.txt` 两次 | 首次 success;第二次返回 `duplicate`,库内 chunks 不翻倍 | P2-6 |
+| 4 | 上传 .exe / .png 伪改名 / 超 MAX_FILE_SIZE 文件 | 400 明确报错(unsupported/too_large),库零写入 | P2-7 |
+| 5 | 上传 GBK 编码 txt | 解析成功进库(编码降级链) | P2-9 |
+| 6 | 上传"段落-表格-段落"交替的 docx | 表格文本进库且位置顺序正确(body 迭代),合并单元格不重复 | P2-8 |
+| 7 | 上传扫描版 PDF(无可提取文本) | 返回 failed + 明确诊断(疑似扫描件),库零写入,非静默空库 | P1-4 |
+| 8 | 上传损坏 PDF(魔数错误) | 返回 failed + parse_error 诊断,库零写入 | P1-4 |
+| 9 | 上传含 `##` 标题的 md | 每块 `chapter` 字段为所在章节路径 | P1-5 |
+| 10 | 上传多页 PDF | 每块 `page` 字段为来源页号;documents.page_count 正确 | P1-5 |
+| 11 | `GET /api/documents` | 每条记录含 md5/original_filename/file_type/file_size/page_count/chunk_count | P1-5 |
+| 12 | `DELETE /api/documents/{md5}` | chunks 与记录同事务删除,库内无残留;删后再传同文件成功(success) | — |
+| 13 | 全库 grep 无 `embedding_service` 引用 | 死代码已删,导入不报错 | P3-10 |
+| 14 | 存量 10 条无 md5 数据 | 不阻塞新链路;重跑 ingest 后 md5 补全,列表正确 | P1-3 |
+
+### 原子性专项验收(根本性问题)
+
+| # | 验收用例 | 预期 |
+|---|---|---|
+| 15 | 故障注入:嵌入 API 强制失败(打桩,重试 3 次全挂) | 返回 failed(embedding_failed),**documents 表 0 行、chunks 0 行**;同文件重传 → 全新成功 |
+| 16 | 故障注入:入库事务提交前抛错(模拟 DB 断连/唯一冲突) | 返回 failed,**库零残留**;同文件重传成功 |
+| 17 | 故障注入:解析中途抛错(损坏文件) | 返回 failed(parse_error),库零残留;同文件重传可重试 |
+| 18 | 并发上传同一文件 ×2(asyncio.gather 双请求) | 恰好 1 个 success + 1 个 duplicate,chunks 不重复(唯一约束兜底) |
+| 19 | 上传失败后 `GET /api/documents` | 列表不含失败文件(失败无痕) |
+| 20 | 端到端回归:上传 → `/api/langgraph/query` 检索命中新内容 | 原 RAG 链路不受影响,新 chunk 可检索(BM25 + 向量双路径)
 
 ## 7. 明确不做(防过度设计)
 
