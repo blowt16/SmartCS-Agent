@@ -45,9 +45,13 @@ async def parse_pdf(file_path: str) -> str:
         # 1. 申请签名上传 URL(提交失败按 MINERU_MAX_RETRIES 重试)
         batch_id, upload_url = await _request_upload_urls(session, base, headers, filename)
 
-        # 2. PUT 上传文件(不带 Content-Type),上传后自动提交解析任务
+        # 2. PUT 上传文件(不带 Content-Type——OSS 预签名 URL 不含该头,
+        #    aiohttp 对 bytes 默认加 application/octet-stream 会致签名不匹配 403),
+        #    上传后自动提交解析任务
         with open(file_path, "rb") as f:
-            put_resp = await session.put(upload_url, data=f.read())
+            put_resp = await session.put(
+                upload_url, data=f.read(), skip_auto_headers={"Content-Type"}
+            )
         if put_resp.status != 200:
             raise MinerUError("parse_error", f"文件上传失败: HTTP {put_resp.status}")
 

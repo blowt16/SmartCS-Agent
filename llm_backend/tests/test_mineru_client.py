@@ -1,7 +1,7 @@
 import asyncio
 import io
 import zipfile
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
@@ -80,6 +80,8 @@ def test_task_state_failed_maps_to_parse_error(tmp_path):
         with pytest.raises(MinerUError) as ei:
             asyncio.run(parse_pdf(str(f)))
         assert ei.value.category == "parse_error"
+    # PUT 不得携带 Content-Type(OSS 预签名 403 回归保护,2026-08-21 实测修复)
+    fake.put.assert_awaited_with("https://put.example/x", data=ANY, skip_auto_headers={"Content-Type"})
 
 
 def test_full_markdown_returned_on_done(tmp_path):
