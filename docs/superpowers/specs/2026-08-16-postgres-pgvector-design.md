@@ -38,7 +38,7 @@
 - `app/lg_agent/main.py`（CLI 测试入口）：同步更新
 - `run.py`：Windows 下给 uvicorn loop 工厂打补丁（SelectorEventLoop）
 - `docker-compose.yml`：mysql 服务 → `pgvector/pgvector:pg16`（`pg_isready` healthcheck、`pg_data` 卷、app 环境变量与 depends_on 同步）
-- `.env` / `.env.docker` / `.dockerignore` / `.gitignore` / `chat.html` 注释同步
+- `.env` / `.env.docker` / `.dockerignore` / `.gitignore` / `frontend/` Vue3 工程注释同步
 - 文档：README（根 + llm_backend）、PROJECT_ANALYSIS、OPTIMIZATION_QA、CLAUDE_WORKFLOW_MIRROR、SHOP_SAGE_ANALYSIS、STUDY_NOTES 中 MySQL/ChromaDB 描述全部同步
 
 ## 4. 验证结果（2026-08-16 实测）

@@ -92,10 +92,9 @@ class ConversationService:
         """获取用户的所有会话"""
         try:
             async with AsyncSessionLocal() as db:
-                # 查询用户的所有会话，排除标题为"新会话"的对话
+                # 查询用户的所有会话（注意：不能排除"新会话"标题——新建会话默认标题就是"新会话"，排除后列表永远为空）
                 stmt = select(Conversation).where(
-                    Conversation.user_id == user_id,
-                    Conversation.title != "新会话"  # 添加这个条件
+                    Conversation.user_id == user_id
                 ).order_by(Conversation.created_at.desc())
                 
                 result = await db.execute(stmt)

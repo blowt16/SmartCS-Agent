@@ -2,7 +2,6 @@ from typing import Union
 from app.core.config import settings, ServiceType
 from app.services.deepseek_service import DeepseekService
 from app.services.ollama_service import OllamaService
-from app.services.search_service import SearchService
 class LLMFactory:
     @staticmethod
     def create_chat_service():
@@ -13,18 +12,3 @@ class LLMFactory:
         else:
             # 否则使用OllamaService
             return OllamaService()
-
-    @staticmethod
-    def create_reasoner_service():
-        """创建推理服务实例"""
-        # 如果.env文件中REASON_SERVICE设置为DEEPSEEK，则使用DeepseekService
-        if settings.REASON_SERVICE == ServiceType.DEEPSEEK:
-            return DeepseekService()
-        else:
-            # 否则使用OllamaService
-            return OllamaService()
-    
-    @staticmethod
-    def create_search_service():
-        """创建搜索服务实例"""
-        return SearchService()

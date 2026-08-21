@@ -1,10 +1,9 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from app.services.llm_factory import LLMFactory
-from app.services.search_service import SearchService
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from pathlib import Path
@@ -90,15 +89,6 @@ app.add_middleware(
 # 1. 用户注册、登录路由通过 api_router 路由挂载到 /api 前缀
 app.include_router(api_router, prefix="/api")
 
-class ReasonRequest(BaseModel):
-    messages: List[Dict[str, str]]
-    user_id: int
-
-class ChatMessage(BaseModel):
-    messages: List[Dict[str, str]]
-    user_id: int
-    conversation_id: int  # 添加会话ID字段
-
 class RAGChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     index_id: str
@@ -120,75 +110,6 @@ class LangGraphRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-@app.post("/api/chat")
-async def chat_endpoint(request: ChatMessage):
-    """聊天接口"""
-    try:
-        log_structured("chat_request", {
-            "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
-            "message_count": len(request.messages),
-        })
-        chat_service = LLMFactory.create_chat_service()
-        
-        return StreamingResponse(
-            chat_service.generate_stream(
-                messages=request.messages,
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                on_complete=ConversationService.save_message
-            ),
-            media_type="text/event-stream"
-        )
-    except Exception as e:
-        logger.exception("Chat error: {}", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/reason")
-async def reason_endpoint(request: ReasonRequest):
-    """推理接口"""
-    try:
-        logger.info("Processing reasoning request for user {}", request.user_id)
-        reasoner = LLMFactory.create_reasoner_service()
-        
-        log_structured("reason_request", {
-            "user_id": request.user_id,
-            "message_count": len(request.messages),
-            "last_message": request.messages[-1]["content"][:100] + "..."
-        })
-        
-        return StreamingResponse(
-            reasoner.generate_stream(request.messages),
-            media_type="text/event-stream"
-        )
-    
-    except Exception as e:
-        logger.exception("Reasoning error for user {}: {}", request.user_id, str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/search")
-async def search_endpoint(request: ChatMessage):
-    """带搜索功能的聊天接口"""
-    try:
-        log_structured("search_request", {
-            "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
-            "query": request.messages[0]["content"][:200],
-        })
-        search_service = LLMFactory.create_search_service()
-        return StreamingResponse(
-            search_service.generate_stream(
-                query=request.messages[0]["content"],
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                # on_complete=ConversationService.save_message
-            ),
-            media_type="text/event-stream"
-        )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload")
 async def upload_file(
@@ -531,11 +452,6 @@ async def upload_image(
         logger.exception("Image upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/chat.html", include_in_schema=False)
-async def chat_page():
-    """LangGraph 智能客服独立页面（人工测试入口：/api/langgraph/query 的图形化前端）"""
-    return FileResponse(Path(__file__).parent.parent / "chat.html")
-
-# 最后挂载静态文件，并确保使用绝对路径
-STATIC_DIR = Path(__file__).parent / "static" / "dist"
+# 最后挂载静态文件（前端 Vue3 工程构建产物，主入口 http://127.0.0.1:8000）
+STATIC_DIR = Path(__file__).parent / "frontend" / "dist"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

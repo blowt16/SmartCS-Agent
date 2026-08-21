@@ -116,9 +116,6 @@ flowchart TB
     subgraph FastAPI["⚡ FastAPI 服务层"]
         direction TB
         MW["LoggingMiddleware<br/>CORS Middleware"]
-        CHAT["/api/chat<br/>普通聊天 SSE"]
-        REASON["/api/reason<br/>深度推理 SSE"]
-        SEARCH["/api/search<br/>联网搜索"]
         LG["/api/langgraph/query<br/>Agent 多路由 SSE"]
         UPLOAD["/api/upload<br/>文件上传 + 索引"]
         AUTH["/api/register /api/token<br/>认证"]
@@ -129,7 +126,6 @@ flowchart TB
         LLMF["LLMFactory"]
         DS["DeepseekService<br/>+ 语义缓存"]
         OS["OllamaService"]
-        SS["SearchService<br/>+ Function Calling"]
     end
 
     subgraph Agent["🤖 LangGraph Agent 层"]
@@ -183,7 +179,6 @@ SmartCS-Agent/
 │       │   ├── llm_factory.py           # LLM 工厂模式
 │       │   ├── deepseek_service.py      # DeepSeek + 语义缓存
 │       │   ├── ollama_service.py        # Ollama 备选
-│       │   ├── search_service.py        # SerpAPI 联网搜索
 │       │   ├── redis_semantic_cache.py  # Redis 语义缓存（asyncio + ZSET 索引 + 分级指代消解）
 │       │   ├── pronoun_detector.py      # 指代检测器（三层规则引擎，缓存/入口共用门控）
 │       │   ├── pronoun_resolver.py      # 指代消解器（LLM 补全，temperature=0，失败降级）
@@ -214,13 +209,13 @@ SmartCS-Agent/
 │       │   └── document_chunk.py        # pgvector 文档块表
 │       ├── prompts/                    # 搜索提示词
 │       ├── tools/                      # 搜索工具定义
-│       └── static/dist/               # Vue 前端编译输出
+│       └── frontend/                   # Vue3 SFC 前端工程（构建产物 dist/）
 ├── scripts/                           # 工具脚本
 │   ├── init_db.py                     # 数据库初始化（pgvector 扩展 + HNSW 索引）
 │   ├── generate_product_knowledge.py  # CSV → 产品知识文档
 │   ├── download_datasets.py           # 下载电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 对话数据集
-├── chat.html                          # 独立聊天页面
+├── frontend/                          # Vue3 SFC 前端工程（由 chat.html 重构）
 ├── docker/                            # Docker 构建上下文
 │   └── postgres/Dockerfile            # pgvector + pg_jieba 自定义镜像（cppjieba 源码编译）
 ├── docker-compose.yml                 # 2 基础服务编排（PostgreSQL 自定义镜像/Redis，App 本地运行）
@@ -265,8 +260,6 @@ class Settings(BaseSettings):
 | 方法 | 用途 | 默认服务 |
 |------|------|---------|
 | `create_chat_service()` | 普通聊天 | DeepSeek |
-| `create_reasoner_service()` | 深度推理 | Ollama |
-| `create_search_service()` | 联网搜索 | SerpAPI |
 
 ### 4.3 语义缓存 (`app/services/redis_semantic_cache.py`)
 
@@ -487,7 +480,7 @@ flowchart TD
 3. **入口语义缓存检索**：消解后、进图前按 user_id 查缓存（key=消解后消息），命中短路返回不进图；未命中走图，完整回答生成后回写（非空才写，语气词/失败不写）；含指代且无历史可消解时跳过缓存检索
 4. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
 5. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
-6. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
+6. 对话记录落库（conversations/messages 表）由前端经 `/api/conversations/save-messages` 接口保存，langgraph 路径的会话状态由检查点承载
 
 ### 5.2 意图路由决策流程
 
@@ -598,7 +591,7 @@ flowchart TD
 
 | 设计模式 | 应用位置 | 具体实现 |
 |---------|---------|---------|
-| **工厂模式** | `LLMFactory` | `create_chat_service()` / `create_reasoner_service()` / `create_search_service()` 根据配置返回不同实例 |
+| **工厂模式** | `LLMFactory` | `create_chat_service()` 根据配置返回不同实例 |
 | **策略模式** | `config.py` 服务选择 | `CHAT_SERVICE` / `REASON_SERVICE` / `AGENT_SERVICE` 分别选择 DeepSeek/Ollama |
 | **状态图模式** | `lg_builder.py` | LangGraph `StateGraph` + 条件边实现多路由 Agent 编排 |
 | **观察者/回调模式** | `deepseek_service.py` | `on_complete` 回调触发消息持久化，解耦 LLM 和存储 |
@@ -808,7 +801,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.2 前端过于简单
 
-`chat.html` 是单文件 HTML + 少量 Vue，缺少：
+前端已重构为 Vue3 SFC 工程（llm_backend/frontend），chat.html 已并入。原 chat.html 单文件实现缺少：
 
 - 用户登录 UI
 - 会话列表展示

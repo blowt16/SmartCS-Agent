@@ -20,7 +20,6 @@ flowchart TB
     subgraph "🔧 Core Services"
         B[LLM Factory<br/>llm_factory.py]
         C[Conversation Service<br/>conversation_service.py]
-        D[Search Service<br/>search_service.py]
         E[Indexing Service<br/>indexing_service.py]
     end
     
@@ -37,7 +36,6 @@ flowchart TB
     
     A --> B
     A --> C
-    A --> D
     A --> E
     A --> F
     
@@ -119,26 +117,12 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 | 端点 | 方法 | 描述 | 示例 |
 |------|------|------|------|
-| `/chat` | POST | 💬 聊天对话 | 智能客服对话 |
-| `/reason` | POST | 🧠 推理分析 | 复杂问题推理 |
 | `/upload` | POST | 📤 文件上传 | RAG文档上传 |
 | `/langgraph/query` | POST | 🤖 Agent查询 | 多智能体任务 |
 | `/conversation/{id}` | GET | 📋 对话历史 | 获取聊天记录 |
 | `/conversation/` | GET | 📊 对话列表 | 分页获取对话 |
 
 ### 请求示例
-
-#### 💬 聊天接口
-
-```bash
-curl -X POST "http://localhost:8000/chat" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "你好，我想了解这个产品",
-    "conversation_id": "uuid-string",
-    "user_id": "user123"
-  }'
-```
 
 #### 🤖 Agent查询
 
@@ -190,12 +174,10 @@ llm_backend/
 │   │   ├── message.py            # 消息模型
 │   │   └── user.py               # 用户模型
 │   ├── 💬 prompts/               # 提示词模板
-│   │   └── search_prompts.py     # 搜索提示词
 │   ├── 🔧 services/              # 业务服务
 │   │   ├── llm_factory.py        # LLM服务工厂
 │   │   ├── deepseek_service.py   # DeepSeek服务
 │   │   ├── ollama_service.py     # Ollama服务
-│   │   ├── search_service.py     # 搜索服务
 │   │   ├── conversation_service.py # 对话服务
 │   │   ├── indexing_service.py   # 索引服务
 │   │   └── embedding_service.py  # 向量嵌入服务
@@ -204,8 +186,6 @@ llm_backend/
 │   │   ├── deepseek_sync.py      # DeepSeek同步测试
 │   │   └── test_fastapi.py       # FastAPI接口测试
 │   └── 🛠️ tools/                 # 工具模块
-│       ├── definitions.py        # 工具定义
-│       └── search.py             # 搜索工具
 └── 📁 scripts/                   # 工具脚本
     └── init_db.py                # 数据库初始化
 ```
