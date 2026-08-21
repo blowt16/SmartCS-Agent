@@ -43,7 +43,7 @@
   │
   ├─ /api/upload ────────→ 文档解析 → 向量入库（pgvector）
   │
-  └─ 前端（Vue3 SFC，llm_backend/frontend → dist）─→ SSE 流式响应
+  └─ 前端（Vue3 SFC，frontend → dist）─→ SSE 流式响应
        └─ Redis 语义缓存检查（命中时模拟流式短路返回）
 ```
 
@@ -58,7 +58,7 @@
 | Embedding | SiliconFlow (BAAI/bge-m3) | 语义向量生成，免费 API |
 | 向量缓存 | Redis | 语义缓存（余弦相似度 >= 0.90 命中） |
 | 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
-| 前端 | Vue3 SFC（llm_backend/frontend → dist） | 聊天界面（登录/注册、SSE 流式、知识库上传） |
+| 前端 | Vue3 SFC（frontend → dist） | 聊天界面（登录/注册、SSE 流式、知识库上传） |
 
 ## 快速开始
 

@@ -452,6 +452,6 @@ async def upload_image(
         logger.exception("Image upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-# 最后挂载静态文件（前端 Vue3 工程构建产物，主入口 http://127.0.0.1:8000）
-STATIC_DIR = Path(__file__).parent / "frontend" / "dist"
+# 最后挂载静态文件（前端 Vue3 工程构建产物位于项目根目录 frontend/dist，主入口 http://127.0.0.1:8000）
+STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

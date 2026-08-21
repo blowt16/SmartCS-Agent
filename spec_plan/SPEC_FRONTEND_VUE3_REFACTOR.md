@@ -17,7 +17,7 @@
 **目标**：
 1. 把 chat.html 按 Vue3 标准重构为独立 Vite + Vue3 SFC 工程，**功能、风格、样式与原件完全一致**；
 2. 访问入口收敛为 `http://127.0.0.1:8000`（`/` 直接打开新页面）；
-3. `llm_backend/static` 重命名为 `llm_backend/frontend`，新工程放该目录；
+3. `llm_backend/static` 重命名为 `frontend`，新工程放该目录；
 4. 移除旧链路：后端删除 `/api/chat`、`/api/reason`、`/api/search` 三个端点及全部孤儿代码，前端不再调用；
 5. **迁移 JWT 登录鉴权**：新前端接入登录/注册（后端 `/api/register`、`/api/token`、`/api/users/me` 已就绪、不在删除范围），登录态驱动 user.id 动态化（替代 chat.html 硬编码 id:1）；
 6. 整改后全链路实测（构建 + 启动 + API + 浏览器交互）。
@@ -66,10 +66,10 @@
 
 ## 3. 方案设计
 
-### 3.1 Vue3 工程结构（新建 `llm_backend/frontend/`）
+### 3.1 Vue3 工程结构（新建 `frontend/`）
 
 ```
-llm_backend/frontend/
+frontend/
 ├── package.json
 ├── vite.config.js                # base:'/'、outDir:'dist'、emptyOutDir、dev proxy /api → 8000
 ├── tailwind.config.js            # darkMode:'class' + 自定义色板原样迁移
@@ -169,7 +169,7 @@ llm_backend/frontend/
 
 **run.py**：第 36 行注释 `# http://127.0.0.1:8000/chat.html` → `# http://127.0.0.1:8000`。
 
-**目录与文件**：`mv llm_backend/static llm_backend/frontend`；验证通过后删除根目录 `chat.html`。
+**目录与文件**：`mv llm_backend/static frontend`；验证通过后删除根目录 `chat.html`。
 
 **孤儿清理（先 grep 验证再删）**：`app/services/search_service.py`、`app/tools/search.py`、`app/tools/definitions.py`、`app/prompts/search_prompts.py`（互引成环、无外部引用，整链删除）。
 
@@ -187,7 +187,7 @@ llm_backend/frontend/
 
 ## 4. 验证方案
 
-1. **构建**：`cd llm_backend/frontend && npm install && npm run build` → 生成 dist/index.html + assets/（带 hash）
+1. **构建**：`cd frontend && npm install && npm run build` → 生成 dist/index.html + assets/（带 hash）
 2. **后端启动**：`cd llm_backend && D:\SmartCS-Agent\.venv\Scripts\python.exe run.py`（前置 `docker compose up -d` 起 postgres/redis）
 3. **HTTP 验证**（Git Bash curl）：
    - `GET /` → 200；`GET /chat.html` → 404；`POST /api/chat|reason|search` → 404/405
@@ -203,7 +203,7 @@ llm_backend/frontend/
 | # | 步骤 | 验证点 |
 |---|---|---|
 | 0 | 基线：`docker compose up -d`；记录 run.py 未提交修改 | 服务就绪、基线明确 |
-| 1 | `mv llm_backend/static llm_backend/frontend` | 目录存在 |
+| 1 | `mv llm_backend/static frontend` | 目录存在 |
 | 2 | 创建 frontend 工程：骨架（package.json 等 6 个根文件）→ global.css 样式迁移 → App/Sidebar/ChatArea/DocsPanel 模板迁移 → useChat/api/utils 逻辑迁移 | 逐块与 chat.html 对应行区间比对 |
 | 3 | `npm install && npm run build` | 构建成功、产物生成、marked 确认 4.x |
 | 4 | 后端改造：main.py / llm_factory.py / run.py | grep 归零 + `import main` 通过 |

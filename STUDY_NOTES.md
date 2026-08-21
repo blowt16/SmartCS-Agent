@@ -34,7 +34,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 文档检索 | 标准 RAG（pgvector） | 文档解析→分块→Embedding→pgvector 表（HNSW），混合检索（BM25+向量 RRF） |
 | 向量缓存 | Redis | 语义缓存（基于 Embedding 向量相似度） |
 | 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
-| 前端 | Vue3 SFC（llm_backend/frontend） | 聊天界面 |
+| 前端 | Vue3 SFC（frontend） | 聊天界面 |
 
 ### 与同类项目的定位差异
 
@@ -860,7 +860,7 @@ data: { message: "你好" }  // 只需改数据，页面自动更新
 
 #### 编译后的前端
 
-项目中 `llm_backend/frontend/dist/` 存放的是编译后的前端文件：
+项目中 `frontend/dist/` 存放的是编译后的前端文件：
 ```
 dist/
 ├── index.html                    # 入口 HTML
@@ -1010,7 +1010,7 @@ app.add_middleware(
 ### 静态文件挂载
 
 ```python
-STATIC_DIR = Path(__file__).parent / "frontend" / "dist"
+STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 ```
 

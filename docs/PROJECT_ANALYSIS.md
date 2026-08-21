@@ -208,8 +208,7 @@ SmartCS-Agent/
 │       │   ├── user.py
 │       │   └── document_chunk.py        # pgvector 文档块表
 │       ├── prompts/                    # 搜索提示词
-│       ├── tools/                      # 搜索工具定义
-│       └── frontend/                   # Vue3 SFC 前端工程（构建产物 dist/）
+│       └── tools/                      # 搜索工具定义
 ├── scripts/                           # 工具脚本
 │   ├── init_db.py                     # 数据库初始化（pgvector 扩展 + HNSW 索引）
 │   ├── generate_product_knowledge.py  # CSV → 产品知识文档
@@ -801,7 +800,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.2 前端过于简单
 
-前端已重构为 Vue3 SFC 工程（llm_backend/frontend），chat.html 已并入。原 chat.html 单文件实现缺少：
+前端已重构为 Vue3 SFC 工程（frontend），chat.html 已并入。原 chat.html 单文件实现缺少：
 
 - 用户登录 UI
 - 会话列表展示
