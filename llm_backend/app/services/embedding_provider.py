@@ -199,10 +199,28 @@ async def embed_in_batches(texts: List[str], batch_size: int = 10) -> List[List[
     """分批调用 embedding API 并拼接结果。
 
     text-embedding-v4 单请求文本数上限为 10 条，索引/兜底编码等批量场景
-    必须分批。provider 内部失败时返回全 0 向量（不抛错），由调用方检测。
+    必须分批。每批失败(返回全零向量)按指数退避重试 EMBEDDING_MAX_RETRIES 次,
+    重试耗尽仍失败返回全零(不抛错),由调用方检测。
     """
     provider = get_embedding_provider()
     results: List[List[float]] = []
     for i in range(0, len(texts), batch_size):
-        results.extend(await provider.embed(texts[i : i + batch_size]))
+        batch = texts[i : i + batch_size]
+        vecs = await _embed_with_retry(provider, batch)
+        results.extend(vecs)
     return results
+
+
+async def _embed_with_retry(provider, batch: List[str]) -> List[List[float]]:
+    """单批嵌入 + 指数退避重试([1,2,4]s);全零视为失败。"""
+    max_retries = settings.EMBEDDING_MAX_RETRIES
+    for attempt in range(max_retries):
+        vecs = await provider.embed(batch)
+        if vecs and all(np.count_nonzero(v) > 0 for v in vecs):
+            return vecs
+        if attempt < max_retries - 1:
+            delay = [1, 2, 4][min(attempt, 2)]
+            logger.warning("Embedding 批次失败(全零),{}s 后重试({}/{})",
+                           delay, attempt + 1, max_retries)
+            await asyncio.sleep(delay)
+    return [[0.0] * settings.EMBEDDING_DIMENSION for _ in batch]
