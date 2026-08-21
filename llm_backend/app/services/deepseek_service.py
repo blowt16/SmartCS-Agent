@@ -20,8 +20,8 @@ class DeepseekService:
             base_url=settings.DEEPSEEK_BASE_URL
         )
         # 优先使用配置中的 DEEPSEEK_MODEL，其次使用传入的 model
-        self.model = settings.DEEPSEEK_MODEL or model 
-        self.cache = RedisSemanticCache(prefix=settings.REDIS_CACHE_PREFIX)
+        self.model = settings.DEEPSEEK_MODEL or model
+        self.cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX)
 
     async def _stream_cached_response(self, response: str, delay: float = None) -> AsyncGenerator[str, None]:
         if delay is None:
@@ -42,13 +42,13 @@ class DeepseekService:
     ) -> AsyncGenerator[str, None]:
         """流式生成回复"""
         try:
-            # 为每个用户创建独立的缓存实例
-            cache = RedisSemanticCache(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
+            # 为每个用户获取独立的缓存实例（池化复用，避免重建连接与清理任务）
+            cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
             
             start_time = time.time()
             
-            # 检查缓存
-            cached_response = await cache.lookup(messages)
+            # 检查缓存（resolve_llm=self：注入 LLM 供指代消解使用）
+            cached_response = await cache.lookup(messages, resolve_llm=self)
             if cached_response:
                 response_time = time.time() - start_time
                 logger.info("Cache hit! Response time: {:.4f} seconds", response_time)
@@ -71,17 +71,16 @@ class DeepseekService:
 
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    # 使用 ensure_ascii=False 来保持中文字符
-                    content = json.dumps(chunk.choices[0].delta.content, ensure_ascii=False)
-
+                    # 收集原始文本（缓存/落库用完整原文）；SSE 传输时再 JSON 编码
+                    content = chunk.choices[0].delta.content
                     full_response.append(content)
-                    yield f"data: {content}\n\n"
+                    yield f"data: {json.dumps(content, ensure_ascii=False)}\n\n"
             
             # 完整响应
             complete_response = "".join(full_response)
             
             # 更新缓存
-            await cache.update(messages, complete_response)
+            await cache.update(messages, complete_response, resolve_llm=self)
             
             response_time = time.time() - start_time
             logger.info("Cache miss. Response time: {:.4f} seconds", response_time)
@@ -95,13 +94,25 @@ class DeepseekService:
             error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
 
-    async def generate(self, messages: List[Dict]) -> str:
-        """非流式生成回复"""
+    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None) -> str:
+        """非流式生成回复
+
+        Args:
+            messages: OpenAI 格式消息列表
+            temperature: 采样温度（None 时用 API 默认值）
+            max_tokens: 最大输出 token 数（None 时用 API 默认值）
+        """
         try:
+            kwargs = {}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                stream=False
+                stream=False,
+                **kwargs
             )
             return response.choices[0].message.content
         except Exception as e:

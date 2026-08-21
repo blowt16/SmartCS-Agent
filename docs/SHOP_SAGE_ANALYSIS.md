@@ -40,7 +40,7 @@
 | 迁移 | ❌ 无 | ✅ Alembic 异步迁移（6 个版本） |
 | 状态持久化 | MemorySaver（进程内存，重启丢失） | AsyncRedisSaver（thread_id 维度持久化） |
 | 认证 | JWT（无 refresh/撤销），大部分端点免鉴权 | JWT 双角色 + 三级认证依赖 |
-| 前端 | chat.html | Gradio C 端 7860 / B 端管理台 7861 |
+| 前端 | frontend/（Vue3 SFC 工程） | Gradio C 端 7860 / B 端管理台 7861 |
 | 部署 | Docker Compose 四服务 + healthcheck | Docker Compose 四服务 + 健康检查串行启动 + start.sh |
 
 ---
@@ -175,7 +175,7 @@ JWT → app_graph.astream_events(v2) → intent_router（LLM 四分类，白名�
 **D1. 全链路 user_id 作用域 + thread_id 前缀契约** 🟢（最高优先级）
 - 证据：`chat.py:35`（`thread_id = f"{current_user_id}_{request.thread_id}"`）、`status.py:38`、`websocket.py:31`（三处统一前缀）、`nodes.py:311-313`（订单查询强制 `Order.user_id == user_id`）
 - 解决了什么：横向越权被数据层强制拦截；不同用户同 thread_id 不串会话（曾因前缀不统一出 P0，ISSUES_AND_SOLUTIONS 问题 7）。
-- SmartCS 借鉴：本项目 `/api/conversations/{id}/messages` 用 query 参数传 user_id 归属校验（`main.py:260`）可被任意伪造；`/api/chat`、`/api/search`、`/api/upload` 完全免鉴权。建议：JWT 依赖注入 user_id → thread_id 加前缀 → 所有数据访问节点强制作用域过滤，三处契约统一。
+- SmartCS 借鉴：本项目 `/api/conversations/{id}/messages` 用 query 参数传 user_id 归属校验（`main.py:260`）可被任意伪造；`/api/upload` 完全免鉴权（聊天入口已统一为 `/api/langgraph/query`）。建议：JWT 依赖注入 user_id → thread_id 加前缀 → 所有数据访问节点强制作用域过滤，三处契约统一。
 
 **D2. 外键 RESTRICT + 枚举状态机** 🟢
 - 证据：`models/refund.py:34-37`（`ondelete="RESTRICT"`）、`models/order.py:9-14`（OrderStatus 枚举）

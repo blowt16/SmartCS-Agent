@@ -33,7 +33,9 @@ logger.remove()
 # 控制台输出（人类可读，带颜色）
 # --------------------------------------------------------------------------
 logger.add(
-    sys.stdout,
+    # Windows 控制台默认 GBK：包装为 UTF-8 + errors=replace，写中文日志不崩溃
+    # （否则 loguru sink 抛 UnicodeEncodeError，中文日志整条丢失）
+    open(sys.stdout.fileno(), "w", encoding="utf-8", errors="replace", closefd=False),
     format=(
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
         "<level>{level: <8}</level> | "

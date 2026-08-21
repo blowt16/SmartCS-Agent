@@ -4,7 +4,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from app.services.llm_factory import LLMFactory
-from app.services.search_service import SearchService
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +25,12 @@ import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
+from app.services.pronoun_detector import detect_pronoun, DetectionDecision
+from app.services.pronoun_resolver import resolve_pronouns
+from app.services.redis_semantic_cache import RedisSemanticCache
+from langchain_core.messages import HumanMessage, AIMessage
 import json
+import asyncio
 
 
 # 配置上传目录 - RAG 功能的
@@ -36,6 +40,28 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 # logger 变量就被初始化为一个日志记录器实例。
 # 之后，便可以在当前文件中直接使用 logger.info()、logger.error() 等方法来记录日志，而不需要进行其他操作。
 logger = get_logger(service="main")
+
+# 入口指代消解用的 LLM 服务（懒加载复用，避免每请求重建客户端）
+_resolve_llm_service = None
+
+
+def _get_resolve_llm():
+    """获取指代消解的 LLM 服务（DeepseekService/OllamaService，具备 generate 鸭子类型）"""
+    global _resolve_llm_service
+    if _resolve_llm_service is None:
+        _resolve_llm_service = LLMFactory.create_chat_service()
+    return _resolve_llm_service
+
+
+async def _stream_cached(response: str, delay: float = None):
+    """模拟流式返回缓存的响应（与 DeepseekService 行为一致，保持前端体验）"""
+    if delay is None:
+        delay = settings.STREAM_DELAY
+    # 每次返回4个字符
+    chunks = [response[i:i + 4] for i in range(0, len(response), 4)]
+    for chunk in chunks:
+        await asyncio.sleep(delay)
+        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 # 启动时初始化 LangGraph Postgres 检查点（连接池 + 检查点表 + 编译 graph）
 @asynccontextmanager
@@ -63,15 +89,6 @@ app.add_middleware(
 # 1. 用户注册、登录路由通过 api_router 路由挂载到 /api 前缀
 app.include_router(api_router, prefix="/api")
 
-class ReasonRequest(BaseModel):
-    messages: List[Dict[str, str]]
-    user_id: int
-
-class ChatMessage(BaseModel):
-    messages: List[Dict[str, str]]
-    user_id: int
-    conversation_id: int  # 添加会话ID字段
-
 class RAGChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     index_id: str
@@ -93,75 +110,6 @@ class LangGraphRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-@app.post("/api/chat")
-async def chat_endpoint(request: ChatMessage):
-    """聊天接口"""
-    try:
-        log_structured("chat_request", {
-            "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
-            "message_count": len(request.messages),
-        })
-        chat_service = LLMFactory.create_chat_service()
-        
-        return StreamingResponse(
-            chat_service.generate_stream(
-                messages=request.messages,
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                on_complete=ConversationService.save_message
-            ),
-            media_type="text/event-stream"
-        )
-    except Exception as e:
-        logger.exception("Chat error: {}", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/reason")
-async def reason_endpoint(request: ReasonRequest):
-    """推理接口"""
-    try:
-        logger.info("Processing reasoning request for user {}", request.user_id)
-        reasoner = LLMFactory.create_reasoner_service()
-        
-        log_structured("reason_request", {
-            "user_id": request.user_id,
-            "message_count": len(request.messages),
-            "last_message": request.messages[-1]["content"][:100] + "..."
-        })
-        
-        return StreamingResponse(
-            reasoner.generate_stream(request.messages),
-            media_type="text/event-stream"
-        )
-    
-    except Exception as e:
-        logger.exception("Reasoning error for user {}: {}", request.user_id, str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/search")
-async def search_endpoint(request: ChatMessage):
-    """带搜索功能的聊天接口"""
-    try:
-        log_structured("search_request", {
-            "user_id": request.user_id,
-            "conversation_id": request.conversation_id,
-            "query": request.messages[0]["content"][:200],
-        })
-        search_service = LLMFactory.create_search_service()
-        return StreamingResponse(
-            search_service.generate_stream(
-                query=request.messages[0]["content"],
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                # on_complete=ConversationService.save_message
-            ),
-            media_type="text/event-stream"
-        )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload")
 async def upload_file(
@@ -372,32 +320,87 @@ async def langgraph_query(
         except Exception as e:
             logger.warning("Error retrieving state: {}. Starting with fresh state.", e)
 
+        # ===== 入口前置指代消解（多轮代词/省略统一在此补全）=====
+        # 含指代消息（"那个有货吗"）在进入意图模块前改写为完整问题，
+        # 因此图内不再重复消解；首条消息（无历史）无上下文依赖，直接透传
+        resolved_query = query
+        history_messages = []
+        if state_history:
+            for m in state_history.values.get("messages", []):
+                if isinstance(m, (HumanMessage, AIMessage)):
+                    history_messages.append({
+                        "role": "assistant" if isinstance(m, AIMessage) else "user",
+                        "content": m.content,
+                    })
+        decision = detect_pronoun(query, skip_filler=settings.RESOLVE_SKIP_FILLER)
+        if history_messages and decision == DetectionDecision.NEED_RESOLVE:
+            resolved_query = await resolve_pronouns(
+                _get_resolve_llm(),
+                history_messages + [{"role": "user", "content": query}],
+                query,
+            )
+            logger.info("入口指代消解: '{}' → '{}'", query, resolved_query)
+            # 消解失败降级时仍为 NEED_RESOLVE（无完整问题可作缓存 key）
+            decision = detect_pronoun(resolved_query)
+
+        # ===== 语义缓存检索（消解后、进图前；命中短路，跳过整个图流程）=====
+        # 缓存内容由 graphrag/chat 链路完整回答后写入（ScopeGuard 把关的范围内回答），
+        # 且 key 基于消解后消息——入口查缓存天然只命中经营范围内的完整问题
+        cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
+        cached_response = None
+        if decision == DetectionDecision.NEED_RESOLVE:
+            logger.info("含指代且无历史可消解，跳过缓存检索")
+        else:
+            cached_response = await cache.lookup(
+                history_messages + [{"role": "user", "content": resolved_query}],
+                resolve_llm=_get_resolve_llm(),
+            )
+        if cached_response:
+            logger.info("语义缓存命中，短路返回: '{}'", resolved_query)
+            response = StreamingResponse(
+                _stream_cached(cached_response),
+                media_type="text/event-stream"
+            )
+            response.headers["X-Conversation-ID"] = thread_id
+            return response
+
         # 新会话或正常多轮对话，始终用 InputState 输入
         # LangGraph 通过 thread_id 自动维护上下文状态
         logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
-        input_state = InputState(messages=query)
+        input_state = InputState(messages=resolved_query)
 
         async def process_stream():
+            # 收集完整回答，图结束后回写语义缓存
+            complete_response = []
             async for c, metadata in graph.astream(
                 input=input_state,
                 stream_mode="messages",
                 config=thread_config
             ):
                 if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
+                    complete_response.append(c.content)
                     content_json = json.dumps(c.content, ensure_ascii=False)
                     yield f"data: {content_json}\n\n"
                 elif c.additional_kwargs.get("tool_calls"):
                     tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
                     logger.debug("Tool call: {}", tool_data)
+            # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存）
+            if decision != DetectionDecision.NEED_RESOLVE and complete_response:
+                await cache.update(
+                    history_messages + [{"role": "user", "content": resolved_query}],
+                    "".join(complete_response),
+                    resolve_llm=_get_resolve_llm(),
+                )
+                logger.info("语义缓存已回写: '{}'", resolved_query)
 
         response = StreamingResponse(
             process_stream(),
             media_type="text/event-stream"
         )
-        
+
         # 添加会话ID到响应头，方便前端获取
         response.headers["X-Conversation-ID"] = thread_id
-        
+
         return response
         
     except Exception as e:
@@ -449,6 +452,6 @@ async def upload_image(
         logger.exception("Image upload failed for user {}: {}", user_id, str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-# 最后挂载静态文件，并确保使用绝对路径
-STATIC_DIR = Path(__file__).parent / "static" / "dist"
+# 最后挂载静态文件（前端 Vue3 工程构建产物，主入口 http://127.0.0.1:8000）
+STATIC_DIR = Path(__file__).parent / "frontend" / "dist"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

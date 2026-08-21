@@ -77,11 +77,12 @@ async def analyze_and_route_query(
         return {"router": Router(type="general-query", logic=f"超出经营范围: {scope_reason}")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
+    # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.ROUTER_TEMPERATURE, tags=["router"], extra_body={"thinking": {"type": "disabled"}})
         logger.info("Using DeepSeek model: {}", settings.DEEPSEEK_MODEL)
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["router"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.ROUTER_TEMPERATURE, tags=["router"], extra_body={"thinking": {"type": "disabled"}})
         logger.info("Using Ollama model: {}", settings.OLLAMA_AGENT_MODEL)
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话）
@@ -152,9 +153,9 @@ async def respond_to_general_query(
     
     # 使用大模型生成回复
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"], extra_body={"thinking": {"type": "disabled"}})
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["general_query"], extra_body={"thinking": {"type": "disabled"}})
     
     system_prompt = GENERAL_QUERY_SYSTEM_PROMPT.format(
         logic=state.router["logic"]
@@ -189,9 +190,9 @@ async def get_additional_info(
     
     # 使用大模型生成回复
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"], extra_body={"thinking": {"type": "disabled"}})
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"], extra_body={"thinking": {"type": "disabled"}})
 
     # 如果用户的问题是电商相关，但与自己的业务无关，则需要返回"无关问题"
 
@@ -344,17 +345,17 @@ async def create_image_query(
                     ]
                 }
             ],
-            "max_tokens": 4000,
+            "max_tokens": settings.VISION_MAX_TOKENS,
             "temperature": 0.7
         }
-        
+
         # 发送API请求
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=60  # 增加超时时间
+                timeout=settings.VISION_TIMEOUT
             ) as response:
                 if response.status == 200:
                     result = await response.json()
@@ -365,9 +366,9 @@ async def create_image_query(
                     
                     # 构建回复请求
                     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-                        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"])
+                        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"], extra_body={"thinking": {"type": "disabled"}})
                     else:
-                        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"])
+                        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["image_query"], extra_body={"thinking": {"type": "disabled"}})
                     # 使用专门的图片查询提示模板
                     system_prompt = GET_IMAGE_SYSTEM_PROMPT.format(
                         image_description=image_description
@@ -408,37 +409,31 @@ async def create_research_plan(
 
     # 使用大模型生成查询/多跳、并行查询计划
     if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
+        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
     else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"])
+        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
 
     # 创建多工具工作流（planner → 向量检索 → summarize → final_answer）
     multi_tool_workflow = create_multi_tool_workflow(
         llm=model,
     )
 
-    # ====== 查询预处理管道（改写 → 纠错 → 扩展 → Multi-Query + HyDE）======
+    # ====== 查询预处理管道（纠错 → 扩展 → Multi-Query + HyDE）======
     # ④ 预算控制：每步 LLM 调用前检查预算，超预算跳过非必要步骤
+    # 注：指代消解（上下文改写）已前置到系统入口（main.py /api/langgraph/query），
+    #     进入本节点的 query 已是消解后的完整问题，无需在此重复消解
     budget = BudgetGuard()
 
-    # 第一步：上下文感知改写（必要）
-    # 多轮对话中用户可能用代词（"那个""它"）或省略主语（"有货吗"），
-    # 需要结合历史消息把问题补全为独立、完整的查询，否则后续检索无法匹配
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.node import (
-        context_aware_rewrite,
-        rewrite_query,
-    )
-    resolved_question = state.messages[-1].content if state.messages else ""  # 默认用原始问题
-    if budget.can_call("context_rewrite", essential=True):
-        resolved_question = await context_aware_rewrite(model, state.messages)
-        budget.record("context_rewrite", tokens=500, essential=True)
-
-    # 第二步：查询纠错（非必要，可跳过）
+    # 第一步：查询纠错（非必要，可跳过）
     # 修正错别字（如"扫第机器人"→"扫地机器人"），确保实体识别基于正确文本
     from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.query_correction import (
         correct_query,
         expand_query,
     )
+    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.query_rewriting.node import (
+        rewrite_query,
+    )
+    resolved_question = state.messages[-1].content if state.messages else ""  # 入口已消解，直接取当前问题
     corrected_question = resolved_question
     if budget.can_call("query_correction", essential=False):
         corrected_question = await correct_query(model, resolved_question)
@@ -472,7 +467,7 @@ async def create_research_plan(
     #   langgraph 0.3.25 + PostgresSaver 下子图 Send(map-reduce) 的 checkpoint 序列化
     #   会抛 "Object of type Send is not JSON serializable"（已最小复现）；
     #   子图纯 RAG 检索无中断/恢复需求，会话记忆由主图 checkpoint 承担。
-    timeout = TimeoutGuard(timeout_seconds=30)
+    timeout = TimeoutGuard(timeout_seconds=settings.RAG_TIMEOUT_SECONDS)
     response = await timeout.wrap(
         multi_tool_workflow.ainvoke(
             input_state,

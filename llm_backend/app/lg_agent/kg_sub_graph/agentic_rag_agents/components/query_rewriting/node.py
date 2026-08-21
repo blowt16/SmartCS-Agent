@@ -16,7 +16,6 @@ import asyncio
 from typing import List
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
@@ -32,16 +31,6 @@ class MultiQueryOutput(BaseModel):
     """多查询生成的结构化输出"""
     queries: List[str] = Field(
         description="从不同角度改写的查询列表，包含3个版本"
-    )
-
-
-class ContextRewrittenOutput(BaseModel):
-    """上下文感知改写的结构化输出"""
-    rewritten_query: str = Field(
-        description="结合对话历史补全指代和省略后的完整问题"
-    )
-    is_context_dependent: bool = Field(
-        description="当前问题是否依赖上下文（包含代词、省略等）"
     )
 
 
@@ -82,114 +71,7 @@ HYDE_SYSTEM_PROMPT = """你是一个电商领域的专家客服。
 - 回答控制在100-200字之间
 """
 
-CONTEXT_REWRITE_SYSTEM_PROMPT = """你是一个多轮对话的指代消解专家。
-你的任务是根据对话历史，把用户当前问题中的指代词（如"那个""它""这个""还有吗"）
-和省略信息补全为完整、独立的问题。
-
-规则：
-1. 如果当前问题包含代词（他/她/它/那个/这个/那件/这件等），用历史中的实体替换
-2. 如果当前问题是省略句（如"有货吗""多少钱""能退吗"），从历史中补全主语
-3. 如果当前问题已经完整、不依赖上下文，直接返回原问题
-4. 不要添加历史中没出现过的信息，只做补全，不做扩展
-
-示例：
-历史: 用户: "扫地机器人X1多少钱" → 助手: "扫地机器人X1售价2999元"
-当前: "那个有货吗"
-改写: "扫地机器人X1有货吗"
-"""
-
-
 # ==================== 核心函数 ====================
-
-
-def _format_chat_history(messages: List[AnyMessage], max_turns: int = 5) -> str:
-    """
-    将消息列表格式化为 LLM 可读的对话历史文本。
-
-    只取最近 max_turns 轮（1轮 = 1条用户 + 1条助手），
-    避免历史过长导致 prompt 超长。
-
-    Args:
-        messages: LangGraph state.messages，完整的对话消息列表
-        max_turns: 最多保留的对话轮数
-
-    Returns:
-        格式化的对话历史字符串，如 "用户: xxx\n助手: xxx\n用户: xxx\n助手: xxx"
-    """
-    # 筛选出用户和助手的消息，跳过 SystemMessage / ToolMessage 等
-    chat_msgs = [m for m in messages if isinstance(m, (HumanMessage, AIMessage))]
-
-    # 只保留最近 max_turns*2 条消息（每轮一问一答）
-    chat_msgs = chat_msgs[-(max_turns * 2):]
-
-    lines = []
-    for msg in chat_msgs:
-        role = "用户" if isinstance(msg, HumanMessage) else "助手"
-        # 截断过长的消息，防止 prompt 爆掉
-        content = msg.content[:200] if len(msg.content) > 200 else msg.content
-        lines.append(f"{role}: {content}")
-
-    return "\n".join(lines)
-
-
-async def context_aware_rewrite(
-    llm: BaseChatModel,
-    messages: List[AnyMessage],
-) -> str:
-    """
-    上下文感知改写：利用对话历史消解指代和省略。
-
-    解决的核心问题：
-        多轮对话中，用户常使用代词（"那个""它"）或省略主语（"有货吗"），
-        但知识库检索需要完整、独立的问题才能匹配到相关文档。
-
-        例如：
-        第1轮: "扫地机器人X1多少钱" → 正常检索
-        第2轮: "那个有货吗"         → 如果不补全，检索不到任何结果
-
-    实现方式：
-        1. 把对话历史格式化为文本（最近5轮）
-        2. 让 LLM 判断当前问题是否依赖上下文
-        3. 如果依赖，则补全为完整问题；否则原样返回
-
-    Args:
-        llm: 语言模型实例
-        messages: 完整的对话消息列表（来自 state.messages）
-
-    Returns:
-        补全后的完整问题（如果不需要补全则返回原问题）
-    """
-    if not messages:
-        return ""
-
-    # 取当前用户问题（最后一条消息）
-    current_query = messages[-1].content
-
-    # 如果只有1条消息，不存在上下文依赖，直接返回
-    if len(messages) <= 1:
-        logger.info("首条消息，无需上下文感知改写")
-        return current_query
-
-    # 格式化对话历史（不包含当前消息，因为它是待改写的对象）
-    history_text = _format_chat_history(messages[:-1])
-
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", CONTEXT_REWRITE_SYSTEM_PROMPT),
-        ("human", "对话历史:\n{history}\n\n当前问题: {current_query}\n\n请判断是否需要补全，并输出改写结果。"),
-    ])
-
-    chain = prompt | llm.with_structured_output(ContextRewrittenOutput)
-    result = await chain.ainvoke({
-        "history": history_text,
-        "current_query": current_query,
-    })
-
-    if result.is_context_dependent:
-        logger.info("上下文感知改写: '{}' → '{}'", current_query, result.rewritten_query)
-    else:
-        logger.info("当前问题不依赖上下文，保持原样: '{}'", current_query)
-
-    return result.rewritten_query
 
 
 async def generate_multi_queries(

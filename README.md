@@ -32,12 +32,6 @@
 ```
 用户请求 → FastAPI API 层
   │
-  ├─ /api/chat ──────────→ LLMFactory → DeepSeek/Ollama → SSE 流式响应
-  │                                              ↑
-  │                                     Redis 语义缓存检查
-  │
-  ├─ /api/search ────────→ Function Calling → SerpAPI 联网搜索
-  │
   ├─ /api/langgraph/query ──→ LangGraph Agent（5 路意图路由）
   │    │
   │    ├─ general-query → 纯 LLM 闲聊
@@ -47,7 +41,10 @@
   │    ├─ image-query → GPT-4o 图片分析
   │    └─ file-query → 文件处理
   │
-  └─ /api/upload ────────→ 文档解析 → 向量入库（pgvector）
+  ├─ /api/upload ────────→ 文档解析 → 向量入库（pgvector）
+  │
+  └─ 前端（Vue3 SFC，llm_backend/frontend → dist）─→ SSE 流式响应
+       └─ Redis 语义缓存检查（命中时模拟流式短路返回）
 ```
 
 ## 技术栈
@@ -61,7 +58,7 @@
 | Embedding | SiliconFlow (BAAI/bge-m3) | 语义向量生成，免费 API |
 | 向量缓存 | Redis | 语义缓存（余弦相似度 >= 0.90 命中） |
 | 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
-| 前端 | Vue（静态 dist） | 聊天界面 |
+| 前端 | Vue3 SFC（llm_backend/frontend → dist） | 聊天界面（登录/注册、SSE 流式、知识库上传） |
 
 ## 快速开始
 
@@ -113,10 +110,7 @@ python scripts/download_jddc.py
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/chat` | POST | 普通聊天（SSE 流式） |
-| `/api/reason` | POST | 深度推理（SSE 流式） |
-| `/api/search` | POST | 联网搜索（Function Calling） |
-| `/api/langgraph/query` | POST | Agent 多路由查询（SSE 流式） |
+| `/api/langgraph/query` | POST | Agent 多路由查询（SSE 流式 + 语义缓存） |
 | `/api/upload` | POST | 上传文件 -> 解析分块 -> 向量入库（pgvector） |
 | `/api/conversations` | POST | 创建会话 |
 | `/api/conversations/{id}/messages` | GET | 获取历史消息 |
@@ -133,7 +127,6 @@ python scripts/download_jddc.py
 │   │   ├── services/                 # 业务服务层
 │   │   │   ├── llm_factory.py        # LLM 工厂模式（DeepSeek/Ollama）
 │   │   │   ├── deepseek_service.py   # DeepSeek API + 语义缓存
-│   │   │   ├── search_service.py     # SerpAPI 联网搜索
 │   │   │   ├── redis_semantic_cache.py # Redis 语义缓存
 │   │   │   └── indexing_service.py   # 文档解析 → 分块 → 向量入库
 │   │   ├── lg_agent/                 # LangGraph 智能体
@@ -148,7 +141,7 @@ python scripts/download_jddc.py
 │   │   │   ├── models/                   # SQLAlchemy 数据模型（含 document_chunks 向量表）
 │   │   ├── api/                      # 认证路由
 │   │   └── prompts/                  # 提示词模板
-│   └── static/dist/                  # Vue 编译后的前端
+│   └── frontend/                     # Vue3 SFC 前端工程（npm run build → dist/，主入口 http://127.0.0.1:8000）
 ├── scripts/                          # 工具脚本
 │   ├── generate_product_knowledge.py # 从 CSV 生成产品知识文档
 │   ├── download_datasets.py          # 下载开源电商 FAQ 数据集

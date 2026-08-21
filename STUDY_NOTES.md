@@ -34,7 +34,7 @@ SmartCS-Agent 是一个**智能电商客服系统**。用户可以通过文字�
 | 文档检索 | 标准 RAG（pgvector） | 文档解析→分块→Embedding→pgvector 表（HNSW），混合检索（BM25+向量 RRF） |
 | 向量缓存 | Redis | 语义缓存（基于 Embedding 向量相似度） |
 | 数据库 | PostgreSQL（pgvector） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
-| 前端 | Vue（静态打包 dist） | 聊天界面 |
+| 前端 | Vue3 SFC（llm_backend/frontend） | 聊天界面 |
 
 ### 与同类项目的定位差异
 
@@ -147,13 +147,12 @@ REDIS_PORT=6379
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   API 层（main.py）                   │
-│   /api/chat  /api/reason  /api/search  /api/upload   │
+│   /api/langgraph/query  /api/upload                  │
 │   /api/langgraph/query  /api/conversations           │
 │   /api/register  /api/token                          │
 ├─────────────────────────────────────────────────────┤
 │                   服务层（app/services/）              │
 │   LLMFactory → DeepSeekService / OllamaService       │
-│   SearchService → SerpAPI                            │
 │   ConversationService → PostgreSQL                  │
 │   IndexingService → pgvector                         │
 │   RedisSemanticCache → Redis + Ollama Embedding      │
@@ -168,15 +167,6 @@ REDIS_PORT=6379
 
 ```
 用户请求 → FastAPI main.py
-  │
-  ├─ /api/chat ──→ LLMFactory → DeepSeek/Ollama → SSE 流式响应
-  │                                  ↑
-  │                          Redis 语义缓存检查
-  │
-  ├─ /api/search ──→ SearchService → Function Calling
-  │                    ├─ LLM 判断是否需要搜索
-  │                    ├─ 需要 → SerpAPI 搜索 → LLM 总结
-  │                    └─ 不需要 → LLM 直接回答
   │
   ├─ /api/langgraph/query ──→ LangGraph Agent
   │    │
@@ -197,7 +187,7 @@ REDIS_PORT=6379
 
 | 模块路径 | 功能描述 | 主要文件 |
 |----------|----------|----------|
-| `app/services/` | 业务逻辑服务层 | `llm_factory.py`, `deepseek_service.py`, `ollama_service.py`, `search_service.py`, `redis_semantic_cache.py`, `conversation_service.py` |
+| `app/services/` | 业务逻辑服务层 | `llm_factory.py`, `deepseek_service.py`, `ollama_service.py`, `redis_semantic_cache.py`, `conversation_service.py` |
 | `app/lg_agent/` | LangGraph 智能体系统 | `lg_builder.py`, `lg_states.py`, `lg_prompts.py`, `kg_sub_graph/` |
 | `llm_backend/knowledge_data/` | 数据准备脚本输出目录 | 产品知识 / 电商FAQ / 客服对话（TXT） |
 | `app/core/` | 核心配置与工具 | `config.py`, `database.py`, `logger.py`, `security.py` |
@@ -870,7 +860,7 @@ data: { message: "你好" }  // 只需改数据，页面自动更新
 
 #### 编译后的前端
 
-项目中 `llm_backend/static/dist/` 存放的是编译后的前端文件：
+项目中 `llm_backend/frontend/dist/` 存放的是编译后的前端文件：
 ```
 dist/
 ├── index.html                    # 入口 HTML
@@ -903,9 +893,6 @@ static async handleChatStream(query, conversationId, mode, onMessage) {
   // 1. 选择 API 端点
   let endpoint;
   switch (mode) {
-    case "chat":    endpoint = "/api/chat";           break;
-    case "reason":  endpoint = "/api/reason";         break;
-    case "search":  endpoint = "/api/search";         break;
     case "agent":   endpoint = "/api/langgraph/query"; break;
   }
 
@@ -990,9 +977,6 @@ async function sendAgentQuery(query, conversationId, imageFile) {
 │  │  ③ 获取消息 ──→ GET  /api/conversations/{id}/messages    │   │
 │  │                                                          │   │
 │  │  发送消息时，根据选择模式调用不同 API：                      │   │
-│  │  ├─ 普通聊天 ─→ POST /api/chat          (SSE 流式)       │   │
-│  │  ├─ 深度思考 ─→ POST /api/reason        (SSE 流式)       │   │
-│  │  ├─ 联网搜索 ─→ POST /api/search        (SSE 流式)       │   │
 │  │  └─ Agent   ─→ POST /api/langgraph/query(SSE 流式)       │   │
 │  │                                                          │   │
 │  │  文件上传 ──→ POST /api/upload (FormData)                 │   │
@@ -1002,8 +986,6 @@ async function sendAgentQuery(query, conversationId, imageFile) {
 ┌──────────────────────────────▼──────────────────────────────────┐
 │                   FastAPI 后端服务器（localhost:8000）             │
 │                                                                 │
-│  /api/chat → LLMFactory → DeepSeek/Ollama → SSE 流式响应        │
-│  /api/search → SearchService → SerpAPI + LLM → SSE 流式响应     │
 │  /api/langgraph/query → LangGraph Agent → SSE 流式响应          │
 │  /api/upload → IndexingService → pgvector 向量库入库           │
 │  /api/conversations → PostgreSQL → JSON 响应                    │
@@ -1028,7 +1010,7 @@ app.add_middleware(
 ### 静态文件挂载
 
 ```python
-STATIC_DIR = Path(__file__).parent / "static" / "dist"
+STATIC_DIR = Path(__file__).parent / "frontend" / "dist"
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 ```
 
@@ -1057,9 +1039,6 @@ Pydantic 做了三件事：
 | 新建会话 | `fetch("/api/conversations")` | `POST /api/conversations` | PostgreSQL 插入记录 |
 | 获取历史会话 | `fetch("/api/conversations/user/{id}")` | `GET /api/conversations/user/{id}` | PostgreSQL 查询 |
 | 获取历史消息 | `fetch("/api/conversations/{id}/messages")` | `GET /api/conversations/{id}/messages` | PostgreSQL 查询 |
-| 普通聊天 | `fetch("/api/chat")` | `POST /api/chat` | LLM 流式→SSE |
-| 深度思考 | `fetch("/api/reason")` | `POST /api/reason` | LLM 推理→SSE |
-| 联网搜索 | `fetch("/api/search")` | `POST /api/search` | SerpAPI+LLM→SSE |
 | Agent 对话 | `fetch("/api/langgraph/query")` | `POST /api/langgraph/query` | LangGraph→SSE |
 | 上传文件 | `fetch("/api/upload")` | `POST /api/upload` | FormData→pgvector 入库 |
 
@@ -1074,7 +1053,7 @@ Pydantic 做了三件事：
 1. 从输入框获取文字内容
 2. 在页面上立即显示用户消息（不等后端响应）
 3. 构造请求体：{ messages: [{role:"user", content:"你好"}], user_id: 1, conversation_id: 5 }
-4. 发送 POST 请求到 /api/chat
+4. 发送 POST 请求到 /api/langgraph/query
   │
   ▼ 网络传输
 5. HTTP 请求通过 CORS 检查，到达 FastAPI 服务器

@@ -80,7 +80,7 @@ analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count
 | 6 | HyDE 在预处理阶段针对整句做一次，拆解后各子 query 无法利用 | 移入 customer_tools 内部，每个子 query 独立 HyDE |
 | 7 | summarize 使用预处理后的 question，对比意图可能被稀释 | 透传 original_question（指代消解后的完整原问题） |
 | 8 | customer_tools 每请求重建重型资源，并行分支下放大 | 模块级单例（阶段 0 前置） |
-| 9 | 语义缓存只服务 `/api/chat`，主链路 `/api/langgraph/query` 未用 | 前置到入口（指代消解后、路由前） |
+| 9 | 语义缓存服务 `/api/langgraph/query` 主链路 | 前置到入口（指代消解后、路由前） |
 
 ---
 

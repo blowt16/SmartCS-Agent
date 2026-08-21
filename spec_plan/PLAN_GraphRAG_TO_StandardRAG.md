@@ -29,7 +29,7 @@ SmartCS-Agent 的核心业务场景是**智能家居电商客服**，用户问�
 - ✅ 事实查询效果持平（向量检索 + 混合检索 + 相关性评分不受影响）
 - ✅ 降低维护复杂度
 - ✅ 保留现有的 Neo4j 知识图谱（Text2Cypher/PredefinedCypher 不受影响）—— ⚠️ 已过期：Neo4j/Text2Cypher/PredefinedCypher 已在后续纯 RAG 收敛中整体删除（见头部归档说明）
-- ✅ 保留现有的混合检索（BM25 + 向量 + RRF）、相关性评分、语义缓存—— 混合检索/相关性评分仍在；语义缓存仍在但仅服务 /api/chat（未接入 /api/langgraph/query）
+- ✅ 保留现有的混合检索（BM25 + 向量 + RRF）、相关性评分、语义缓存—— 混合检索/相关性评分仍在；语义缓存仍在并已服务 /api/langgraph/query
 
 ---
 

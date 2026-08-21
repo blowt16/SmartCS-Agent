@@ -2,7 +2,9 @@
 
 > **用途**: 解决多轮对话中指代/省略导致语义缓存命中率塌陷的问题  
 > **技术栈**: Redis + Embedding 向量 + LLM 指代消解 + 规则引擎  
-> **状态**: 设计规格，待实施。**前置条件未满足**：现状缓存实现存在三项已知缺陷需先修复（见 SPEC_ENTITY_PARALLEL_RAG.md §4.6/阶段 5）——① 同步 `redis` 客户端阻塞事件循环（redis_semantic_cache.py:2,27）；② `lookup` 用 `keys()` 全量扫描（:77,144）；③ `__init__` 内 `asyncio.create_task(self._auto_cleanup())` 任务泄漏（:36）。主链路向量模型已为 qwen text-embedding-v4（bge-m3 仅 ollama/local 分支）。  
+> **状态**: ✅ **已实施**（2026-08-19，分支 `refactor/anaphora-resolution`）。  
+> **前置条件**: 三项缺陷已同步修复——① `redis_semantic_cache.py` 改 `redis.asyncio` 异步客户端（消除事件循环阻塞）；② `lookup`/`_auto_cleanup` 的 `keys()` 全库扫描改为按用户分桶的 ZSET 有序索引（`{prefix}:index`，member=hash_id, score=last_access，存量键 scan_iter 一次性重建兜底）；③ `__init__` 内 `create_task` 任务泄漏移除，改 `start_cleanup()` 幂等启动 + `get_instance()` 实例池化（每用户唯一实例/唯一清理任务）。  
+> **验证**: §10.1 全部用例通过（`llm_backend/app/test/test_pronoun_resolve.py`，41 项断言，含真实 Redis 全链路冒烟）。  
 > **关联文档**: [[PROJECT_ANALYSIS.md]] [[SPEC_CONTEXT_ENGINEERING.md]] [[SPEC_ENTITY_PARALLEL_RAG.md]]
 
 ---
@@ -428,6 +430,10 @@ resolve_enabled = false:
 阶段 3: resolve_enabled=true → 全量开启 → 监控命中率变化
 ```
 
+> ✅ 实施说明（2026-08-19）：已按阶段 3 落地（`RESOLVE_ENABLED` 默认 `true`）。
+> 一键回滚能力保留——设为 `false` 即完全退化为原始行为（对应阶段 1 的无回归状态）；
+> 检测器准确率可通过日志中的"指代消解/纯语气词跳过缓存"观测（对应阶段 2）。
+
 ---
 
 ## 8. 性能模型
@@ -486,6 +492,10 @@ resolve_enabled = false:
 
 ### 10.1 功能验证
 
+> ✅ 已实现为 `llm_backend/app/test/test_pronoun_resolve.py`（2026-08-19）：下表 10 个用例 + 检测器边界词、
+> 消解器 4 条降级路径（超时/空/异常/参数）、缓存层 mock 集成、真实 Redis 全链路冒烟共 **41 项断言全部通过**。
+> 运行：`cd llm_backend && ../.venv/Scripts/python.exe app/test/test_pronoun_resolve.py`
+
 | 测试用例 | 历史对话 | 当前消息 | 期望检测结果 | 期望消解结果 | 期望缓存行为 |
 |---------|---------|---------|:---:|---------|:---:|
 | 显性指代-指示代词 | "iPhone 15多少钱"→"2999" | "那个有货吗" | NEED_RESOLVE | "iPhone 15有货吗" | 命中/写入消解后 |
@@ -500,6 +510,8 @@ resolve_enabled = false:
 | 首条消息 | 无历史 | "iPhone 15价格" | PASS_THROUGH | 原样返回 | 正常查找 |
 
 ### 10.2 质量验证
+
+> ⏳ 待线上观测（需真实流量数据，随灰度监控进行）
 
 | 指标 | 测量方式 | 目标值 |
 |------|---------|:---:|

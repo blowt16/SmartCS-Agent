@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, func
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
 from app.core.config import settings
@@ -16,4 +17,6 @@ class DocumentChunk(Base):
     chunk_index = Column(Integer, nullable=False)     # 块序号
     content = Column(Text, nullable=False)            # 文本块内容
     embedding = Column(Vector(settings.EMBEDDING_DIMENSION), nullable=False)
+    # BM25 全文检索生成列（jiebacfg 分词，DB 端自动维护，ORM 只读使用）
+    content_tsv = Column(TSVECTOR, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

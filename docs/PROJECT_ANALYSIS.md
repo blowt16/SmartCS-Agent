@@ -25,7 +25,7 @@
 
 SmartCS-Agent 是一个**基于 FastAPI + LangGraph 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、混合检索、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
-**核心能力**: 4 路智能意图路由 → 多工具编排 → 混合检索 → 幻觉检测 → 流式响应
+**核心能力**: 4 路智能意图路由 → 多工具编排 → 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
 
 ---
 
@@ -84,12 +84,14 @@ graph TB
 |------|------|------|------|
 | **后端框架** | FastAPI | 0.100+ | REST API，原生 async/await，SSE 流式响应 |
 | **Agent 编排** | LangGraph | latest | StateGraph 多路由 Agent，PostgresSaver 会话检查点持久化 |
-| **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理、相关性评分 |
+| **LLM 基座** | DeepSeek API | V3 | 对话生成、意图路由、推理 |
 | **本地 LLM** | Ollama | - | 可切换的本地 LLM 替代方案 |
 | **文档检索** | pgvector | 0.5+ | 向量表 document_chunks（HNSW 索引），标准 RAG 索引管道 |
 | **Embedding** | EmbeddingProvider | qwen text-embedding-v4 | 统一向量接口（DashScope API，1024 维，默认 qwen；local/ollama 分支保留） |
 | **Embedding 通道** | DashScope OpenAI-compatible API | text-embedding-v4 | 索引/检索/混合检索/语义缓存统一走 qwen API（aiohttp，无本地模型主链路） |
 | **向量缓存** | Redis | 7 Alpine | 语义缓存（余弦相似度 ≥ 0.90 命中） |
+| **精排** | sentence-transformers CrossEncoder | bge-reranker-v2-m3 | RRF 融合 top-20 → 精排 top-5（替代 LLM 相关性评分，GPU/fp16 可加速） |
+| **全文检索** | PostgreSQL pg_jieba | jiebacfg 精确模式 | 数据库内 BM25（ts_rank_cd + GIN 倒排索引），替代应用内存 jieba + rank_bm25 |
 | **关系数据库** | PostgreSQL | 16（pgvector 镜像） | 用户、会话、消息持久化 + 向量检索 + LangGraph 检查点 |
 | **LLM SDK** | OpenAI SDK (AsyncOpenAI) | - | 兼容 DeepSeek API |
 | **LangChain** | langchain-core/deepseek/ollama | - | LLM 抽象层，结构化输出 |
@@ -114,9 +116,6 @@ flowchart TB
     subgraph FastAPI["⚡ FastAPI 服务层"]
         direction TB
         MW["LoggingMiddleware<br/>CORS Middleware"]
-        CHAT["/api/chat<br/>普通聊天 SSE"]
-        REASON["/api/reason<br/>深度推理 SSE"]
-        SEARCH["/api/search<br/>联网搜索"]
         LG["/api/langgraph/query<br/>Agent 多路由 SSE"]
         UPLOAD["/api/upload<br/>文件上传 + 索引"]
         AUTH["/api/register /api/token<br/>认证"]
@@ -127,7 +126,6 @@ flowchart TB
         LLMF["LLMFactory"]
         DS["DeepseekService<br/>+ 语义缓存"]
         OS["OllamaService"]
-        SS["SearchService<br/>+ Function Calling"]
     end
 
     subgraph Agent["🤖 LangGraph Agent 层"]
@@ -141,8 +139,8 @@ flowchart TB
 
     subgraph KGTools["🔧 知识检索工具链"]
         direction LR
-        GRAG["向量检索<br/>vector_search_query + 混合检索"]
-        RG["相关性评分<br/>LLM 逐条过滤"]
+        GRAG["RAGRetrieverService<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合"]
+        RG["Reranker 精排<br/>bge-reranker-v2-m3"]
     end
 
     subgraph Store["💾 存储层"]
@@ -181,8 +179,12 @@ SmartCS-Agent/
 │       │   ├── llm_factory.py           # LLM 工厂模式
 │       │   ├── deepseek_service.py      # DeepSeek + 语义缓存
 │       │   ├── ollama_service.py        # Ollama 备选
-│       │   ├── search_service.py        # SerpAPI 联网搜索
-│       │   ├── redis_semantic_cache.py  # Redis 语义缓存
+│       │   ├── redis_semantic_cache.py  # Redis 语义缓存（asyncio + ZSET 索引 + 分级指代消解）
+│       │   ├── pronoun_detector.py      # 指代检测器（三层规则引擎，缓存/入口共用门控）
+│       │   ├── pronoun_resolver.py      # 指代消解器（LLM 补全，temperature=0，失败降级）
+│       │   ├── rag_retriever_service.py # RAG 检索核心服务（HNSW ∥ BM25 并行 → RRF → 精排，唯一检索入口）
+│       │   ├── reranker_service.py      # bge-reranker-v2-m3 精排（CrossEncoder，GPU/fp16，失败降级）
+│       │   ├── rag_tool.py              # langchain @tool 薄封装（rag_retrieval）
 │       │   ├── conversation_service.py  # 会话 CRUD
 │       │   └── indexing_service.py      # 标准 RAG 索引构建（解析→分块→pgvector 入库）
 │       ├── lg_agent/                     # LangGraph Agent 层
@@ -194,14 +196,12 @@ SmartCS-Agent/
 │       │       └── agentic_rag_agents/
 │       │           ├── workflows/       # 多工具工作流
 │       │           └── components/
-│       │               ├── customer_tools/   # 向量检索（VectorStoreQuery）+ 混合检索
-│       │               ├── hybrid_retrieval/ # BM25 + 向量 + RRF 融合
-│       │               ├── relevance_grader.py   # LLM 相关性评分
+│       │               ├── customer_tools/   # 检索节点（vector_search_query，调 RAGRetrieverService）
+│       │               ├── hybrid_retrieval/ # bm25_sql_retriever.py（pg_jieba SQL BM25）+ rrf_fusion.py
 │       │               ├── memory/         # 三层记忆管理器
-│       │               ├── agent_safety/   # 护栏（Scope/Budget/Timeout/Hallucination）
-│       │               ├── query_rewriting/# 查询预处理管道
-│       │               ├── planner/        # 任务分解
-│       │               └── hybrid_retrieval/ # 混合检索（BM25 + 向量 RRF）
+│       │               ├── agent_safety/   # 护栏（Scope/Budget/Timeout）
+│       │               ├── query_rewriting/# 查询预处理管道（纠错/扩展/Multi-Query+HyDE）
+│       │               └── planner/        # 任务分解
 │       ├── models/                     # SQLAlchemy 模型
 │       │   ├── conversation.py
 │       │   ├── message.py
@@ -209,14 +209,16 @@ SmartCS-Agent/
 │       │   └── document_chunk.py        # pgvector 文档块表
 │       ├── prompts/                    # 搜索提示词
 │       ├── tools/                      # 搜索工具定义
-│       └── static/dist/               # Vue 前端编译输出
+│       └── frontend/                   # Vue3 SFC 前端工程（构建产物 dist/）
 ├── scripts/                           # 工具脚本
 │   ├── init_db.py                     # 数据库初始化（pgvector 扩展 + HNSW 索引）
 │   ├── generate_product_knowledge.py  # CSV → 产品知识文档
 │   ├── download_datasets.py           # 下载电商 FAQ 数据集
 │   └── download_jddc.py              # 下载 JDDC 对话数据集
-├── chat.html                          # 独立聊天页面
-├── docker-compose.yml                 # 2 基础服务编排（PostgreSQL/Redis，App 本地运行）
+├── frontend/                          # Vue3 SFC 前端工程（由 chat.html 重构）
+├── docker/                            # Docker 构建上下文
+│   └── postgres/Dockerfile            # pgvector + pg_jieba 自定义镜像（cppjieba 源码编译）
+├── docker-compose.yml                 # 2 基础服务编排（PostgreSQL 自定义镜像/Redis，App 本地运行）
 ├── Dockerfile                         # Python 3.13-slim 镜像（uv 安装锁定依赖）
 ├── pyproject.toml                     # Python 依赖清单（uv 管理）
 ├── uv.lock                            # 依赖锁定文件
@@ -235,7 +237,7 @@ SmartCS-Agent/
 - **多 LLM 服务策略模式**: `CHAT_SERVICE`、`REASON_SERVICE`、`AGENT_SERVICE` 可分别独立选择 DeepSeek/Ollama
 - **属性计算**: `DATABASE_URL`、`POSTGRES_DSN`、`REDIS_URL` 通过 `@property` 动态构建
 - **向量检索完整配置**: pgvector 表名（document_chunks）、Embedding 维度（1024）、分块参数（500/50）等配置
-- **相关性评分配置**: 阈值、重试次数等可调参
+- **Reranker 精排配置**: 开关（RERANKER_ENABLED）、模型、输入候选数（INPUT_TOP_K）、输出数（TOP_K）、设备（auto/cuda/cpu）、批量、fp16 半精度，全部收敛 .env
 
 ```python
 # 配置项结构（60+ 项配置，含默认值）
@@ -258,44 +260,45 @@ class Settings(BaseSettings):
 | 方法 | 用途 | 默认服务 |
 |------|------|---------|
 | `create_chat_service()` | 普通聊天 | DeepSeek |
-| `create_reasoner_service()` | 深度推理 | Ollama |
-| `create_search_service()` | 联网搜索 | SerpAPI |
 
 ### 4.3 语义缓存 (`app/services/redis_semantic_cache.py`)
 
 基于 **Redis + Embedding 向量余弦相似度** 的语义缓存系统：
 
 ```mermaid
-sequenceDiagram
-    participant User as 用户请求
-    participant Service as DeepseekService
-    participant Cache as RedisSemanticCache
-    participant Embed as EmbeddingProvider
-    participant LLM as DeepSeek API
+flowchart TD
+    Q["用户消息到达"]
+    Q --> DETECT["① 规则引擎指代检测<br/>（O(n) 字符串匹配，毫秒级）"]
 
-    User->>Service: 发送消息
-    Service->>Cache: lookup(messages)
-    Cache->>Embed: 获取最后用户消息向量
-    Embed-->>Cache: 1024 维向量
-    Cache->>Cache: 遍历所有缓存向量<br/>计算余弦相似度
-    alt 相似度 ≥ 0.90 (命中)
-        Cache-->>Service: 返回缓存响应
-        Service-->>User: 模拟流式返回
-    else 相似度 < 0.90 (未命中)
-        Cache-->>Service: None
-        Service->>LLM: 调用 API
-        LLM-->>Service: 流式响应
-        Service->>Cache: update(messages, response)
-        Service-->>User: 流式返回
-    end
+    DETECT -->|"纯语气词<br/>（好的/知道了/谢谢）"| SKIP["⏭️ 跳过缓存<br/>不查不写（避免污染）"]
+    DETECT -->|"含指代/省略<br/>（那个有货吗）"| RESOLVE["② LLM 消解<br/>temperature=0 / 2s 超时"]
+    DETECT -->|"完整问题（80%）"| PASSTHROUGH["原样透传<br/>零额外开销"]
+
+    RESOLVE -->|"失败/超时/空"| DEGRADE["⚠️ 降级为原始消息"]
+    RESOLVE -->|"成功"| RESOLVED["消解后完整问题<br/>（扫地机器人X1有货吗）"]
+    DEGRADE --> EMBED
+    RESOLVED --> EMBED
+    PASSTHROUGH --> EMBED
+
+    EMBED["③ Embedding<br/>qwen text-embedding-v4 1024 维"] --> LOOKUP
+
+    LOOKUP{"④ ZSET 索引遍历<br/>余弦相似度 ≥ 0.90 ?"} -->|"命中"| HIT["🎯 返回缓存响应<br/>模拟流式 SSE"]
+    LOOKUP -->|"未命中"| LLM["⑤ 调用 LLM 生成"]
+
+    LLM --> WRITE["⑥ update 回写<br/>key = 消解后消息 MD5<br/>写入 vec/resp/meta + ZSET 索引"]
+    WRITE --> END
+    HIT --> END
 ```
 
 **核心机制**:
 
-- **向量存储**: 用户消息 → EmbeddingProvider（qwen text-embedding-v4，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`
+- **向量存储**: 用户消息 → 分级指代消解（规则门控，仅 15% 含指代消息调 LLM，失败降级透传）→ EmbeddingProvider（qwen text-embedding-v4，1024 维）→ Redis 存储 `{prefix}:vec:{md5}`（key 基于**消解后**消息生成，保证 lookup/update 同源命中）
 - **相似度计算**: 余弦相似度 `cos(θ) = A·B / (|A|·|B|)`
-- **自动清理**: 异步任务按 LRU 策略清理超量缓存
+- **索引结构**: 按用户分桶的 ZSET `{prefix}:index`（member=hash_id, score=last_access），替代 `keys()` 全库扫描；存量键首次访问时 scan_iter 一次性重建
+- **客户端**: `redis.asyncio` 异步客户端（消除事件循环阻塞）；实例按 (prefix, user_id) 池化，每个用户仅一个清理任务（`start_cleanup()` 幂等启动）
+- **自动清理**: 后台任务按 last_access 升序淘汰超量缓存（ZSET 排序）
 - **元数据追踪**: 访问次数、创建时间、最后访问时间
+- **开关**: `RESOLVE_ENABLED=false` 完全退化为原始行为（一键回滚）
 
 ### 4.4 LangGraph Agent 路由器 (`app/lg_agent/lg_builder.py`)
 
@@ -320,8 +323,7 @@ stateDiagram-v2
         MultiToolWorkflow --> [*]: 返回结果
 
         state QueryPreprocess {
-            [*] --> ContextRewrite: 上下文改写
-            ContextRewrite --> QueryCorrect: 查询纠错
+            [*] --> QueryCorrect: 查询纠错
             QueryCorrect --> QueryExpand: 查询扩展
             QueryExpand --> MultiQueryHyDE: Multi-Query+HyDE
             MultiQueryHyDE --> [*]
@@ -359,7 +361,7 @@ Planner → Send 并行 → 向量检索（pgvector）→ Summarize → FinalAns
 | 环节 | 流程 |
 |------|------|
 | Planner | LLM 任务分解为独立子任务，Send map-reduce 并发派发到检索节点 |
-| 向量检索 | VectorStoreQuery 查询 pgvector（qwen 向量）→ 混合检索(BM25+向量+RRF) → 相关性评分过滤 |
+| 向量检索 | `RAGRetrieverService.search()`：HNSW ∥ pg_jieba BM25 并行（asyncio.gather）→ RRF 融合 → Reranker 精排 top-5 |
 | Summarize | 汇总多路检索结果，生成客服风格回答 |
 | FinalAnswer | 组装最终输出 + 会话历史记录 |
 
@@ -367,14 +369,14 @@ Planner → Send 并行 → 向量检索（pgvector）→ Summarize → FinalAns
 
 ```mermaid
 flowchart TB
-    Q["用户查询"] --> BM25["BM25 关键词检索<br/>精确匹配型号/编号"]
-    Q --> VEC["向量语义检索<br/>qwen text-embedding-v4 API 编码<br/>余弦相似度匹配"]
-    BM25 --> RRF["RRF 倒数排名融合<br/>score = Σ 1/(k+rank)"]
+    Q["用户查询"] --> BM25["pg_jieba BM25 SQL<br/>ts_rank_cd + GIN 倒排索引<br/>数据库内完成，精确匹配型号"]
+    Q --> VEC["pgvector HNSW 向量检索<br/>qwen text-embedding-v4 API 编码<br/>ORDER BY 距离 + LIMIT 触发 ANN"]
+    BM25 --> RRF["RRF 倒数排名融合<br/>score = Σ 1/(k+rank)<br/>两路 asyncio.gather 并行"]
     VEC --> RRF
-    RRF --> TOPK["Top-K 融合结果"]
-    TOPK --> GRADE["LLM 相关性评分<br/>逐条判断 relevant/irrelevant"]
-    GRADE --> FILTER{"逐条评分过滤<br/>relevant 保留 / irrelevant 丢弃"}
-    FILTER --> DONE["返回相关文档<br/>进入 Summarize 生成回答"]
+    RRF --> TOPK["融合 Top-20<br/>（RERANKER_INPUT_TOP_K）"]
+    TOPK --> RERANK["Reranker 精排<br/>bge-reranker-v2-m3 CrossEncoder<br/>（替代 LLM 相关性评分）"]
+    RERANK --> DONE["精排 Top-5<br/>进入 Summarize 生成回答"]
+    RERANK -->|"RERANKER_ENABLED=false<br/>或加载失败"| DONE2["直接用融合 Top-5<br/>（降级不阻塞）"]
 ```
 
 ### 4.7 三层记忆管理 (`components/memory/`)
@@ -419,18 +421,18 @@ flowchart LR
 | **ScopeGuard** | 路由前 | 关键词预检，零延迟拦截非经营范围问题 |
 | **BudgetGuard** | 预处理管道 | 每步 LLM 调用前检查 Token 预算，超预算跳过非必要步骤 |
 | **TimeoutGuard** | 工作流执行 | 30 秒超时返回降级回答 |
-| **HallucinationGuard** | 回答后 | LLM 校验生成内容是否基于事实数据 |
+
+（HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担）
 
 ### 4.9 查询预处理管道
 
-4 步管道式查询增强，在进入 Multi-Tool 工作流之前完成：
+3 步管道式查询增强，在进入 Multi-Tool 工作流之前完成（指代消解已前置到系统入口，图内不再重复处理）：
 
 | 步骤 | 组件 | 必要性 | 功能 |
 |------|------|--------|------|
-| 1 | `context_aware_rewrite` | **必要** | 多轮对话补全（代词消解、主语补全） |
-| 2 | `correct_query` | 非必要 | 错别字修正（"扫第"→"扫地"） |
-| 3 | `expand_query` | 非必要 | 同义词扩展（"灯泡"→"LED灯"） |
-| 4 | `rewrite_query` (Multi-Query+HyDE) | 非必要 | 多查询生成 + 假设文档嵌入 |
+| 1 | `correct_query` | 非必要 | 错别字修正（"扫第"→"扫地"） |
+| 2 | `expand_query` | 非必要 | 同义词扩展（"灯泡"→"LED灯"） |
+| 3 | `rewrite_query` (Multi-Query+HyDE) | 非必要 | 多查询生成 + 假设文档嵌入 |
 
 ---
 
@@ -445,9 +447,14 @@ flowchart TD
     API -->|"无 thread_id"| NEW["新会话<br/>生成 thread_id + InputState"]
     API -->|"已有 thread_id"| CTD["多轮会话<br/>PostgresSaver 加载检查点"]
     API -->|"存在中断"| RSM["中断恢复<br/>Command(resume) 继续人工确认"]
-    NEW --> STREAM["graph.astream<br/>stream_mode=messages"]
-    CTD --> STREAM
-    RSM --> STREAM
+    NEW --> RESOLVE["入口前置指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    CTD --> RESOLVE
+    RSM --> RESOLVE
+
+    RESOLVE --> CACHE{"语义缓存检索<br/>key=消解后消息<br/>按 user_id 隔离"}
+    CACHE -->|"命中"| HIT["⚡ 短路返回缓存回答<br/>模拟流式 SSE（不进图）"]
+    CACHE -->|"未命中"| STREAM["graph.astream<br/>stream_mode=messages"]
+    HIT --> SSE
 
     STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
     SG -->|"不通过"| GQ["兜底回复<br/>提示超出经营范围"]
@@ -463,21 +470,30 @@ flowchart TD
     KG --> SSE
     IMG --> SSE
     GQ --> SSE
+    KG -.->|"完整回答生成后"| WRITEBACK["语义缓存回写<br/>update（非空才写）"]
 ```
 
 **关键说明**:
 
 1. **入口三态**：同一端点根据 thread_id 区分新会话 / 多轮续聊 / 中断恢复（human-in-the-loop）
-2. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
-3. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
-4. 对话记录落库（conversations/messages 表）发生在 `/api/chat` 路径的 `on_complete` 回调，langgraph 路径的会话状态由检查点承载
+2. **入口前置指代消解**：多轮代词/省略（"那个有货吗"）在 `graph.astream` 前完成改写（规则门控 + LLM 补全），首条消息无历史直接透传；图内意图识别与检索拿到的均为完整问题
+3. **入口语义缓存检索**：消解后、进图前按 user_id 查缓存（key=消解后消息），命中短路返回不进图；未命中走图，完整回答生成后回写（非空才写，语气词/失败不写）；含指代且无历史可消解时跳过缓存检索
+4. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
+5. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
+6. 对话记录落库（conversations/messages 表）由前端经 `/api/conversations/save-messages` 接口保存，langgraph 路径的会话状态由检查点承载
 
 ### 5.2 意图路由决策流程
 
 ```mermaid
 flowchart TD
     Q["用户输入"]
+    RESOLVE["入口指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    CACHE{"语义缓存检索<br/>key=消解后消息"}
     SG["ScopeGuard<br/>关键词预检"]
+    Q --> RESOLVE
+    RESOLVE --> CACHE
+    CACHE -->|"命中"| SHORT["⚡ 短路返回缓存回答<br/>不进图"]
+    CACHE -->|"未命中"| SG
     SG -->|不通过| GEN["general-query<br/>回复: 超出经营范围"]
     SG -->|通过| ROUTER["LLM 路由器<br/>4路分类+复杂度评估"]
 
@@ -488,7 +504,7 @@ flowchart TD
     ROUTER -->|"知识库查询"| KG["graphrag-query"]
     ROUTER -->|"图片分析"| IMG["image-query<br/>Qwen-VL + LLM"]
 
-    KG --> GRAG["向量检索 vector_search_query<br/>pgvector + 混合检索 + 相关性评分"]
+    KG --> GRAG["向量检索 vector_search_query<br/>HNSW ∥ pg_jieba BM25 → RRF → 精排"]
 ```
 
 ### 5.3 general-query 闲聊意图运行流程
@@ -525,23 +541,21 @@ flowchart TD
 
 ### 5.5 graphrag-query 知识库查询意图运行流程
 
-节点 `create_research_plan`：先跑 4 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。
+节点 `create_research_plan`：先跑 3 步查询预处理管道（BudgetGuard 预算控制），再进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>create_research_plan"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
+    A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
     A --> P["查询预处理管道<br/>（BudgetGuard 预算控制）"]
-    P --> P1["① 上下文改写（必要）<br/>多轮代词消解 / 主语补全"]
-    P1 --> P2["② 查询纠错（非必要）<br/>错别字修正"]
-    P2 --> P3["③ 查询扩展（非必要）<br/>同义词补充"]
-    P3 --> P4["④ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
-    P4 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
+    P --> P1["① 查询纠错（非必要）<br/>错别字修正"]
+    P1 --> P2["② 查询扩展（非必要）<br/>同义词补充"]
+    P2 --> P3["③ Multi-Query + HyDE（非必要）<br/>多查询生成 + 假设文档嵌入"]
+    P3 --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
     R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
-    S2 --> S3["向量检索（每子任务）<br/>pgvector 余弦 Top-K"]
-    S3 --> S4["混合检索<br/>BM25 + 向量 RRF 融合"]
-    S4 --> S5["LLM 相关性评分过滤"]
-    S5 --> S6["Summarize 结果汇总<br/>客服风格生成"]
-    S6 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
+    S2 --> S3["混合检索（每子任务）<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合 top-20"]
+    S3 --> S4["Reranker 精排<br/>bge-reranker-v2-m3 top-5"]
+    S4 --> S5["Summarize 结果汇总<br/>客服风格生成"]
+    S5 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
     R -->|"超时"| S1B["降级回答<br/>「抱歉，系统处理超时，请稍后再试」"]
     S1B --> OUT
     S7 --> OUT
@@ -577,7 +591,7 @@ flowchart TD
 
 | 设计模式 | 应用位置 | 具体实现 |
 |---------|---------|---------|
-| **工厂模式** | `LLMFactory` | `create_chat_service()` / `create_reasoner_service()` / `create_search_service()` 根据配置返回不同实例 |
+| **工厂模式** | `LLMFactory` | `create_chat_service()` 根据配置返回不同实例 |
 | **策略模式** | `config.py` 服务选择 | `CHAT_SERVICE` / `REASON_SERVICE` / `AGENT_SERVICE` 分别选择 DeepSeek/Ollama |
 | **状态图模式** | `lg_builder.py` | LangGraph `StateGraph` + 条件边实现多路由 Agent 编排 |
 | **观察者/回调模式** | `deepseek_service.py` | `on_complete` 回调触发消息持久化，解耦 LLM 和存储 |
@@ -585,7 +599,7 @@ flowchart TD
 | **单例模式** | `checkpointer_pool`（AsyncConnectionPool） | LangGraph PostgresSaver 全局持久化存储 |
 | **模板方法模式** | 提示词模板 | 预定义提示词 + 动态参数注入 |
 | **装饰器模式** | `LoggingMiddleware` | FastAPI 中间件统一日志 |
-| **门面模式** | `VectorStoreQuery` | 封装 pgvector 表的初始化/查询 API |
+| **门面模式** | `RAGRetrieverService` | 唯一检索入口：HNSW ∥ BM25 并行 → RRF → 精排，graph 节点与 @tool 共用 |
 
 ---
 
@@ -603,10 +617,12 @@ flowchart TD
 ### 7.2 语义缓存存储
 
 ```
-用户问题 → EmbeddingProvider → Redis:
-  {prefix}:vec:{md5}  → JSON 向量
+用户问题 → 分级指代消解 → EmbeddingProvider → Redis:
+  {prefix}:vec:{md5}  → JSON 向量（md5 基于消解后消息）
   {prefix}:resp:{md5} → 回复文本
   {prefix}:meta:{md5} → 访问元数据
+  {prefix}:index      → ZSET 有序索引（member=hash_id, score=last_access）
+                        替代 keys() 全库扫描；cleanup 按 score 升序淘汰
 ```
 
 ### 7.3 标准 RAG 索引管道
@@ -618,6 +634,8 @@ flowchart TD
   → RecursiveCharacterTextSplitter 分块 (500/50)
   → Embedding (EmbeddingProvider, qwen text-embedding-v4 API 1024 维, 分批 ≤10 条/请求)
   → pgvector 入库 (document_chunks 表, HNSW 索引)
+  → BM25 侧自动就绪：content_tsv 生成列（jiebacfg 精确模式分词）+ GIN 倒排索引
+    （CREATE EXTENSION pg_jieba；生成列随 INSERT 自动维护，无重建窗口）
 ```
 
 ---
@@ -639,21 +657,21 @@ class Router(TypedDict):
 
 **技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息。复杂度四元组当前作为路由元信息记录（早期曾驱动 Text2Cypher/预定义模板/向量检索的三分策略，该分支已随 Neo4j 退役移除），可继续用于检索流程的动态调节与效果评估。
 
-### 8.2 🌟 混合检索 + RRF 融合 + 相关性评分过滤
+### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
 
-**创新点**: 不是简单的 BM25+向量双路检索，而是一个**4 步闭环**：
+**创新点**: 不是简单的 BM25+向量双路检索，而是一个**4 步闭环**（两路检索全部下沉数据库，应用层只发 SQL 收排名）：
 
-1. **BM25 精确匹配** (型号 "X1-Pro")
-2. **向量语义匹配** (qwen text-embedding-v4 API 编码)
-3. **RRF 倒数排名融合** (不依赖绝对分数，数学上更鲁棒)
-4. **LLM 逐条相关性评分** (relevant/irrelevant 二值判断)
+1. **pg_jieba BM25 SQL 精确匹配**（ts_rank_cd + GIN 倒排索引，jiebacfg 精确模式与查询同源，DB 内增量维护）
+2. **pgvector HNSW 向量语义匹配**（qwen text-embedding-v4 API 编码，ORDER BY 距离触发 ANN 索引）
+3. **RRF 倒数排名融合**（不依赖绝对分数，数学上更鲁棒；两路 `asyncio.gather` 并行，耗时 = max 非 sum）
+4. **bge-reranker-v2-m3 精排**（CrossEncoder 拼接 (query, doc) 打分，top-20 → top-5；替代原 LLM 相关性评分，GPU/fp16 加速，失败自动降级为融合 top-K）
 
 ```python
 # RRF 融合公式
 score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的排名
 ```
 
-**技术价值**: 融合了关键词精确匹配和语义理解的优势，同时通过相关性评分过滤防止不相关结果污染 LLM 上下文，保证回答基于事实数据。
+**技术价值**: 融合了关键词精确匹配和语义理解的优势，精排用交叉编码器做最终把关，防止不相关结果污染 LLM 上下文；检索计算全部下沉 PostgreSQL（应用内存零语料驻留），语料规模增长不再线性放大应用侧成本。
 
 ### 8.3 🌟 三层记忆管理 + Redis 增量缓存
 
@@ -684,17 +702,19 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 **工程细节**:
 
 - 按用户隔离缓存 (`prefix:user_id:...`)
-- LRU 自动清理 + 访问次数统计
+- **分级指代消解**：三层规则引擎（显性指代 / 省略主语 / 纯语气词）先过滤，80% 完整问题零开销透传、15% 含指代消息才调 LLM 补全（temperature=0 保证确定性、2s 超时失败降级透传）、纯语气词不查不写避免污染
+- **lookup/update 同源消解**：缓存 key 基于消解后消息 MD5，保证"那个有货吗"与"扫地机器人X1有货吗"命中同一缓存
+- **graphrag 入口前置检索**：`/api/langgraph/query` 消解后、进图前查缓存，命中短路跳过整个图流程；未命中走图、完整回答后回写（两条链路共享按 user_id 的缓存池）
+- **ZSET 有序索引** + `redis.asyncio` 异步客户端 + 实例池化（消除 keys 全库扫描与事件循环阻塞）
+- LRU 自动清理（ZSET score 排序）+ 访问次数统计
 - 模拟流式返回保持前端体验一致
-- 异步任务自动维护，不阻塞请求
 
 ### 8.5 🌟 查询预处理管道 + 预算控制
 
-**创新点**: 4 步查询增强 + 每步 LLM 调用前检查 Token 预算，实现**成本可控的质量增强**：
+**创新点**: 3 步查询增强 + 每步 LLM 调用前检查 Token 预算，实现**成本可控的质量增强**（指代消解已前置系统入口，不占管道预算）：
 
 | 步骤 | 必要性 | 原因 |
 |------|--------|------|
-| 上下文改写 | **必要** | 多轮对话代词消解是刚需 |
 | 查询纠错 | 非必要 | 大多数场景下正确率已高 |
 | 查询扩展 | 非必要 | 扩展覆盖面但有额外成本 |
 | Multi-Query+HyDE | 非必要 | 质量提升显著但 Token 消耗大 |
@@ -735,8 +755,8 @@ app:
 
 | 优点 | 说明 |
 |------|------|
-| **检索质量闭环** | 混合检索 → 相关性评分 → 过滤，形成质量保障机制 |
-| **多层护栏** | 范围预检 + LLM 护栏 + 幻觉检测，层层保障 |
+| **检索质量闭环** | 混合检索 → Reranker 精排，DB 内检索 + 交叉编码器把关 |
+| **多层护栏** | 范围预检 + 预算控制 + 超时保护，层层保障 |
 | **内存管理成熟** | 三层摘要 + Token 预算 + Redis 缓存，处理长对话 |
 | **成本控制意识** | 语义缓存降本 + 预算控制非必要调用 |
 
@@ -772,7 +792,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.1 缺少单元测试
 
-项目中**没有 pytest 单元测试体系**（`app/test/` 仅有少量手写冒烟/基准脚本），对于生产级质量保障是高风险问题。
+项目中**没有 pytest 单元测试体系**（`app/test/` 仅有手写冒烟/基准脚本；指代消解功能已有 41 项断言的验证脚本 `test_pronoun_resolve.py`，但非 pytest 框架），对于生产级质量保障是高风险问题。
 
 **建议**:
 
@@ -781,7 +801,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.2 前端过于简单
 
-`chat.html` 是单文件 HTML + 少量 Vue，缺少：
+前端已重构为 Vue3 SFC 工程（llm_backend/frontend），chat.html 已并入。原 chat.html 单文件实现缺少：
 
 - 用户登录 UI
 - 会话列表展示
@@ -883,7 +903,7 @@ class ChatMessage(BaseModel):
 ```mermaid
 graph TB
     subgraph "Docker Network: smartcs-agent_default（仅基础服务）"
-        PG["smartcs-agent-postgres<br/>pgvector/pgvector:pg16 :5432<br/>healthcheck: pg_isready"]
+        PG["smartcs-agent-postgres<br/>自定义镜像 pgvector + pg_jieba :5432<br/>（docker/postgres/Dockerfile 编译 cppjieba）<br/>healthcheck: pg_isready"]
         REDIS["smartcs-agent-redis<br/>Redis 7-alpine :6379<br/>healthcheck: redis-cli ping"]
     end
 
@@ -920,7 +940,7 @@ sequenceDiagram
     R->>R: redis-cli ping (每10s)
     R-->>DC: healthy ✓
 
-    A->>A: cd llm_backend && python -m scripts.init_db (建表 + pgvector 扩展 + HNSW 索引)
+    A->>A: cd llm_backend && python -m scripts.init_db (建表 + pgvector/pg_jieba 扩展 + HNSW/GIN 索引 + content_tsv 生成列)
     A->>A: python run.py（Windows 事件循环补丁 + uvicorn main:app --reload :8000）
     A-->>DC: 服务就绪 ✓
 ```
@@ -949,7 +969,7 @@ sequenceDiagram
 | 电商客服原型 | ⭐⭐⭐⭐⭐ | 开箱即用，多轮对话+知识库完善 |
 | 学习 LangGraph | ⭐⭐⭐⭐⭐ | 完整的 StateGraph + 子图 + 多工具编排案例 |
 | 学习标准 RAG | ⭐⭐⭐⭐⭐ | pgvector 向量管道 + 混合检索的实际应用 |
-| 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、相关性评分、查询预处理等最佳实践 |
+| 学习 RAG 优化 | ⭐⭐⭐⭐ | 语义缓存、Reranker 精排、查询预处理等最佳实践 |
 | 生产部署 | ⭐⭐⭐ | 需补充测试、限流、监控后才能上生产 |
 
 ### 12.3 总结
@@ -957,7 +977,7 @@ sequenceDiagram
 SmartCS-Agent 是一个**技术深度优秀、工程完整性良好但生产就绪度不足**的 AI 客服系统。它在以下方面展现了较强的技术实力：
 
 1. **Agent 编排**: LangGraph StateGraph 的运用成熟，子图嵌套、条件路由、会话持久化、中断恢复等技术点处理得当
-2. **检索增强**: 混合检索+RRF融合、相关性评分过滤形成完整的检索质量保障链路
+2. **检索增强**: 混合检索（HNSW ∥ pg_jieba BM25）+ RRF 融合 + Reranker 精排形成完整的检索质量保障链路
 3. **工程降本**: 语义缓存的实现精细（按用户隔离、LRU清理、流式模拟），三层记忆管理的 Token 预算控制
 4. **系统思维**: 查询预处理管道的必要性分级、根据复杂度自动选择策略的量化决策
 

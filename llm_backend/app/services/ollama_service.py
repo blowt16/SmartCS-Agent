@@ -64,9 +64,19 @@ class OllamaService:
             yield f"data: {error_msg}\n\n"
             raise
 
-    async def generate(self, messages: List[Dict]) -> str:
-        """非流式生成回复"""
+    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None) -> str:
+        """非流式生成回复
+
+        Args:
+            messages: OpenAI 格式消息列表
+            temperature: 采样温度（None 时用默认 0.7）
+            max_tokens: 最大输出 token 数（None 时用模型默认）
+        """
         try:
+            options = {"temperature": temperature if temperature is not None else 0.7}
+            if max_tokens is not None:
+                options["num_predict"] = max_tokens
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.base_url}/api/chat",
@@ -75,9 +85,7 @@ class OllamaService:
                         "messages": messages,
                         "stream": False,
                         "keep_alive": -1,
-                        "options": {
-                            "temperature": 0.7,
-                        }
+                        "options": options,
                     }
                 ) as response:
                     result = await response.json()
