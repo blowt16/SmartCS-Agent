@@ -59,6 +59,16 @@ GET  /api/documents?user_id=      文档列表(来自 documents 表)
 DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 ```
 
+### API 响应契约
+
+| 接口 | 成功 | 失败 |
+|---|---|---|
+| `POST /api/upload` | 一律 200,body `{status: success\|duplicate, md5, chunks}`(duplicate 同 200,前端提示"已存在") | 校验类(扩展名/大小)400 `{detail}`;处理类 200 + `{status: failed, md5, error: <分类>, detail}` |
+| `GET /api/documents?user_id=` | 200 `{user_id, total, documents: [{md5, original_filename, file_type, file_size, page_count, chunk_count, created_at}]}` | 不适用 |
+| `DELETE /api/documents/{md5}?user_id=` | 200 `{md5, deleted: true}`(chunks+记录同事务删) | md5 不存在 404 `{detail}`;删除失败 500 |
+
+错误分类全集:`unsupported` / `too_large` / `empty_file` / `parse_error` / `embedding_failed` / `api_unreachable` / `auth_error` / `duplicate`(处理类),前端按分类提示。
+
 ### 原子性与失败恢复(根本性保证)
 
 **设计原则:全链路零中间态** —— 校验/解析/清洗/分块/嵌入全部在内存完成,**任何 DB 写入只发生在最后一步且只有一个事务**:
@@ -89,6 +99,8 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | RRF 去重键 | 检索结果 doc 携带 `chunk_id`,`rrf_fuse` 的 `id_key` 从 PK 切换为 `chunk_id` | PK 是 DB 行号(删除重传后漂移/复用);chunk_id 内容确定性(同文件→同键,跨环境稳定);消除 `hash()` 进程随机兜底导致静默去重失效的隐患 |
 | 重试 | `embed_in_batches` 内加 3 次指数退避([1,2,4]s) | 瞬断自愈;超过即返回失败+明确错误,不做自动重试队列 |
 | 配置入口 | 全部入 `.env`(settings 增加字段) | 遵循本项目"配置统一入 env"的既有约定(见近期 commit 系列) |
+| 清洗规则边界 | 页码行清理**不做裸数字行删除**(`^\d{1,4}$`),只删"第 X 页/共 Y 页"与 `---Page N---` 模式 | 商品文档价格/库存数字常独立成行,裸数字规则会误删(如"5999");目录行清理保留行内连接符特征(…/制表符/多空白+页码) |
+| chapter 归属 | 跨章节 chunk 归属**块内首个非空字符所在章节** | 切分器按长度切,两章可能进同一块;归属规则必须确定,否则元数据漂移 |
 
 ## 5. 主要改动清单
 
@@ -115,7 +127,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | `created_at` | 文件/块 | 入库时间(已有) |
 
 ### 索引服务(重构 indexing_service.py)
-- 新增 `app/services/mineru_client.py`:MinerU API 客户端(异步,上传→轮询→full.md;失败分类:auth_error / unsupported_format / api_timeout / parse_error;指数退避重试)
+- 新增 `app/services/mineru_client.py`:MinerU API 客户端(异步,上传→轮询→full.md;失败分类:auth_error / unsupported_format / api_timeout / parse_error;指数退避重试)。**任务层状态机**:轮询 `state` 至 `done`(取 full.md)→ `failed`(→ parse_error)→ 总超时 MINERU_TIMEOUT(→ api_timeout);`full.md` 为空 → 归入 empty_file
 - `_parse_document`:按类型分发 → pdf(MinerU API,is_ocr=true) / docx(body 顺序段落+表格)/ txt、md(编码降级链 + 标题正则)
 - `_clean_text`:升级为开关控制的多步流水线(控制字符、空白、页码行、目录行)
 - `process_file` 重排:校验 → MD5 查重 → 解析 → 清洗 → 分块(min_size 过滤)→ 注入元数据(page/chapter/md5/file_type)→ 嵌入(退避重试,全部成功才进事务)→ 单事务入库
@@ -134,6 +146,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 
 ### 初始化脚本(修复 P0-2)
 - `scripts/init_db.py`:移除 `drop_all`,改为幂等建表(`CREATE TABLE IF NOT EXISTS` + `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`),扩展/索引语句不变
+- **唯一约束幂等**:`chunk_id` UNIQUE 与 `(user_id, md5)` UNIQUE 用 `CREATE UNIQUE INDEX IF NOT EXISTS`(存量表含 null 时 Postgres 允许多个 NULL,不冲突)
 
 ### 配置(.env + config.py)
 - `MAX_FILE_SIZE=30`(MB)、`ALLOWED_FILE_TYPES=txt,md,pdf,docx`、`TEXT_CLEAN_ENABLED=true`、`CHUNK_MIN_SIZE=5`、`EMBEDDING_MAX_RETRIES=3`
@@ -184,6 +197,11 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 |---|---|---|
 | 22 | 构造同时被 BM25 与向量召回的同一 chunk(如查询"SF-2000 价格") | 两路 doc 均含相同 `chunk_id`;RRF 融合该 chunk **计 1 次**(分数 = 双路 rank 之和),非重复两条 |
 | 23 | 存量 10 条数据重跑 `ingest_knowledge.py` 后 | 全部 chunk 的 `chunk_id`/`md5` 按规则回填,UNIQUE 无冲突;`GET /documents` 列表完整 |
+| 24 | 上传 0 字节空文件 | 返回 failed(empty_file),库零写入 | 
+| 25 | 故障注入:嵌入 API 打桩首次失败 → 退避重试成功 | 最终 success 入库,重试日志可见(瞬断自愈,非直接失败) |
+| 26 | 同文件名不同内容上传两次 | 两条独立 documents 记录(md5 不同),互不误判 duplicate |
+
+## 7. 明确不做(防过度设计)
 
 ## 7. 明确不做(防过度设计)
 
@@ -199,4 +217,8 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 - **MinerU API 依赖(已确认)**:PDF 解析新增云端依赖——网络抖动/Token 失效/额度耗尽(免费 1000 页/天,超出降级低优先级)时上传返回明确错误并可重传,不影响已入库数据;批量 ingest 注意提交限流(50 次/分)
 - **PDF 页码元数据**:MinerU markdown 无页边界,`page`/`page_count` 暂为 null;需要页码溯源时演进解析结果 zip 中 `layout.json`
 - **md 解析**:MVP 不做 mistune 结构化解析(外仓库主路径),按 txt 编码链处理即可——商品文档多为纯文本/markdown 简单结构,结构化解析收益有限
+- **编码链冗余**:gbk 是 gb2312 超集,链中 gb2312 实际不可达;保留原链对齐外仓库(实现时注释注明,不优化)
+- **并发边界**:上传 vs 删除同文件并发、ingest 与 API 并发,均由唯一约束兜底(PG MVCC 下无脏数据,结果取决于提交顺序,可接受)
+- **磁盘文件生命周期**:DELETE 只删 DB(chunks+documents),`uploads/` 源文件保留供排查;孤儿文件不做自动清理(MVP)
+- **rrf_fuse 调用点核查**:除 `rag_retriever_service.py` 外,实现时全库检索 `rrf_fuse` 调用处,统一确认 doc 均携带 `chunk_id`(防某调用点漏带后走 hash 兜底)
 - 本文档不涉及检索侧(混合检索/RRF/精排)改动;documents 表为文件级入口,检索仍走 document_chunks
