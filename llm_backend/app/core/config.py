@@ -96,12 +96,19 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 500                                   # 文本分块大小
     CHUNK_OVERLAP: int = 50                                 # 分块重叠大小
 
-    # Indexing settings (2026-08-21 索引构建重构)
-    MAX_FILE_SIZE_MB: int = 30                             # 上传大小上限(MB)
-    ALLOWED_FILE_TYPES: str = "txt,md,pdf,docx"            # 允许扩展名(逗号分隔,小写)
-    TEXT_CLEAN_ENABLED: bool = True                        # 清洗流水线开关
-    CHUNK_MIN_SIZE: int = 5                                # 过短 chunk 过滤(字符)
-    EMBEDDING_MAX_RETRIES: int = 3                         # 嵌入批次失败重试次数
+    # ============ 索引构建配置(2026-08-21 索引构建重构) ============
+    # 文件上传校验(索引流程第 1 步,见 spec §3):扩展名白名单 + 大小上限。
+    # 校验失败(unsupported/too_large)返回 HTTP 400 且不落任何 DB 记录,
+    # 从结构上杜绝"半成功"文件记录。
+    MAX_FILE_SIZE_MB: int = 30                             # 上传大小上限(MB);超过返回 too_large
+    ALLOWED_FILE_TYPES: str = "txt,md,pdf,docx"            # 允许扩展名白名单(逗号分隔,小写);其余格式返回 unsupported
+    # 清洗与分块(流程第 4-5 步):清洗流水线 + 短块过滤。
+    # 注意:商品文档价格/库存数字常独立成行,清洗不做裸数字行删除(见 spec §4 清洗规则边界)。
+    TEXT_CLEAN_ENABLED: bool = True                        # 清洗流水线开关;false 时仅 strip,内容直通
+    CHUNK_MIN_SIZE: int = 5                                # 过短 chunk 过滤(字符);小于阈值的噪声块不入库
+    # 嵌入(流程第 6 步):批次失败(返回全零向量)按指数退避重试,
+    # 全部批次成功才进入事务写入,任何一批耗尽重试即整体失败(零写入)。
+    EMBEDDING_MAX_RETRIES: int = 3                         # 嵌入批次失败重试次数(退避间隔 [1,2,4]s)
 
     # MinerU 云端 API(标准 API v4)
     MINERU_API_TOKEN: str = ""                             # https://mineru.net/apiManage/token 申请
