@@ -27,6 +27,7 @@ logger = get_logger(service="mineru")
 class MinerUError(Exception):
     def __init__(self, category: str, detail: str = ""):
         self.category = category
+        self.detail = detail
         super().__init__(f"[{category}] {detail}")
 
 
