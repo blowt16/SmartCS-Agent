@@ -85,7 +85,8 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | docx 提取 | python-docx 遍历 `element.body` 按原序取段落+表格(合并单元格跳过续格) | `doc.paragraphs`/`doc.tables` 分离列表丢失文档顺序;body 迭代零新依赖 |
 | docx/md 元数据 | `chapter` 章节上下文:docx 取 Heading 样式,md 取 `#` 标题正则 | 商品文档按产品/系列分节,章节溯源价值高;实现为 ~20 行纯函数 |
 | 删除语义 | `DELETE /documents/{md5}` 级联删 chunks | 外仓库三层联动(向量→MD5→图片)在 PG 下简化为级联删除 |
-| 元数据列 | documents 表:md5/original_filename/file_type/file_size/page_count;chunk 表:md5/file_type/page/chapter | 支撑去重、按文件删除、文档列表、按页/按章节溯源;存量数据列可空,不阻塞 |
+| 元数据列 | documents 表:md5/original_filename/file_type/file_size/page_count;chunk 表:chunk_id/md5/file_type/page/chapter | 支撑去重、按文件删除、文档列表、按页/按章节溯源;存量数据列可空,不阻塞 |
+| RRF 去重键 | 检索结果 doc 携带 `chunk_id`,`rrf_fuse` 的 `id_key` 从 PK 切换为 `chunk_id` | PK 是 DB 行号(删除重传后漂移/复用);chunk_id 内容确定性(同文件→同键,跨环境稳定);消除 `hash()` 进程随机兜底导致静默去重失效的隐患 |
 | 重试 | `embed_in_batches` 内加 3 次指数退避([1,2,4]s) | 瞬断自愈;超过即返回失败+明确错误,不做自动重试队列 |
 | 配置入口 | 全部入 `.env`(settings 增加字段) | 遵循本项目"配置统一入 env"的既有约定(见近期 commit 系列) |
 
@@ -95,7 +96,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 - 新增 `app/models/document.py`:`documents` 表
   - 列:`id`、`md5`(String(32))、`original_filename`、`user_id`(String(50))、`file_type`(String(20))、`file_size`(Integer)、`page_count`(Integer, 可空, MVP 全为 null,演进从 MinerU layout.json 解析)、`chunk_count`(Integer)、`created_at`
   - 约束:`UNIQUE (user_id, md5)`(并发防重最终防线)
-- `app/models/document_chunk.py`:增加 `md5`(String(32), 可空)、`file_type`(String(20), 可空)、`page`(Integer, 可空, PDF 页号)、`chapter`(String(255), 可空, 章节路径如 "一、智能沙发系列 > 云享智能沙发 SF-2000")
+- `app/models/document_chunk.py`:增加 `chunk_id`(String(64), 可空存量, **UNIQUE**, 生成规则 `f"{user_id}_{md5}_{chunk_index:04d}"`)、`md5`(String(32), 可空)、`file_type`(String(20), 可空)、`page`(Integer, 可空, PDF 页号)、`chapter`(String(255), 可空, 章节路径如 "一、智能沙发系列 > 云享智能沙发 SF-2000")
 
 ### 标准元数据设计(§3 流程第 5 步注入)
 
@@ -109,6 +110,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | `chunk_count` | 文件 | 分块完成后回填 |
 | `page` | 块 | MinerU markdown 无页边界 → PDF 为 null(演进:解析 layout.json);其他格式为 null |
 | `chapter` | 块 | md:`^(#{1,6})\s+` 标题正则维护章节栈;docx:段落 Heading 样式;txt/pdf 为 null |
+| `chunk_id` | 块 | 生成规则 `f"{user_id}_{md5}_{chunk_index:04d}"`;**RRF 融合去重键**(双路检索 doc 均携带,`rrf_fuse` 按它去重),兼作幂等引用/日志关联;存量数据为 null,重跑 ingest 回填 |
 | `chunk_index` | 块 | 文件内块序号(已有) |
 | `created_at` | 文件/块 | 入库时间(已有) |
 
@@ -122,6 +124,10 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 ### API(扩展 main.py)
 - `/api/upload`:返回增加 `status`(success/duplicate/failed)与 `md5`;校验失败 400
 - 新增 `GET /api/documents`、`DELETE /api/documents/{md5}`
+
+### 检索侧(配合改动)
+- `rag_retriever_service.py` / `bm25_sql_retriever.py`:检索结果 doc 增加 `chunk_id` 字段(从 ORM 行读取)
+- `rrf_fuse` 调用处:`id_key="id"` → `id_key="chunk_id"`(`rrf_fuse` 的 hash 兜底保留但实际不再触发)
 
 ### 种子导入脚本(新增)
 - `llm_backend/scripts/ingest_knowledge.py`:遍历 `knowledge_data/` 目录,调用 IndexingService 批量入库(解决 P0-1,当前 10 条语料唯一来源是丢失的一次性操作,必须有可复现脚本)
@@ -172,6 +178,13 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 | 20 | 端到端回归:上传 → `/api/langgraph/query` 检索命中新内容 | 原 RAG 链路不受影响,新 chunk 可检索(BM25 + 向量双路径) |
 | 21 | 故障注入:MinerU API 不可达 / Token 无效 | 返回 failed + 明确分类(api_unreachable / auth_error),库零写入;同文件重传可重试 |
 
+### 元数据与检索专项验收
+
+| # | 验收用例 | 预期 |
+|---|---|---|
+| 22 | 构造同时被 BM25 与向量召回的同一 chunk(如查询"SF-2000 价格") | 两路 doc 均含相同 `chunk_id`;RRF 融合该 chunk **计 1 次**(分数 = 双路 rank 之和),非重复两条 |
+| 23 | 存量 10 条数据重跑 `ingest_knowledge.py` 后 | 全部 chunk 的 `chunk_id`/`md5` 按规则回填,UNIQUE 无冲突;`GET /documents` 列表完整 |
+
 ## 7. 明确不做(防过度设计)
 
 - 不做本地 MinerU 部署(5-10GB 模型 / GPU / PaddlePaddle 生态)
@@ -182,7 +195,7 @@ DELETE /api/documents/{md5}?user_id=  按文件删除(chunks + 记录,同事务)
 
 ## 8. 已知风险与备注
 
-- **存量数据**:现有 10 条 chunk 无 md5,加列后可空;`documents` 表从零开始,旧数据在文档列表不可见,建议审核后重跑一次 `ingest_knowledge.py`(同 md5 命中去重,天然不产生重复)
+- **存量数据**:现有 10 条 chunk 无 md5/chunk_id,加列后可空;`documents` 表从零开始,旧数据在文档列表不可见,建议审核后重跑一次 `ingest_knowledge.py`(同 md5 命中去重,天然不产生重复,chunk_id 一并回填)
 - **MinerU API 依赖(已确认)**:PDF 解析新增云端依赖——网络抖动/Token 失效/额度耗尽(免费 1000 页/天,超出降级低优先级)时上传返回明确错误并可重传,不影响已入库数据;批量 ingest 注意提交限流(50 次/分)
 - **PDF 页码元数据**:MinerU markdown 无页边界,`page`/`page_count` 暂为 null;需要页码溯源时演进解析结果 zip 中 `layout.json`
 - **md 解析**:MVP 不做 mistune 结构化解析(外仓库主路径),按 txt 编码链处理即可——商品文档多为纯文本/markdown 简单结构,结构化解析收益有限
