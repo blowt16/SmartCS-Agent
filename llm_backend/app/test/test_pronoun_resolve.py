@@ -58,6 +58,10 @@ def test_detector():
         ("知道了", DetectionDecision.SKIP_CACHE),            # 纯语气词-反馈
         ("那个...", DetectionDecision.NEED_RESOLVE),         # 消解降级场景（检测仍命中）
         ("iPhone 15价格", DetectionDecision.PASS_THROUGH),   # 首条消息
+        ("你们有那些比较好的沙发", DetectionDecision.PASS_THROUGH),   # 疑问词"哪些"误写"那些"（非指代）
+        ("你们有哪些比较好的沙发", DetectionDecision.PASS_THROUGH),   # 标准疑问词
+        ("那些沙发有货吗", DetectionDecision.NEED_RESOLVE),           # 句首"那些"仍是远指代词
+        ("是那些吗", DetectionDecision.NEED_RESOLVE),                 # "是那些"属歧义句，宁可消解不漏检
     ]
     for text, expect in cases:
         got = detect_pronoun(text)

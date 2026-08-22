@@ -45,6 +45,12 @@ PRONOUNS: List[str] = (
     NEAR_PRONOUNS + FAR_PRONOUNS + SINGULAR_PRONOUNS + PLURAL_PRONOUNS + WRITTEN_PRONOUNS
 )
 
+# 那/哪 混淆归一（第一层前置）：疑问词 "哪些" 的常见输入错误为 "那些"。
+# 仅当 "那些" 紧跟存在动词 "有" 时归一（如 "你们有那些比较好的沙发"
+# = "你们有哪些比较好的沙发"，非远指）；句首位置（"那些沙发有货吗"）与
+# "是那些"（"是那些吗" 真实远指，归一后不成句）均保持原样，只消解不漏检。
+INTERROGATIVE_CONFUSION: List[tuple] = [("有那些", "有哪些")]
+
 # ==================== 第二层：省略主语触发词 ====================
 
 # 短句以这些词开头时，判定为省略主语（如 "有货吗" "能退吗"）
@@ -95,6 +101,10 @@ def detect_pronoun(text: str, skip_filler: bool = True) -> DetectionDecision:
     if skip_filler and _is_filler(text):
         logger.debug("检测到纯语气词: '{}' → SKIP_CACHE", text)
         return DetectionDecision.SKIP_CACHE
+
+    # 那/哪 混淆归一（仅检测用）：疑问词误写 "有那些"→"有哪些"，避免误判为远指代词
+    for src, dst in INTERROGATIVE_CONFUSION:
+        text = text.replace(src, dst)
 
     # 第一层：显性指代词（子串匹配，宁可假阳性）
     for pronoun in PRONOUNS:
