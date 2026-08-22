@@ -440,12 +440,13 @@ async def langgraph_query(
                     logger.debug("Tool call: {}", tool_data)
             # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存）
             if decision != DetectionDecision.NEED_RESOLVE and complete_response:
-                await cache.update(
+                updated = await cache.update(
                     history_messages + [{"role": "user", "content": resolved_query}],
                     "".join(complete_response),
                     resolve_llm=_get_resolve_llm(),
                 )
-                logger.info("语义缓存已回写: '{}'", resolved_query)
+                if updated:
+                    logger.info("语义缓存已回写: '{}'", resolved_query)
 
         response = StreamingResponse(
             process_stream(),

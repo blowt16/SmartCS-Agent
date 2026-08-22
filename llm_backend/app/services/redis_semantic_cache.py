@@ -286,7 +286,7 @@ class RedisSemanticCache:
             logger.exception("Error in lookup: {}", str(e))
             return None
 
-    async def update(self, messages: List[Dict], response: str, expire: int = None, resolve_llm=None):
+    async def update(self, messages: List[Dict], response: str, expire: int = None, resolve_llm=None) -> bool:
         """更新缓存
 
         Args:
@@ -294,19 +294,22 @@ class RedisSemanticCache:
             response: 生成的完整响应
             expire: 过期时间（秒），默认 settings.REDIS_CACHE_EXPIRE
             resolve_llm: 指代消解用的 LLM 服务（同 lookup，注入避免循环依赖）
+
+        Returns:
+            bool: 是否实际写入缓存（false=总开关关闭/纯语气词/异常，调用方据此打出准确日志）
         """
         if not settings.SEMANTIC_CACHE_ENABLED:
             logger.info("语义缓存总开关关闭(SEMANTIC_CACHE_ENABLED=false)，跳过回写")
-            return
+            return False
         try:
             user_message = self._get_last_user_message(messages)
             if not user_message:
-                return
+                return False
 
             # 分级指代消解：SKIP_CACHE → None（不写，避免缓存污染）
             resolved_message = await self._resolve_message(messages, user_message, resolve_llm)
             if resolved_message is None:
-                return
+                return False
 
             vector = await self._get_embedding(resolved_message)
 
@@ -332,6 +335,8 @@ class RedisSemanticCache:
             await self.redis.zadd(self._index_key, {hash_id: metadata["last_access"]})
 
             logger.info("Cache updated for message: {}...", resolved_message[:50])
+            return True
 
         except Exception as e:
             logger.exception("Error in update: {}", str(e))
+            return False
