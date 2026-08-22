@@ -151,9 +151,10 @@ class RAGRetrieverService:
         logger.info("混合检索完成: 向量 {} 条 + BM25 {} 条 -> 融合 {} 条 -> 最终 {} 条",
                     len(vector_results), len(bm25_results), len(fused), len(fused))
 
-        # rerank 后最终结果内容预览: 每条 chunk 的 content 前 50 字符（列表格式, 调试用）
-        final_preview = [str(d.get("text", ""))[:50] for d in fused]
-        logger.info("最终检索结果内容预览(前50字符): {}", final_preview)
+        # rerank 后最终结果内容预览: 每条 chunk 的 content 前 50 字符（列表格式、逐条换行, 调试用）
+        final_preview = [str(d.get("text", "")).replace("\n", "\\n")[:50] for d in fused]
+        preview_lines = "\n".join(f"  [{i}] {c}" for i, c in enumerate(final_preview))
+        logger.info("最终检索结果内容预览(前50字符, 共 {} 条):\n{}", len(final_preview), preview_lines)
         return fused
 
 
