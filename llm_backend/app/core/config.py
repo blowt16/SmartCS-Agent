@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     REDIS_CACHE_PREFIX: str = "cache"                       # 缓存键前缀
     REDIS_CACHE_MAX_SIZE: int = 1000                        # 最大缓存条目数
     REDIS_CACHE_CLEANUP_INTERVAL: int = 3600                # 缓存清理间隔（秒）
+    SEMANTIC_CACHE_ENABLED: bool = True                     # 语义缓存总开关，false 时不查不写（调试用一键关闭）
 
     # Semantic cache resolve settings（语义缓存分级指代消解）
     RESOLVE_ENABLED: bool = True                            # 总开关，false 时完全退化为现有行为（一键回滚）

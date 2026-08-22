@@ -230,6 +230,9 @@ class RedisSemanticCache:
             resolve_llm: 指代消解用的 LLM 服务（具备 generate(messages, ...) 方法）；
                          由调用方注入以避免循环依赖
         """
+        if not settings.SEMANTIC_CACHE_ENABLED:
+            logger.info("语义缓存总开关关闭(SEMANTIC_CACHE_ENABLED=false)，跳过查询")
+            return None
         try:
             user_message = self._get_last_user_message(messages)
             if not user_message:
@@ -292,6 +295,9 @@ class RedisSemanticCache:
             expire: 过期时间（秒），默认 settings.REDIS_CACHE_EXPIRE
             resolve_llm: 指代消解用的 LLM 服务（同 lookup，注入避免循环依赖）
         """
+        if not settings.SEMANTIC_CACHE_ENABLED:
+            logger.info("语义缓存总开关关闭(SEMANTIC_CACHE_ENABLED=false)，跳过回写")
+            return
         try:
             user_message = self._get_last_user_message(messages)
             if not user_message:
