@@ -117,21 +117,27 @@ def route_query(
         Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query"]: 下一步操作。
     """
     _type = state.router["type"]
-    
+    query = state.messages[-1].content if state.messages else ""
+
     # 检查配置中是否有图片路径，如果有，优先处理为图片查询
     if hasattr(state, "config") and state.config and state.config.get("configurable", {}).get("image_path"):
         logger.info("检测到图片路径，转为图片查询处理")
         return "create_image_query"
 
     if _type == "general-query":
+        logger.info("意图路由: 类型={} → 节点=respond_to_general_query | query: '{}'", _type, query)
         return "respond_to_general_query"
     elif _type == "additional-query":
+        logger.info("意图路由: 类型={} → 节点=get_additional_info | query: '{}'", _type, query)
         return "get_additional_info"
     elif _type == "graphrag-query":
+        logger.info("意图路由: 类型={} → 节点=create_research_plan(RAG 检索) | query: '{}'", _type, query)
         return "create_research_plan"
     elif _type == "image-query":
+        logger.info("意图路由: 类型={} → 节点=create_image_query | query: '{}'", _type, query)
         return "create_image_query"
     else:
+        logger.error("意图路由: 未知类型 {}（预期四类之一） | query: '{}'", _type, query)
         raise ValueError(f"Unknown router type {_type}")
     
 async def respond_to_general_query(
