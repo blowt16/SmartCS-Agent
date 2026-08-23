@@ -46,6 +46,17 @@
           >
         </div>
 
+        <div v-if="mode === 'login'" class="mb-4 flex items-center">
+          <input
+            id="remember"
+            v-model="remember"
+            type="checkbox"
+            class="mr-2"
+            @change="onRememberChange"
+          >
+          <label for="remember" class="text-sm text-gray-500 cursor-pointer">记住账号密码</label>
+        </div>
+
         <div v-if="mode === 'register'" class="mb-4">
           <input
             v-model="confirmPassword"
@@ -63,17 +74,6 @@
           {{ mode === 'login' ? '登 录' : '注 册' }}
         </button>
       </form>
-
-      <p class="text-center mt-6 text-sm">
-        <template v-if="mode === 'login'">
-          还没有账号？
-          <span class="login-link" @click="switchMode('register')">立即注册</span>
-        </template>
-        <template v-else>
-          已有账号？
-          <span class="login-link" @click="switchMode('login')">返回登录</span>
-        </template>
-      </p>
     </div>
   </div>
 </template>
@@ -92,14 +92,36 @@ const confirmPassword = ref('');
 const error = ref('');
 const successMsg = ref('');
 const loading = ref(false);
+const remember = ref(false);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+const REMEMBER_KEY = 'remembered-credentials';
+
+// 页面加载时恢复记住的账号密码
+const savedCred = localStorage.getItem(REMEMBER_KEY);
+if (savedCred) {
+  try {
+    const cred = JSON.parse(savedCred);
+    email.value = cred.email || '';
+    password.value = cred.password || '';
+    remember.value = true;
+  } catch {
+    localStorage.removeItem(REMEMBER_KEY);
+  }
+}
 
 function switchMode(m) {
   mode.value = m;
   error.value = '';
   successMsg.value = '';
+}
+
+// 取消勾选后立即清除已保存的账号密码
+function onRememberChange() {
+  if (!remember.value) {
+    localStorage.removeItem(REMEMBER_KEY);
+  }
 }
 
 function validate() {
@@ -145,6 +167,11 @@ async function submit() {
       confirmPassword.value = '';
     } else {
       await apiLogin(email.value, password.value);
+      if (remember.value) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email: email.value, password: password.value }));
+      } else {
+        localStorage.removeItem(REMEMBER_KEY);
+      }
       emit('logged-in');
     }
   } catch (e) {
