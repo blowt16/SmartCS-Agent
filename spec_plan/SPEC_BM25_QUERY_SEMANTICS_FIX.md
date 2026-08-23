@@ -82,11 +82,13 @@ stmt = (
 
 | 候选 | 结论 | 理由 |
 |---|---|---|
-| **DB 内分词 → token 过滤 → `to_tsquery('jiebacfg', "'a'\|\|'b'…")` OR 拼接** | ✅ 采纳（方案 A） | token 与索引同配置同管线；OR 语义贴近原 rank_bm25 BM25Okapi 的"求和打分（部分命中 > 0）"；`ts_rank_cd(D/C/B/A 权重)` 保证全词命中排前；一次 SQL 完成 |
+| **DB 内双分词并集 → token 过滤 → OR 拼接 → `ts_rank_cd` 排名** | ✅ 采纳（方案 A'） | ① token 与索引同一套 DB 管线；② `jiebacfg`（精确模式）保护整词命中，`jiebamp`（MP 单字模式）兜住文档侧被拆散的未登录词/品牌词——实测 `"品牌：芝华仕"` 在文档侧被拆为 `芝/华/仕` 单字 lexeme，而查询侧 `茶华仕` 整词，单路由 jiebacfg 命中不了拆散文档（漏召回）；并集后 `芝|华|仕|芝华仕` 全形态可命中；③ OR 语义贴近旧 BM25Okapi"部分命中即得分"；④ 拆字噪音（单字母 o/p/r）由 ts_rank_cd IDF 衰减 + RRF + 精排滤除，符合"宁可多召回" |
 | websearch_to_tsquery | 否决 | 语法为"普通词 AND、引号分组 OR"，行为不可精确控制；对中文 jiebacfg 分词与 token 级拼接无控制力，验收难以保证"部分命中召回" |
 | AND/OR 混合（罕见词 AND、高频词 OR） | 否决（后续可选） | 需语料 IDF 统计与语料变更联动，复杂度高；本 spec 不阻塞，记入 §10 |
 | 应用侧 jieba 分词后拼接 OR | 否决 | 应用 jieba（Python）与 DB cppjieba 分词结果不一致风险，复现新 token 对齐问题 |
 | plainto_tsquery 行为保留 + 只调 chunking | 否决 | 治标不治本；chunking 变更需重建入库 310 条存量，改动面更大 |
+| `jiebaqry`（查询模式）作为第二路 | 否决 | 实测与 `jiebacfg` 输出完全一致（整词），对"文档侧拆散"无兜底作用，并集无增益 |
+| `jiebahmm`（HMM）作为第二路 | 否决 | 与 jiebacfg 同为整词形态；双整词配置存在边际，仅单字模式（jiebamp）与整词互补 |
 
 ---
 
@@ -98,8 +100,13 @@ stmt = (
 SELECT document_chunks.*,
        ts_rank_cd(document_chunks.content_tsv, tsq.q) AS bm25_score
 FROM document_chunks,
-     (SELECT to_tsquery('jiebacfg', string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q
-      FROM (SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', :query))) AS tok) t
+     (SELECT to_tsquery('jiebacfg',
+              string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q
+      FROM (
+          SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', :query))) AS tok
+          UNION
+          SELECT unnest(tsvector_to_array(to_tsvector('jiebamp', :query))) AS tok
+      ) t
       WHERE tok ~ '\S') tsq
 WHERE document_chunks.content_tsv @@ tsq.q
 ORDER BY bm25_score DESC, document_chunks.id
@@ -108,11 +115,13 @@ LIMIT :top_k
 
 设计要点：
 
-1. `to_tsvector('jiebacfg', :query)` 内层分词 → `tsvector_to_array` 取词条 → `~\S` 过滤纯空白 junk lexeme（jiebacfg 对换行/空格产出的单字符 lexeme）
-2. `quote_literal(tok)` 单个词条加引号（词条内 `&`/`|`/`'` 等字符不再参与 tsquery 语法解析），`string_agg(…, '|' ORDER BY tok)` 确定顺序 OR 连接
-3. `to_tsquery('jiebacfg', "'a'|'b'")` 对引号包裹词条**不再二次分词**，直接作为 lexeme —— 与已有 `content_tsv` lexeme 集合严格对齐
-4. 外层 `tsv @@ tsq.q` 走既有 ix_chunks_tsv GIN 索引（OR 查询 PG 原生支持）
-5. `ORDER BY bm25_score DESC, document_chunks.id`：ts_rank_cd 对 OR 查询按命中词贡献打分（全词命中 > 部分命中），id 兜底保证稳定排序
+1. **双配置分词并集（"宁可多召回"核心）**：`jiebacfg` 精确模式（整词 `芝华仕`/`小米`/`pro`）∪ `jiebamp` MP 模式（单字兜底 `芝|华|仕`、字母串拆分 `o|p|r`）——**覆盖文档侧分词漂移**（实测：`"品牌：芝华仕"` 在生成列中被拆为 `芝/华/仕` 单字 lexeme，与查询侧 `芝华仕` 整词不对称，单路 jiebacfg 查询会漏此类 chunk；UNION 并集后任一形态均可命中）。`UNION` 自动去重重复 token
+2. `to_tsvector(...)` 内层分词 → `tsvector_to_array` 取词条 → `~\S` 过滤纯空白 junk lexeme（jiebacfg 对换行/空格产出的单字符 lexeme）
+3. `quote_literal(tok)` 单个词条加引号（词条内 `&`/`|`/`'` 等字符不再参与 tsquery 语法解析），`string_agg(…, '|' ORDER BY tok)` 确定顺序 OR 连接
+4. `to_tsquery('jiebacfg', "'a'|'b'")` 对引号包裹词条**不再二次分词**，直接作为 lexeme —— 与已有 `content_tsv` lexeme 集合严格对齐
+5. 外层 `tsv @@ tsq.q` 走既有 ix_chunks_tsv GIN 索引（OR 查询 PG 原生支持）
+6. `ORDER BY bm25_score DESC, document_chunks.id`：ts_rank_cd 对 OR 查询按命中词贡献打分（整词命中 > 单字命中，高频单字被 IDF 衰减），id 兜底保证稳定排序
+7. **噪音边界**：单字母/单字 token 在"宁可多召回"下允许进入候选池（召回收益 > 精确度损耗），排名靠后（IDF 高文档频率自动稀释），且经 RRF 融合与 reranker 精排后只留 top-5 —— 多召回带来的候选池扩大由下游三重叠滤镜截断
 
 ### 4.2 代码形态（bm25_sql_retriever.py 全文替换关键段）
 
@@ -126,16 +135,16 @@ BM25 数据库检索器（pg_jieba + ts_rank_cd）
     3. ts_rank_cd 为 BM25 变体排名（词类权重 D/C/B/A），排名行为需与旧实现回归对比
 
 整体流程：
-    1. DB 内 jiebacfg 分词查询词 → token 过滤空白 junk → OR 连接构建 tsquery
-    2. content_tsv @@ query 走 GIN 索引筛候选（OR 语义，部分命中即入选）
-    3. ts_rank_cd 排名，LIMIT top_k
+    1. DB 内双配置分词（jiebacfg 精确模式 ∪ jiebamp 单字兜底）→ token 过滤空白 junk
+       → OR 连接构建 tsquery（部分命中即入选，"宁可多召回"）
+    2. content_tsv @@ query 走 GIN 索引筛候选
+    3. ts_rank_cd 排名（整词命中排前、高频单字 IDF 衰减），LIMIT top_k
 """
 
 from typing import Any, Dict, List
 
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
 
@@ -145,9 +154,10 @@ logger = get_logger(service="bm25_sql_retriever")
 class BM25SQLRetriever:
     """pg_jieba + ts_rank_cd 的 BM25 检索器（无状态，可复用）"""
 
-    # 查询侧分词与索引生成列同一配置（jiebacfg），token 过滤后 OR 连接：
-    # 文档命中部分查询词即可进入排名（plainto_tsquery 的 AND 全词语义在
-    # 微块语料上恒 0 命中，见 spec_plan/SPEC_BM25_QUERY_SEMANTICS_FIX.md）
+    # 双配置分词并集后 OR 连接（plainto_tsquery 的 AND 全词语义在微块语料上
+    # 恒 0 命中，见 spec_plan/SPEC_BM25_QUERY_SEMANTICS_FIX.md）：
+    #   jiebacfg（精确模式）保护整词命中；jiebamp（MP 单字模式）兜底文档侧
+    #   被拆散的未登录词/品牌词（如 "品牌：芝华仕" 在生成列中被拆为 芝/华/仕）。
     _OR_QUERY_SQL_TEXT = text(
         """
         SELECT document_chunks.*,
@@ -155,7 +165,11 @@ class BM25SQLRetriever:
         FROM document_chunks,
              (SELECT to_tsquery('jiebacfg',
                       string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q
-              FROM (SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', :query))) AS tok) t
+              FROM (
+                  SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', :query))) AS tok
+                  UNION
+                  SELECT unnest(tsvector_to_array(to_tsvector('jiebamp', :query))) AS tok
+              ) t
               WHERE tok ~ '\\S') tsq
         WHERE document_chunks.content_tsv @@ tsq.q
         ORDER BY bm25_score DESC, document_chunks.id
@@ -165,10 +179,11 @@ class BM25SQLRetriever:
 
     async def search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """
-        执行 BM25 全文检索（OR 语义）。
+        执行 BM25 全文检索（双分词并集 OR 语义）。
 
-        查询词条与索引生成列同一配置（jiebacfg）分词，过滤空白 junk 后 OR 连接：
-        文档只要命中部分查询词即可进入排名，由 ts_rank_cd 打分排序。
+        查询词条由 jiebacfg（精确模式，整词）与 jiebamp（MP 模式，单字兜底）并集，
+        过滤空白 junk 后 OR 连接：文档只要命中部分查询词即可进入排名，
+        由 ts_rank_cd 打分排序（整词命中排前、高频单字 IDF 衰减）。
 
         Args:
             query: 用户查询文本
@@ -217,8 +232,10 @@ class BM25SQLRetriever:
 
 | 查询形态 | token 结果 | 行为 |
 |---|---|---|
-| 正常多词问题（如 8 词） | 多 token OR | 部分命中即返回，全词命中排前 ✓ |
+| 正常多词问题（如 8 词） | 多 token OR（含整词 + 单字兜底） | 部分命中即返回，全词命中排前 ✓ |
 | 单 token（如 `'沙发'`） | 1 token | `to_tsquery('jiebacfg', "'沙发'")` = 原语义，行为不变 |
+| **未登录品牌词/文档侧被拆散**（如查 `'芝华仕'` 对应文档 `"品牌：芝华仕"`） | 并集含 `芝`/`华`/`仕`/`芝华仕` 全形态 | 任一形态命中即召回 —— 单路 jiebacfg（仅整词）漏召回，并集堵住 ✓ |
+| 英文型号（`Pro`、`50611B`） | jiebacfg 出整词（`pro`）+ jiebamp 出单字母（`o/p/r`、`b`） | 整词命中排前；单字母为低频噪音候选，ts_rank_cd 自动稀释 |
 | 全空白 / 纯标点（`"   "`、`"？？？"`） | token 列表为空或全被 `~\S` 过滤 | `string_agg → NULL` → `to_tsquery(...NULL) → NULL` → `tsv @@ NULL` 恒 NULL → 空列表（**不抛错**） |
 | token 含引号/操作符（罕见，如 `don't`） | `quote_literal` 完整转义，不参与 tsquery 语法 | 正常，词条原样匹配 |
 | 查询命中 0 条（真无语义相关） | — | 返回空列表，下游 `_safe` 融合不变 |
@@ -315,13 +332,33 @@ async def test_bm25_single_word_still_works(test_user_id, tmp_path, cleanup_test
     await _insert_corpus(test_user_id, tmp_path)
     results = await BM25SQLRetriever().search("沙发", top_k=5)
     assert results and "沙发" in results[0]["text"]
+
+
+async def test_bm25_recalls_split_brand_word(test_user_id, tmp_path, cleanup_test_data):
+    """文档侧被拆散的品牌词必须召回（"宁可多召回"核心用例）。
+
+    '品牌：芝华仕' 入库后生成列将 芝华仕 拆为 芝/华/仕 单字 lexeme（实测），
+    而查询侧 '芝华仕' 为整词 —— 单路 jiebacfg(仅整词 OR)在此假阴性返回空，
+    双配置并集(单字兜底)才命中。本用例在 jiebacfg 单路实现上 FAIL。
+    """
+    svc = IndexingService()
+    p = tmp_path / "brand.txt"
+    p.write_text("商品信息\n品牌：芝华仕 CHEERS\n品类：电动智能沙发", encoding="utf-8")
+    r = await svc.process_file(
+        {"path": str(p), "original_name": "brand.txt", "user_id": test_user_id}
+    )
+    assert r["status"] == "success"
+
+    results = await BM25SQLRetriever().search("芝华仕", top_k=10)
+    assert results, "拆分形态的品牌词必须被召回"
+    assert "芝华仕" in results[0]["text"]
 ```
 
 ### Step 2：运行测试，确认旧语义下 FAIL
 
 `uv run pytest llm_backend/tests/test_bm25_retriever.py -v`
 
-期望：`test_bm25_recalls_docs_with_partial_terms` **FAIL**（`assert tops` 为空，AND 语义 0 召回）；`test_bm25_blank_query_returns_empty` 与 `test_bm25_single_word_still_works` PASS（单 token 与空查询与旧行为一致）
+期望：`test_bm25_recalls_docs_with_partial_terms` **FAIL**（`assert tops` 为空，AND 语义 0 召回）；`test_bm25_recalls_split_brand_word` **FAIL**（`assert results` 为空，单路整词 OR 查不到被拆散文档）；`test_bm25_blank_query_returns_empty` 与 `test_bm25_single_word_still_works` PASS（单 token 与空查询与旧行为一致）
 
 ### Step 3：psql 手工验证目标 SQL（边界全过再改代码）
 
@@ -329,10 +366,13 @@ async def test_bm25_single_word_still_works(test_user_id, tmp_path, cleanup_test
 
 ```bash
 docker exec smartcs-agent-postgres psql -U postgres -d smartcs_agent -t -A \
-  -c "SELECT count(*) FROM document_chunks, (SELECT to_tsquery('jiebacfg', string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q FROM (SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', '小米全自动智能门锁Pro的详细参数配置'))) AS tok) t WHERE tok ~ '\\S') tsq WHERE document_chunks.content_tsv @@ tsq.q;"
+  -c "SELECT count(*) FROM document_chunks, (SELECT to_tsquery('jiebacfg', string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q FROM (SELECT unnest(tsvector_to_array(to_tsvector('jiebacfg', '小米全自动智能门锁Pro的详细参数配置'))) AS tok UNION SELECT unnest(tsvector_to_array(to_tsvector('jiebamp', '小米全自动智能门锁Pro的详细参数配置'))) AS tok) t WHERE tok ~ '\\S') tsq WHERE document_chunks.content_tsv @@ tsq.q;"
 ```
 
-期望 ≥ 15（复现查询）；同一模板再验：`'沙发'` → ≥ 17、`'？？？'` → 0 且无报错、`'   '` → 0 且无报错
+期望 ≥ 15（复现查询）；同一模板再验：
+- `'沙发'` → ≥ 17
+- `'芝华仕'` → ≥ 7 且**包含 `"品牌：芝华仕"` 形态的 chunk**（单路 jiebacfg 只有整词，查不到拆散形态，对照验证并集堵漏）
+- `'？？？'` → 0 且无报错、`'   '` → 0 且无报错
 
 ### Step 4：实现替换（§4.2 代码形态全文替换 bm25_sql_retriever.py）
 
@@ -340,7 +380,7 @@ docker exec smartcs-agent-postgres psql -U postgres -d smartcs_agent -t -A \
 
 ### Step 5：运行测试，确认转绿
 
-`uv run pytest llm_backend/tests/test_bm25_retriever.py -v` → 4 个用例全 PASS
+`uv run pytest llm_backend/tests/test_bm25_retriever.py -v` → 5 个用例全 PASS
 
 ### Step 6：全量回归
 
@@ -377,7 +417,7 @@ git push origin dev
 ## 9. 验证方案（汇总）
 
 1. **集成测试**：`uv run pytest llm_backend/tests/test_bm25_retriever.py -v`（复发 → 转绿，前后对照即 TDD 证据）
-2. **psql 对照**：§8-Step3 三个边界 SQL 手工验证（多词 / 单词 / 空查询）
+2. **psql 对照**：§8-Step3 四个边界 SQL 手工验证（多词复现 / 单词 / 拆散品牌词 / 空查询）
 3. **全量回归**：`uv run pytest llm_backend/tests -q`
 4. **端到端**：`search()` 脚本复现用户案例，日志确认 `BM25 SQL 检索完成 … 返回 ≥15 条`、`向量 N 条 + BM25 M 条` 中 M > 0
 5. **影响面 grep**：`grep -rn "plainto_tsquery" llm_backend/app` → 仅剩预期位置（零残留旧调用点）
@@ -388,7 +428,8 @@ git push origin dev
 
 | 决策点 | 决议（2026-08-23） |
 |---|---|
-| 修复语义 | **OR 语义（方案 A）**——部分命中即得分，ts_rank_cd 保持全词命中排前；复用现有 ts_rank_cd/g_rank 排序，不引入 IDF 统计 |
+| 修复语义 | **OR 语义（方案 A'）**——部分命中即得分，ts_rank_cd 保持全词命中排前；复用现有 ts_rank_cd/g_rank 排序，不引入 IDF 统计 |
+| 第二分词配置 | **jiebacfg（精确整词）∪ jiebamp（MP 单字）并集**——2026-08-23 实测：① 文档侧 `"品牌：芝华仕"` 被生成列拆为 `芝/华/仕` 单字，查询侧 `芝华仕` 为整词，单路 jiebacfg 假阴性（漏召回）；② `jiebaqry`/`jiebahmm` 输出与 jiebacfg 同为整词形态，并集无增益，排除；③ `Pro` 被 MP 拆为 `o/p/r` 单字母属可接受噪音（IDF 衰减 + RRF + 精排后不进入最终 top-5） |
 | websearch_to_tsquery | 否决（不可精确控制 token 级行为，见 §3） |
 | OR/AND 混合（罕见词 AND） | 不做（后续可选优化项，语料更大且需 IDF 统计时再评估） |
 | 应用侧 jieba 分词 | 否决（与 DB cppjieba 不一致风险） |
@@ -407,5 +448,7 @@ git push origin dev
 6. **排序稳定性**：`ORDER BY bm25_score DESC` 平手时无绝对顺序——补 `document_chunks.id` 兜底（§4.1 SQL 已含）
 7. **GIN 索引覆盖 OR**：OR tsquery PG 原生支持走反向 GIN/通用搜索；310 chunk 库量级无性能风险（语料 1 万+ 时用 EXPLAIN 复核一次）
 8. **并发改动风险**：`bm25_sql_retriever.py` 是 RAG 检索链核心文件，实施前 `git status` 确认工作区干净；`SPEC_RAG_RETRIEVAL_CONVERGENCE.md` 是高频文档，同步时只追加标注不改原文
+9. **MP 单字噪音量级**：`jiebamp` 对英文/数字串会拆单字母（`Pro → o/p/r`、`50611B → 50611 + b`），对长查询并集后 token 数 ≈ 配置两路之和而非乘积（UNION 去重）；310 chunk 语料量级下候选膨胀无感，语料 1 万+ 时以 EXPLAIN 复核一次召回集规模（出现拖尾候选则启用 §4.1 噪音边界备注的限长策略——暂不实现，YAGNI）
+10. **文档侧 token 对称性信任假设**：并集策略的依据是"文档侧存在拆散形态"（已实测）；若未来 pg_jieba 字典/配置变更，`test_bm25_recalls_split_brand_word` 是唯一守护该假设的用例——字典升级后若该测试意外变绿再变红，代表假设失效，需重新评估
 9. **测试依赖 DB**：`test_bm25_retriever.py` 依赖本地 docker Postgres（pg_jieba 扩展），与 `test_indexing.py` 同样约束——发布到无 DB 环境前跳过（沿用项目现有测试约定，不需额外处理）
 10. **__pycache__ 残留**：`hybrid_retrieval/__pycache__/bm25_retriever.cpython-*.pyc`（已删除模块的孤儿缓存）不参与导入，无需处理
