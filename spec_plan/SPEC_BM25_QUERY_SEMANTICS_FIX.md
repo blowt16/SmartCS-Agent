@@ -390,7 +390,10 @@ docker exec smartcs-agent-postgres psql -U postgres -d smartcs_agent -t -A \
 
 ```bash
 cd llm_backend && uv run python -c "
-import asyncio
+import asyncio, sys
+if sys.platform == 'win32':
+    # psycopg 异步拒用 Proactor 事件循环（conftest.py 同款处理），必须先切换
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from app.services.rag_retriever_service import get_rag_retriever_service
 
 async def main():
@@ -450,5 +453,7 @@ git push origin dev
 8. **并发改动风险**：`bm25_sql_retriever.py` 是 RAG 检索链核心文件，实施前 `git status` 确认工作区干净；`SPEC_RAG_RETRIEVAL_CONVERGENCE.md` 是高频文档，同步时只追加标注不改原文
 9. **MP 单字噪音量级**：`jiebamp` 对英文/数字串会拆单字母（`Pro → o/p/r`、`50611B → 50611 + b`），对长查询并集后 token 数 ≈ 配置两路之和而非乘积（UNION 去重）；310 chunk 语料量级下候选膨胀无感，语料 1 万+ 时以 EXPLAIN 复核一次召回集规模（出现拖尾候选则启用 §4.1 噪音边界备注的限长策略——暂不实现，YAGNI）
 10. **文档侧 token 对称性信任假设**：并集策略的依据是"文档侧存在拆散形态"（已实测）；若未来 pg_jieba 字典/配置变更，`test_bm25_recalls_split_brand_word` 是唯一守护该假设的用例——字典升级后若该测试意外变绿再变红，代表假设失效，需重新评估
+11. **Windows Proactor 事件循环**：psycopg async 不支持 ProactorEventLoop —— 任何 `uv run python -c` 直跑验证脚本必须先 `asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())`（Step7 已含）；生产 uvicorn 启动不受影响（已在跑，conftest.py 先例注释同源）
+12. **文档头/总览 chunk 高分干扰**（已实测：复现查询 top-1 = 文档总览 chunk，ts_rank_cd 满分 1.0）：OR 语义下段长、词语密度高的总览 chunk 易获高分霸榜 RRF 融合——属"宁可多召回"预期行为（它确实含查询词），最终答案由 reranker 精排校准；若后续实测精排被干扰再考虑对 ts_rank_cd 加 length 惩罚，当前不实现（YAGNI）
 9. **测试依赖 DB**：`test_bm25_retriever.py` 依赖本地 docker Postgres（pg_jieba 扩展），与 `test_indexing.py` 同样约束——发布到无 DB 环境前跳过（沿用项目现有测试约定，不需额外处理）
 10. **__pycache__ 残留**：`hybrid_retrieval/__pycache__/bm25_retriever.cpython-*.pyc`（已删除模块的孤儿缓存）不参与导入，无需处理
