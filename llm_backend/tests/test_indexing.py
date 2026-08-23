@@ -30,11 +30,23 @@ def _file(tmp_path, name, content: str, ext="txt") -> str:
 
 # ---- 成功链路 + 元数据 ----
 
+# 12 个短节(每节约 35 字,章节粒度≈段落粒度)+ 2 个产品节,总量 ~550 字:
+# 本 case 明确回归"分块(2026-08-23 全文直接切)":旧逐段切会碎成 ~14 块,全文切应收敛为 2~3 块
+_MERGE_CASE = (
+    "# 一、智能沙发系列\n"
+    + "".join(
+        f"## 产品{i} 参数\n型号 PK-{i}\n描述 参数说明第{i}行\n补充 补充信息{i}\n"
+        for i in range(1, 13)
+    )
+    + "## SF-2000\n品牌 芝华仕\n功能 电动可躺\n价格 5999\n"
+    + "## SF-1000\n品牌 某品牌\n价格 3999\n"
+)
+
 async def test_success_with_metadata(svc, test_user_id, tmp_path, cleanup_test_data):
-    path = _file(tmp_path, "p", "# 一、智能沙发系列\n## SF-2000\n价格 5999\n## SF-1000\n价格 3999", "md")
+    path = _file(tmp_path, "p", _MERGE_CASE, "md")
     result = await svc.process_file({"path": path, "original_name": "p.md", "user_id": test_user_id})
     assert result["status"] == "success"
-    assert result["chunks"] >= 2
+    assert result["chunks"] <= 3
 
     async with AsyncSessionLocal() as s:
         rows = (await s.execute(select(DocumentChunk).where(DocumentChunk.user_id == test_user_id))).scalars().all()
@@ -43,12 +55,26 @@ async def test_success_with_metadata(svc, test_user_id, tmp_path, cleanup_test_d
     assert doc.chunk_count == len(rows)
     # chunk 元数据
     assert all(r.chunk_id.startswith(f"{test_user_id}_") for r in rows)
-    assert all(r.chunk_id.endswith("_0000") or r.chunk_id.endswith("_0001") for r in rows[:2])
+    assert all(r.chunk_id.endswith(f"_{i:04d}") for i, r in enumerate(rows))
     assert all(r.md5 == doc.md5 for r in rows)
     assert all(r.file_type == "md" for r in rows)
-    # 章节归属:含 SF-2000 的 chunk 归属章节
-    sf2000 = next(r for r in rows if "SF-2000" in r.content and "SF-1000" not in r.content)
-    assert "SF-2000" in sf2000.chapter
+    # 分块(全文直接切,2026-08-23):块数收敛(≤3)且无碎片块;所有块归属=块首字符所在章节
+    assert result["chunks"] <= 3
+    assert all(len(r.content.strip()) >= 100 for r in rows)
+    assert all(r.chapter.startswith("一、智能沙发系列") for r in rows)
+
+
+# ---- 归属定位纯函数边界(全文直接切,2026-08-23) ----
+
+def test_locate_chapter_span_edge():
+    """_locate_chapter:块起点落在段间空位(\\n\\n)时顺延到下一段;段内命中本段。"""
+    svc = IndexingService()
+    spans = [(0, 5, "章A"), (7, 20, "章B")]        # 段A 0-4(含连接符 5-6)
+    assert svc._locate_chapter(spans, 2) == "章A"   # 段 A 内部
+    assert svc._locate_chapter(spans, 5) == "章B"   # 段间空位(连接符) → 顺延
+    assert svc._locate_chapter(spans, 6) == "章B"
+    assert svc._locate_chapter(spans, 15) == "章B"  # 段 B 内部
+    assert svc._locate_chapter(spans, 99) == ""     # 越界(理论上不可达) → 空
 
 
 # ---- 去重 ----

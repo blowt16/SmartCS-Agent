@@ -48,6 +48,9 @@ POST /api/upload
   4. 清洗(TEXT_CLEAN_ENABLED 开关):
      控制字符清理 → 空白规范化 → 页码行清理 → 目录行清理
   5. 分块: RecursiveCharacterTextSplitter(500/50, 不变)
+     2026-08-23 修订:分块粒度由"逐 Segment 段内切分"改为"全文统一递归切分"——
+     解析段以 \n\n 连接成全文一次性 split_documents(add_start_index),
+     块归属=块内首个非空字符所在段(见 spec_plan/SPEC_CHUNK_MERGE_STRATEGY.md)
      + 过滤 < CHUNK_MIN_SIZE 的噪声块
      + 注入标准元数据(见 §5 元数据设计)
   6. Embedding: 分批 10 条 + 指数退避重试 3 次 + 全零检测

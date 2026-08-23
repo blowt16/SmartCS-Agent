@@ -1,7 +1,8 @@
 """文档解析器:txt/md/docx → Segment 列表(文本 + 章节上下文)。
 
-Segment 是"段落/表格粒度"的 (text, chapter) 元组;分块阶段在段内切分,
-跨章节内容归属取块内首个非空字符所在章节(见 spec §4)。
+Segment 是"段落/表格粒度"的 (text, chapter) 元组;分块阶段将全文
+(段间 \n\n 连接)统一递归切分,跨章节块归属块内首个非空字符所在段,见
+spec_plan/SPEC_CHUNK_MERGE_STRATEGY.md §3。
 """
 import re
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ class Segment:
 
 
 def parse_text_file(path: Path, ext: str) -> list[Segment]:
-    """txt/md:编码降级链读取;md 额外按标题切段维护章节栈。"""
+    """txt/md:编码降级链读取;txt/md 均按 # 标题切段维护章节栈(无标题退化为单段)。"""
     content = None
     for enc in _ENCODINGS:
         try:
@@ -30,9 +31,7 @@ def parse_text_file(path: Path, ext: str) -> list[Segment]:
     if content is None or not content.strip():
         raise ValueError("文本文件所有编码均解码失败或为空")
 
-    if ext == "md":
-        return _split_md_by_headings(content)
-    return [Segment(text=content)]
+    return _split_md_by_headings(content)
 
 
 def _split_md_by_headings(content: str) -> list[Segment]:

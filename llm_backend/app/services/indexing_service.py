@@ -8,6 +8,7 @@ import os
 from typing import Any, Dict, List
 
 import numpy as np
+from langchain_core.documents import Document as LangchainDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -29,11 +30,27 @@ class IndexingService:
     """RAG 索引服务(校验 → MD5 去重 → 解析 → 清洗 → 分块 → 嵌入 → 原子入库)"""
 
     def __init__(self):
+        # add_start_index: split_documents 给每块打上原文起始字符位置,供章节归属定位
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,
             separators=["\n\n", "\n", "。", "！", "？", "，", " ", ""],
+            add_start_index=True,
         )
+
+    # ==================== 分块归属 ====================
+
+    @staticmethod
+    def _locate_chapter(spans: List[tuple[int, int, str]], pos: int) -> str:
+        """块内首个非空字符所在段 → 章节。
+
+        段间以 \\n\\n 连接,连接符为"空字符":块起点落在连接符上时顺延到下一段
+        (spans 的 end 不含连接符,故 pos < end 即命中本段或顺延后的下一段)。
+        """
+        for start, end, chapter in spans:
+            if pos < end:
+                return chapter
+        return ""
 
     # ==================== 解析 ====================
 
@@ -93,18 +110,34 @@ class IndexingService:
         if not segments:
             return self._fail("empty_file", "解析后为空")
 
-        # 5. 清洗 + 6. 分块 + 章节
-        chunks: List[str] = []
-        chapters: List[str] = []
+        # 5. 清洗 + 6. 分块(全文统一递归切分,2026-08-23):
+        #    段间 \n\n 连接成全文 → split_documents 一次切分 → 块归属=块内首个非空
+        #    字符所在段的章节(段字符轴定位,见 spec_plan/SPEC_CHUNK_MERGE_STRATEGY.md §3)
+        clean_segments: List[tuple[str, str]] = []
         for seg in segments:
             text = clean_text(seg.text) if settings.TEXT_CLEAN_ENABLED else seg.text.strip()
-            if not text:
+            if text:
+                clean_segments.append((text, seg.chapter))
+        if not clean_segments:
+            return self._fail("empty_file", "清洗后无内容")
+
+        # 段字符轴:(start, end, chapter);每段后 +2 补偿 \n\n 连接符,与 join 严格同步
+        spans: List[tuple[int, int, str]] = []
+        cap = 0
+        for text, chapter in clean_segments:
+            spans.append((cap, cap + len(text), chapter))
+            cap += len(text) + 2
+        full_text = "\n\n".join(t for t, _ in clean_segments)
+
+        docs = self.text_splitter.split_documents([LangchainDocument(page_content=full_text)])
+        chunks: List[str] = []
+        chapters: List[str] = []
+        for d in docs:
+            content = d.page_content
+            if len(content.strip()) < settings.CHUNK_MIN_SIZE:
                 continue
-            for c in self.text_splitter.split_text(text):
-                if len(c.strip()) < settings.CHUNK_MIN_SIZE:
-                    continue
-                chunks.append(c)
-                chapters.append(seg.chapter)
+            chunks.append(content)
+            chapters.append(self._locate_chapter(spans, d.metadata["start_index"]))
         if not chunks:
             return self._fail("empty_file", "清洗分块后无内容")
 
