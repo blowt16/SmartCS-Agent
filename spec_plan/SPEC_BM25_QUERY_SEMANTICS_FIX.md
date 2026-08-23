@@ -308,15 +308,22 @@ async def _insert_corpus(test_user_id, tmp_path):
 async def test_bm25_recalls_docs_with_partial_terms(
     test_user_id, tmp_path, cleanup_test_data
 ):
-    """8 词查询仅部分词命中时必须召回含'门锁'的 chunk（旧 AND 语义返回 0）。"""
+    """8 词查询仅部分词命中时必须召回含'门锁'的 chunk（旧 AND 语义返回 0）。
+
+    搜索无 user_id 过滤（全局语料存在高分 chunk，如文档总览），
+    断言必须按 test_user_id 过滤后再比较 BM25 分数。
+    """
     await _insert_corpus(test_user_id, tmp_path)
     results = await BM25SQLRetriever().search(
         "小米全自动智能门锁Pro的详细参数配置", top_k=10
     )
-    tops = [r for r in results if "门锁" in r["text"]]
-    assert tops, f"OR 语义应召回含'门锁'的 chunk，实际: {[r['text'][:30] for r in results]}"
-    # 全词命中(5 词)的完整参数 chunk 应排 at top-1，而非部分命中(3 词)的简讯 chunk
-    assert "续航" in results[0]["text"]
+    mine = [r for r in results if r["user_id"] == test_user_id]
+    assert mine, f"OR 语义应召回含'门锁'的 chunk，实际: {[r['text'][:30] for r in results]}"
+    # 全词命中(5 词)的完整参数 chunk 分数应高于部分命中(3 词)的简讯 chunk
+    mine_sorted = sorted(mine, key=lambda r: r["bm25_score"], reverse=True)
+    assert "续航" in mine_sorted[0]["text"], (
+        f"全词命中的完整参数 chunk 应排前，实际: {[r['text'][:30] + '|' + str(r['bm25_score']) for r in mine_sorted]}"
+    )
 
 
 async def test_bm25_blank_query_returns_empty(test_user_id, tmp_path, cleanup_test_data):
@@ -340,6 +347,8 @@ async def test_bm25_recalls_split_brand_word(test_user_id, tmp_path, cleanup_tes
     '品牌：芝华仕' 入库后生成列将 芝华仕 拆为 芝/华/仕 单字 lexeme（实测），
     而查询侧 '芝华仕' 为整词 —— 单路 jiebacfg(仅整词 OR)在此假阴性返回空，
     双配置并集(单字兜底)才命中。本用例在 jiebacfg 单路实现上 FAIL。
+    注意搜索无 user_id 过滤，断言必须按 test_user_id 过滤（全局存在整词
+    '芝华仕' chunk，否则被生产语料"伪通过"）。
     """
     svc = IndexingService()
     p = tmp_path / "brand.txt"
@@ -349,16 +358,21 @@ async def test_bm25_recalls_split_brand_word(test_user_id, tmp_path, cleanup_tes
     )
     assert r["status"] == "success"
 
-    results = await BM25SQLRetriever().search("芝华仕", top_k=10)
-    assert results, "拆分形态的品牌词必须被召回"
-    assert "芝华仕" in results[0]["text"]
+    results = await BM25SQLRetriever().search("芝华仕", top_k=50)
+    mine = [r for r in results if r["user_id"] == test_user_id]
+    assert mine, "拆分形态的品牌词必须被召回"
+    assert "芝华仕" in mine[0]["text"]
 ```
 
 ### Step 2：运行测试，确认旧语义下 FAIL
 
 `uv run pytest llm_backend/tests/test_bm25_retriever.py -v`
 
-期望：`test_bm25_recalls_docs_with_partial_terms` **FAIL**（`assert tops` 为空，AND 语义 0 召回）；`test_bm25_recalls_split_brand_word` **FAIL**（`assert results` 为空，单路整词 OR 查不到被拆散文档）；`test_bm25_blank_query_returns_empty` 与 `test_bm25_single_word_still_works` PASS（单 token 与空查询与旧行为一致）
+**TDD 实录（2026-08-23）**：3 FAIL + 1 PASS ——
+- `test_bm25_recalls_docs_with_partial_terms` FAIL（AND 语义 0 召回）
+- `test_bm25_blank_query_returns_empty` FAIL（旧 plainto 对纯空白产生垃圾 lexeme，`'   '` 竟命中 5 条；新实现 `\S` 过滤后回 0）
+- `test_bm25_recalls_split_brand_word` FAIL（单路整词 lexeme 查不到被拆散文档；**首版断言曾因全局语料含整词'芝华仕' chunk 而伪通过，已改为按 test_user_id 过滤**）
+- `test_bm25_single_word_still_works` PASS（行为不回退）
 
 ### Step 3：psql 手工验证目标 SQL（边界全过再改代码）
 

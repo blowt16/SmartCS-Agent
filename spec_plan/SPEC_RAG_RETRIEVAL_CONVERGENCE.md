@@ -13,7 +13,7 @@
 2. **pg_jieba 编译链**：CMake 需 libpq-dev（find_package(PostgreSQL) 缺 server 头）；CMakeLists include 相对路径在 CMake 3.25 报错需 sed 改绝对；词典目录（libjieba/dict/）从 PyPI sdist 补齐后 `cmake --install` 自动部署到 tsearch_data（jieba_base.utf8 / jieba_hmm.utf8）
 3. **torch CUDA**：Windows 默认锁 CPU wheel，`[tool.uv.sources] torch = { index = "pytorch-cu126" }` + `uv lock --upgrade-package torch` 切到 2.13.0+cu126（RTX 3060 fp16 验证通过）；注意环境变量 `UV_DEFAULT_INDEX` 指向清华镜像对个别包 403，需 `--default-index https://pypi.org/simple` 覆盖
 4. **reranker 模型本地化**：本机存在 SteamTools 中间人证书（huggingface.co 流量被本地代理 MITM），certifi 校验必然失败、系统存储"信任"的是 MITM 根——模型改为本地目录加载（`llm_backend/models/bge-reranker-v2-m3/`，.gitignore 排除，约 2.3GB 用 urllib 系统存储断点续传下载），`RERANKER_MODEL` 指向本地路径，彻底绕开 HF 网络
-5. **BM25 查询语义**：`plainto_tsquery` 为 AND 严格语义（"SF-2000 多少钱" 分词后 AND 匹配 0 条属预期），向量路补充召回；如需宽松召回可改 `websearch_to_tsquery`（未实施）
+5. **BM25 查询语义**：`plainto_tsquery` 为 AND 严格语义（"SF-2000 多少钱" 分词后 AND 匹配 0 条属预期），向量路补充召回；如需宽松召回可改 `websearch_to_tsquery`（未实施）——⚠️ 2026-08-23 已实施 OR 语义修复（jiebacfg ∪ jiebamp 双分词并集 + ts_rank_cd，详见 [[SPEC_BM25_QUERY_SEMANTICS_FIX.md]]），本节"AND 严格语义属预期"不再适用
 6. **精排模型加载失败自动降级**：验证过程中曾因模型缺失连续触发降级（融合结果直接输出），确认降级链路健壮
 
 ## 目录
