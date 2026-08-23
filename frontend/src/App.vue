@@ -284,6 +284,7 @@ async function uploadDocuments(files) {
 }
 
 async function deleteDocument(id) {
+  if (!confirm('确定要删除这个文档吗？')) return;
   try {
     await deleteDocumentApi(id, user.value.id);
     documents.value = documents.value.filter(d => d.id !== id);
