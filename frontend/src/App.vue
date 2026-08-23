@@ -79,7 +79,7 @@ import {
   deleteConversation as apiDeleteConversation,
   renameConversation,
 } from './api/conversations.js';
-import { uploadFileWithProgress } from './api/upload.js';
+import { uploadFileWithProgress, listDocuments, deleteDocumentApi } from './api/upload.js';
 
 // ========== 登录态 ==========
 const isAuthenticated = ref(!!getToken());
@@ -144,7 +144,7 @@ async function handleLoggedIn() {
     const me = await getMe();
     user.value = { id: me.id, name: me.username, email: me.email };
     isAuthenticated.value = true;
-    await loadConversations();
+    await Promise.all([loadConversations(), loadDocuments()]);
   } catch (e) {
     console.error('获取用户信息失败:', e);
     clearToken();
@@ -239,6 +239,22 @@ async function handleSend({ content, images }) {
 }
 
 // ========== 文档上传 ==========
+async function loadDocuments() {
+  try {
+    const data = await listDocuments(user.value.id);
+    // 后端返回 md5,键名对齐 DocsPanel 组件契约(id/name/type/size/processing)
+    documents.value = data.documents.map(d => ({
+      id: d.md5,
+      name: d.original_filename,
+      type: d.file_type,
+      size: d.file_size,
+      processing: false
+    }));
+  } catch (e) {
+    console.error('加载文档列表失败:', e);
+  }
+}
+
 async function uploadDocuments(files) {
   for (const file of files) {
     uploadProgress.value = 0;
@@ -248,8 +264,13 @@ async function uploadDocuments(files) {
         userId: user.value.id,
         onProgress: (p) => { uploadProgress.value = p; },
       });
+      // 处理类失败(契约:200+status=failed)不入列表,否则会出现"刷新后消失"
+      if (result.index_result?.status === 'failed') {
+        console.warn('文档处理失败:', result.index_result);
+        continue;
+      }
       documents.value.push({
-        id: result.filename || Date.now().toString(),
+        id: result.index_result?.md5 || result.filename,
         name: result.original_name || file.name,
         type: file.name.split('.').pop(),
         size: file.size,
@@ -262,8 +283,13 @@ async function uploadDocuments(files) {
   }
 }
 
-function deleteDocument(id) {
-  documents.value = documents.value.filter(d => d.id !== id);
+async function deleteDocument(id) {
+  try {
+    await deleteDocumentApi(id, user.value.id);
+    documents.value = documents.value.filter(d => d.id !== id);
+  } catch (e) {
+    console.error('删除文档失败:', e);
+  }
 }
 
 // ========== 暗色模式 ==========
