@@ -28,19 +28,43 @@
           >
         </div>
 
-        <div class="mb-4">
+        <!-- 登录表单：状态独立，不随模式切换改变，保真记住的账密 -->
+        <div v-if="mode === 'login'" class="mb-4">
           <input
             v-model="email"
             type="email"
+            autocomplete="username"
             placeholder="请输入邮箱"
             class="login-input"
           >
         </div>
 
-        <div class="mb-4">
+        <div v-if="mode === 'login'" class="mb-4">
           <input
             v-model="password"
             type="password"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+            class="login-input"
+          >
+        </div>
+
+        <!-- 注册表单：独立字段，始终空白进入，不受记住功能影响 -->
+        <div v-if="mode === 'register'" class="mb-4">
+          <input
+            v-model="emailReg"
+            type="email"
+            autocomplete="off"
+            placeholder="请输入邮箱"
+            class="login-input"
+          >
+        </div>
+
+        <div v-if="mode === 'register'" class="mb-4">
+          <input
+            v-model="passwordReg"
+            type="password"
+            autocomplete="new-password"
             placeholder="请输入密码"
             class="login-input"
           >
@@ -61,6 +85,7 @@
           <input
             v-model="confirmPassword"
             type="password"
+            autocomplete="new-password"
             placeholder="请确认密码"
             class="login-input"
           >
@@ -89,6 +114,8 @@ const username = ref('');
 const email = ref('');
 const password = ref('');
 const confirmPassword = ref('');
+const emailReg = ref('');
+const passwordReg = ref('');
 const error = ref('');
 const successMsg = ref('');
 const loading = ref(false);
@@ -115,12 +142,6 @@ function switchMode(m) {
   mode.value = m;
   error.value = '';
   successMsg.value = '';
-  if (m === 'register') {
-    // 注册表单不预填记住的账号密码，避免泄漏到注册页
-    email.value = '';
-    password.value = '';
-    confirmPassword.value = '';
-  }
 }
 
 // 取消勾选后立即清除已保存的账号密码
@@ -131,27 +152,29 @@ function onRememberChange() {
 }
 
 function validate() {
+  const emailVal = mode.value === 'register' ? emailReg.value : email.value;
+  const passwordVal = mode.value === 'register' ? passwordReg.value : password.value;
   if (mode.value === 'register' && !username.value.trim()) {
     error.value = '请输入用户名';
     return false;
   }
-  if (!email.value.trim()) {
+  if (!emailVal.trim()) {
     error.value = '请输入邮箱';
     return false;
   }
-  if (!EMAIL_RE.test(email.value)) {
+  if (!EMAIL_RE.test(emailVal)) {
     error.value = '请输入有效的邮箱地址';
     return false;
   }
-  if (!password.value) {
+  if (!passwordVal) {
     error.value = '请输入密码';
     return false;
   }
-  if (!PASSWORD_RE.test(password.value)) {
+  if (!PASSWORD_RE.test(passwordVal)) {
     error.value = '密码必须包含大小写字母和数字，至少8位';
     return false;
   }
-  if (mode.value === 'register' && password.value !== confirmPassword.value) {
+  if (mode.value === 'register' && passwordReg.value !== confirmPassword.value) {
     error.value = '两次输入的密码不一致';
     return false;
   }
@@ -166,10 +189,14 @@ async function submit() {
   loading.value = true;
   try {
     if (mode.value === 'register') {
-      await apiRegister(username.value.trim(), email.value, password.value);
+      await apiRegister(username.value.trim(), emailReg.value, passwordReg.value);
       successMsg.value = '注册成功';
       mode.value = 'login';
-      password.value = '';
+      // 注册的邮箱带入登录表单，方便立即登录；注册字段整体清空防残留
+      email.value = emailReg.value;
+      username.value = '';
+      emailReg.value = '';
+      passwordReg.value = '';
       confirmPassword.value = '';
     } else {
       await apiLogin(email.value, password.value);
