@@ -115,6 +115,12 @@ function switchMode(m) {
   mode.value = m;
   error.value = '';
   successMsg.value = '';
+  if (m === 'register') {
+    // 注册表单不预填记住的账号密码，避免泄漏到注册页
+    email.value = '';
+    password.value = '';
+    confirmPassword.value = '';
+  }
 }
 
 // 取消勾选后立即清除已保存的账号密码
