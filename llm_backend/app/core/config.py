@@ -89,7 +89,23 @@ class Settings(BaseSettings):
     QWEN_EMBEDDING_API_KEY: str = ""
     QWEN_EMBEDDING_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     QWEN_EMBEDDING_MODEL: str = "text-embedding-v4"
-    
+
+    # ============ RAGAS 评测配置（评测专用，与生产链路隔离） ============
+    # 隔离原则：评测变量全部 RAGAS_ 前缀；judge/embedding 的 key、模型、端点独立填写，
+    # 不回退、不混用生产配置（QWEN_EMBEDDING_*/DEEPSEEK_*）——评测进程只读生产基础设施（DB/被测 agent）
+    RAGAS_JUDGE_API_KEY: str = ""          # 阿里云百炼 DashScope API Key（必填，评测专用 key）
+    RAGAS_JUDGE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    RAGAS_JUDGE_MODEL: str = "qwen-plus"   # 评判模型（qwen-plus 性价比 / qwen-max 更严）
+    RAGAS_JUDGE_TEMPERATURE: float = 0.0   # 评判低温保证可复现
+    RAGAS_JUDGE_TIMEOUT: int = 60          # judge 单次请求超时（秒）
+    RAGAS_EMBEDDING_API_KEY: str = ""      # 必填（评测专属，不回退生产配置）
+    RAGAS_EMBEDDING_BASE_URL: str = ""     # 必填，默认同 DashScope compatible-mode
+    RAGAS_EMBEDDING_MODEL: str = ""        # 必填，默认 text-embedding-v4
+    RAGAS_DEFAULT_TESTSET_SIZE: int = 20   # 合成题数（MVP）
+    RAGAS_MAX_CORPUS_DOCS: int = 100       # 喂合成器的分块上限
+    RAGAS_BATCH_SIZE: int = 10             # 评测批处理并行度（ragas 内部 LLM 调用批量，主流实践 10-25）
+    RAGAS_RESULTS_DIR: str = "evaluation/results"  # 报告归档目录（相对 llm_backend/）
+
     # Vector DB settings (pgvector)
     VECTOR_TABLE_NAME: str = "document_chunks"           # pgvector 文档块表名
 

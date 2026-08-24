@@ -62,3 +62,8 @@ uploads/.claude/
 llm_backend/uploads/
 docker/postgres/vendor/
 llm_backend/models/
+
+# ragas 评测产物（可再生，不入库）
+llm_backend/evaluation/results/
+# 根目录 uploads（cwd 混淆运行残留，不入库）
+/uploads/

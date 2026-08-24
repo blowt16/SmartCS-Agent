@@ -42,7 +42,7 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
-url = "https://pypi.org/simple"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
 [[tool.uv.index]]
@@ -59,3 +59,9 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["llm_backend/tests"]
+
+[dependency-groups]
+dev = [
+    "ragas>=0.4.3",
+    "rapidfuzz>=3.14.5",
+]
