@@ -42,7 +42,7 @@
 | 风险意图识别 | violation（违规咨询拦截）/ high_risk（高风险操作转人工），与场景独立判断 |
 | 场景驱动路由 | 路由分支按场景划分；售前复用现有 RAG 子图；售后/投诉安抚走占位节点（返回提示） |
 | 业务 agent 接口预留 | 售后/投诉安抚占位节点接口与 multi_tool 子图同构（question+history→answer），后续仅改路由目的地 |
-| 路由准确率可评测 | golden set（30 条）三维准确率（type / sub_scenario / risk）可复现输出 |
+| 路由准确率可评测 | golden set（35 条 = 单轮 30 + 多轮 5）三维准确率（type / sub_scenario / risk）可复现输出 |
 
 ### 1.3 明确不做（MVP 边界）
 
@@ -266,6 +266,7 @@ class Router(TypedDict):
 1. 结合对话历史判断真实意图（如"那个呢？"需结合上文商品上下文）
 2. 区分"询问政策"与"要求执行操作"：问退款政策 → 正常；要求直接退钱 → high_risk
 3. 拿不准时 risk 取 none，宁放行不误拦
+4. 一条消息含多个意图时（如"这灯多少钱？另外怎么退货？"），取主导/最紧急意图——售后/投诉/风险优先于售前
 ```
 
 ### 6.2 删除的 prompt
@@ -288,7 +289,7 @@ class Router(TypedDict):
 
 | 文件 | 动作 | 内容 |
 |------|------|------|
-| `llm_backend/app/lg_agent/lg_states.py` | 修改 | `Router` 类型扩展为 type 五值 + sub_scenario + risk |
+| `llm_backend/app/lg_agent/lg_states.py` | 修改 | `Router` 类型扩展为 type 五值 + sub_scenario + risk；**`AgentState.router` 默认值同步**（`lg_states.py:59` 的 `type="general-query"` → `type="general"`，否则未走路由的路径触发 route_query ValueError） |
 | `llm_backend/app/lg_agent/lg_prompts.py` | 修改/删除 | ROUTER_SYSTEM_PROMPT 重写（§6.1）；删 GET_ADDITIONAL_SYSTEM_PROMPT、GUARDRAILS_SYSTEM_PROMPT |
 | `llm_backend/app/lg_agent/lg_builder.py` | 修改/新增/删除 | ① analyze_and_route_query：ScopeGuard 预检保留但拦截返回值改为新枚举（`lg_builder.py:76` 的 `type="general-query"` → `type="general"`），合并输出三维 Router（结构化输出模型同步扩展）；② route_query：按 §4.3 路由表接条件边；③ 新增风险拦截节点 / 转人工节点 / 售后占位节点 / 投诉安抚占位节点（静态话术，见 §6.3）；④ 删除 get_additional_info 节点与 AdditionalGuardrailsOutput 类 |
 | `llm_backend/main.py` | 检查 | 无 additional 相关引用（预计无改动，需全局检索确认） |
@@ -332,6 +333,8 @@ InputState{question: str, history: list} → OutputState{answer: str}
 | 9 | "退款政策是什么？" | aftersale + none（询问政策非要求执行）→ 售后占位提示 |
 | 10 | 超经营范围（"有卖衣服吗"） | ScopeGuard 关键词预检拦截 → general 路径的"无关问题"话术（保留现状） |
 | 11 | 拿不准的消息 | risk 取 none，type 按最可能场景；不误拦 |
+| 12 | 带图违规消息（"看这张图怎么改"） | risk=violation 优先拦截，不进图片节点 |
+| 13 | 多意图消息（"这灯多少钱？另外怎么退货？"） | 取主导/最紧急意图（准则 4）：售后优先 → aftersale |
 
 ---
 
@@ -340,7 +343,7 @@ InputState{question: str, history: list} → OutputState{answer: str}
 | 面 | 影响 | 处理 |
 |----|------|------|
 | graphrag-query 语义变更 | RAG 子图本身**零改动**（`multi_tool.py`/检索链路/RAGAS 评测不受影响）；仅主图路由目的地不变（presale 仍走 create_research_plan） | 无需回归重测 RAGAS |
-| 语义缓存（redis_semantic_cache） | 缓存键基于 query 相似度，与路由无关 | 无影响 |
+| 语义缓存（redis_semantic_cache） | 缓存命中在进图前短路（main.py:389），**绕过整个图流程（含 risk 风险拦截）**。实际绕过概率极低：相似度阈值 0.90 + 违规/高风险消息与正常消息向量差异大（"怎么改装电池"不会命中"这款灯多少钱"的缓存），且缓存内容为范围内回答（ScopeGuard 把关写入） | MVP 接受该风险，不改动；如后续强化风险拦截，可考虑"风险消息不写缓存 / 查缓存前先做关键词级风险预检" |
 | 指代消解（main.py:391） | 前置节点，路由变化不影响 | 无影响 |
 | 前端 | 不展示 intent | 无影响 |
 | 评测（SPEC_RAGAS_EVAL） | 直调子图绕过路由 | 无影响 |
@@ -355,7 +358,7 @@ InputState{question: str, history: list} → OutputState{answer: str}
 3. **改造 analyze_and_route_query**（`lg_builder.py`）：ScopeGuard 保留，结构化输出模型扩展 → 验证：单条消息输出三维字段
 4. **改造 route_query + 新增 4 节点**（风险拦截/转人工/售后占位/投诉安抚），删除 get_additional_info → 验证：路由表全分支可达
 5. **全局检索核对**：`get_additional_info`、`AdditionalGuardrailsOutput`、`GET_ADDITIONAL_SYSTEM_PROMPT`、`GUARDRAILS_SYSTEM_PROMPT`、`Router` 全项目引用点
-6. **构建路由 golden set**（30 条，§12）→ 验证：三维准确率输出
+6. **构建路由 golden set**（35 条 = 单轮 30 + 多轮 5，§12）→ 验证：三维准确率输出
 7. **端到端验证**（§12 典型对话流）→ 验证：全场景走通
 
 ---
@@ -364,7 +367,7 @@ InputState{question: str, history: list} → OutputState{answer: str}
 
 ### 12.1 路由 golden set 评测（新增）
 
-构建 30 条覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, sub_scenario, risk}` 统计准确率：
+构建 35 条（单轮 30 + 多轮 5）覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, sub_scenario, risk}` 统计准确率：
 
 | 类别 | 条数 | 示例 |
 |------|------|------|
@@ -374,8 +377,19 @@ InputState{question: str, history: list} → OutputState{answer: str}
 | 风险 violation/high_risk | 5 | "怎么改装电池""直接给我退款""便宜点改价" |
 | 闲聊 general | 2 | "在吗""谢谢" |
 | 图片 image | 2 | 带图消息（config 注入 image_path） |
+| 多轮上下文 | 5 | 给定 history + 当前消息（见下） |
 
-- 评测脚本：`llm_backend/scripts/` 或 `app/test/` 下临时脚本（沿用现有"先实测再定方案"惯例），输出逐条明细 + 三维准确率
+多轮用例格式：`{history: [上一轮问答], question: 当前消息, expected: 期望三维}`，覆盖：
+
+| 用例 | history | question | 期望 |
+|------|---------|----------|------|
+| 售前承接 | "你们有智能门锁吗" → "有的，支持指纹" | "那个呢？" | presale（结合上文商品） |
+| sub_scenario 延续 | "我要退货" → 占位提示 | "那运费呢" | aftersale + return_refund（延续上轮子场景） |
+| 情绪升级 | "这款灯多少钱" → 正常回答 | "算了，你们客服就是敷衍" | complaint（情绪升级识别） |
+| 要挟转风险 | "推荐一款扫地机器人" → 正常回答 | "给我便宜点，不然投诉你" | high_risk（改价要挟，优先于 presale/complaint） |
+| 风险夹带闲聊 | "在吗" → "在的亲" | "顺便问下，怎么破解这个锁" | violation（风险优先于 general） |
+
+- 评测脚本：`llm_backend/scripts/` 或 `app/test/` 下临时脚本（沿用现有"先实测再定方案"惯例），输出逐条明细 + 三维准确率；多轮用例通过注入 history 消息列表跑 `analyze_and_route_query`（MemoryManager 按真实逻辑管理历史）
 - 不纳入正式 evaluation 包（evaluation 是 RAGAS 子图评测，职责分离）
 
 ### 12.2 端到端典型对话流
