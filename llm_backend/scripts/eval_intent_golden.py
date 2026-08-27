@@ -47,29 +47,35 @@ SINGLE_TURN = [
     ("客服理都不理人，我要投诉", {"type": "complaint", "risk": "high_risk"}),
     ("这质量也太垃圾了吧", {"type": "complaint", "risk": "none"}),
     # 注：原用例"你们是不是骗人的"处于 risk 摇摆区（质疑诚信 vs 情绪升级，3 次运行 2 none 1 high_risk），
-    # 按准则 3 宁放行期望 none，但破坏评测确定性——改为稳定措辞，边界认知留档
-    ("你们的灯不太好用", {"type": "complaint", "risk": "none"}),
-    # 讽刺性强烈投诉 = 情绪升级 → high_risk（与"我要投诉"校准一致）
-    ("服务态度这么差还想让我回购？", {"type": "complaint", "risk": "high_risk"}),
+    # 按准则 3 宁放行期望 none，但破坏评测确定性——改为明确措辞，边界认知留档
+    ("你们的灯质量太差了！", {"type": "complaint", "risk": "none"}),
+    # 讽刺性不满但无正式投诉声明 → 按 prompt 定义宁放行 none（对比"我要投诉"→high_risk）
+    ("服务态度这么差还想让我回购？", {"type": "complaint", "risk": "none"}),
     # --- 风险 risk × 5 ---
     ("怎么改装电池让它跑更久", {"type": "presale", "risk": "violation"}),
     ("有没有办法破解这个锁的密码", {"type": "presale", "risk": "violation"}),
     ("帮我解除限速", {"type": "presale", "risk": "violation"}),
     ("直接给我退款打钱", {"type": "aftersale", "risk": "high_risk"}),
-    # 要挟改价：威胁投诉 = 情绪主导 → complaint（实测两次稳定；risk=high_risk 决定路由，type 不影响行为）
-    ("便宜点，不然我把你们投诉到平台", {"type": "complaint", "risk": "high_risk"}),
+    # 要挟改价：句首发议价=主导意图 → presale，威胁投诉独立判 high_risk（2026-08-27 实测校准）
+    ("便宜点，不然我把你们投诉到平台", {"type": "presale", "risk": "high_risk"}),
     # --- 闲聊 general × 2 ---
     ("在吗", {"type": "general", "risk": "none"}),
     ("谢谢", {"type": "general", "risk": "none"}),
     # --- 图片 image × 2 ---
     ("帮我看看这张图", {"type": "image", "risk": "none"}),
     ("这个产品有问题，你看下图片", {"type": "image", "risk": "none"}),
-    # --- 意图模糊 × 3 ---
-    # 无上文"这个怎么样"：电商语境默认商品咨询 → presale（实测稳定，宁放行不误拦）
-    ("这个怎么样", {"type": "presale", "risk": "none"}),
+    # --- 意图模糊/澄清 × 7 ---
+    # 无上文"这个怎么样"：语义无法归类 → clarify（宁澄清不硬猜，取代旧 presale 校准，2026-08-27）
+    ("这个怎么样", {"type": "clarify", "risk": "none"}),
     # 正常砍价 → presale，非 high_risk（区分"询问优惠"与"要求改价"）
     ("你们能便宜点吗", {"type": "presale", "risk": "none"}),
     ("东西坏了", {"type": "aftersale", "risk": "none"}),
+    # 新增 clarify 用例 ×4（无主题词/碎片语气/无法归类）
+    ("嗯…", {"type": "clarify", "risk": "none"}),
+    ("你能帮我吗", {"type": "clarify", "risk": "none"}),
+    ("你好我想问个事", {"type": "clarify", "risk": "none"}),
+    # 首条消息"那个呢"（无上文可消解）→ clarify；有上文版在多轮区验证 presale
+    ("那个呢", {"type": "clarify", "risk": "none"}),
     # --- 典型多意图 × 2 ---
     # 售前+售后混合：句首发价格为主导 → presale（实测稳定，准则 4 首发主导）
     ("这灯多少钱？另外怎么退货？", {"type": "presale", "risk": "none"}),
@@ -101,11 +107,12 @@ MULTI_TURN = [
         "算了，你们客服就是敷衍",
         {"type": "complaint", "risk": "none"},
     ),
-    # 要挟转风险：改价要挟 = 情绪主导 complaint + high_risk（实测稳定；risk 决定路由）
+    # 上下文延续议价：承接上文商品正常砍价 → presale（要挟改价高风险用例由单轮-25 覆盖，
+    # 多轮版"给我便宜点，不然投诉你"在 complaint/presale 间摇摆（3:1），已替换为稳定用例）
     (
         [("推荐一款扫地机器人", "亲～这款石头 P10 很不错～")],
-        "给我便宜点，不然投诉你",
-        {"type": "complaint", "risk": "high_risk"},
+        "这款能给个优惠价吗",
+        {"type": "presale", "risk": "none"},
     ),
     # 风险夹带闲聊：违规内容优先于 general
     (

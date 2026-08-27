@@ -312,6 +312,7 @@ stateDiagram-v2
     analyze_and_route_query --> create_research_plan: type=presale
     analyze_and_route_query --> aftersale_placeholder: type=aftersale
     analyze_and_route_query --> complaint_placeholder: type=complaint
+    analyze_and_route_query --> clarify_node: type=clarify
     analyze_and_route_query --> create_image_query: type=image
 
     risk_intercept --> [*]: 违规拒绝话术（静态）
@@ -319,6 +320,7 @@ stateDiagram-v2
     respond_to_general_query --> [*]: 纯 LLM 闲聊
     aftersale_placeholder --> [*]: 售后功能建设中提示（接口预留）
     complaint_placeholder --> [*]: 安抚占位话术（接口预留）
+    clarify_node --> [*]: 电商风格澄清询问（LLM 生成 + 模板兜底）
     create_research_plan --> [*]: 知识库查询子图（售前导购复用）
     create_image_query --> [*]: Qwen-VL 视觉分析
 
@@ -355,6 +357,7 @@ stateDiagram-v2
 | `type=presale` | 知识检索子图（Multi-Tool Workflow，售前导购） |
 | `type=aftersale` | 售后占位节点（返回"服务升级中"提示，接口与 multi_tool 子图同构） |
 | `type=complaint` | 投诉安抚占位节点（返回安抚占位话术） |
+| `type=clarify` | 澄清节点（意图不明，电商统一风格针对性询问，LLM 生成 + 模板兜底） |
 
 > 结构化输出校验失败时降级为 general/none（不抛异常）。追问逻辑（原 additional-query）已下沉到后续业务 Agent（售前/售后 Agent prompt 内置"信息不足先追问"），本阶段删除独立追问节点。设计依据见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md`。
 
@@ -513,6 +516,7 @@ flowchart TD
     RT -->|"type=presale"| KG["5.5 presale 售前<br/>向量检索子图"]
     RT -->|"type=aftersale"| PLACE["5.7 售后占位<br/>接口预留"]
     RT -->|"type=complaint"| PLACE2["5.7 投诉安抚占位<br/>接口预留"]
+    RT -->|"type=clarify"| CLARIFY["5.8 意图澄清<br/>电商风格询问"]
     RT -->|"type=image"| IMG["5.6 image 图片<br/>Qwen-VL + LLM"]
 
     GEN --> SSE["SSE 流式返回<br/>逐 chunk 推送 data: {content}"]
@@ -521,6 +525,7 @@ flowchart TD
     KG --> SSE
     PLACE --> SSE
     PLACE2 --> SSE
+    CLARIFY --> SSE
     IMG --> SSE
     GQ --> SSE
     KG -.->|"完整回答生成后"| WRITEBACK["语义缓存回写<br/>update（非空才写）"]
@@ -556,6 +561,7 @@ flowchart TD
     ROUTER -->|"type=presale"| KG["presale 售前<br/>知识库检索子图"]
     ROUTER -->|"type=aftersale"| PLACE["售后占位<br/>（售后 Agent 接口预留）"]
     ROUTER -->|"type=complaint"| PLACE2["投诉安抚占位<br/>（安抚 Agent 接口预留）"]
+    ROUTER -->|"type=clarify"| CLARIFY["意图澄清<br/>电商统一风格询问"]
     ROUTER -->|"type=image"| IMG["image 图片<br/>Qwen-VL + LLM"]
 
     KG --> GRAG["向量检索 vector_search_query<br/>HNSW ∥ pg_jieba BM25 → RRF → 精排"]
@@ -639,6 +645,21 @@ flowchart TD
     C --> D["SSE 流式返回前端"]
 ```
 
+### 5.8 意图澄清运行流程
+
+节点 `clarify_node`（type=clarify，意图不明）：以电商统一风格（"亲～"）结合用户原话与 router logic 针对性询问真实意图；生成失败/超时降级静态模板。澄清后用户回答 → 下一轮正常重新识别（含澄清问答的消息流自然流转）。触发边界：语义无法归类才澄清（无主题词/无上文指代/碎片语气词）；明确但缺细节（议价/损坏）不澄清；risk 优先于 clarify。设计依据 `docs/spec_plan/SPEC_INTENT_CLARIFY.md`。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>clarify_node"] --> B["CLARIFY_SYSTEM_PROMPT<br/>注入 logic 困惑点 + 用户原话"]
+    B --> C["MemoryManager 历史管理"]
+    C --> D["LLM 生成针对性澄清<br/>（亲～风格，一次一问）"]
+    D -->|"成功"| E["返回 {messages: [AIMessage]}"]
+    D -->|"失败/为空"| F["静态模板兜底<br/>CLARIFY_FALLBACK_REPLY"]
+    E --> G["SSE 流式返回前端"]
+    F --> G
+```
+
 ---
 
 ## 6. 设计模式应用
@@ -710,6 +731,7 @@ class Router(TypedDict):
         "complaint",                # 投诉安抚：情绪不满/投诉（情绪主导）
         "general",                  # 闲聊
         "image",                    # 图片
+        "clarify",                  # 意图不明：语义无法归类 → 澄清节点
     ]
     risk: Literal[
         "none", "violation", "high_risk",
@@ -722,7 +744,7 @@ class Router(TypedDict):
 - 多意图取主导意图（句首发/最强烈者；risk/complaint 永远优先），次要意图记入 logic
 - 售后子场景（退货/物流/订单）不由识别层判断——判断需订单/历史上下文，下沉到售后 Agent 工作流骨架第一步（简化设计 2026-08-27）
 - 售后/投诉安抚占位节点接口与 RAG 子图同构，业务 Agent（售前/售后/安抚）就位后仅改路由目的地
-- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（42 条，含意图模糊/多意图/超范围/图片风险/多轮上下文）二维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
+- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（46 条，含意图澄清/意图模糊/多意图/超范围/图片风险/多轮上下文）二维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
 - 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
 
 ### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
@@ -848,7 +870,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.1 单元测试覆盖不足（已部分缓解）
 
-已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（42 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
+已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（46 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
 
 **建议**:
 

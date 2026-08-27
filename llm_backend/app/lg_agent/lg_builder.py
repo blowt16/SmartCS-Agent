@@ -7,6 +7,8 @@ from app.lg_agent.lg_prompts import (
     TRANSFER_HUMAN_REPLY,
     AFTERSALE_PLACEHOLDER_REPLY,
     COMPLAINT_PLACEHOLDER_REPLY,
+    CLARIFY_SYSTEM_PROMPT,
+    CLARIFY_FALLBACK_REPLY,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
@@ -105,7 +107,7 @@ def route_query(
 ) -> Literal[
     "risk_intercept", "transfer_human",
     "respond_to_general_query", "create_research_plan", "create_image_query",
-    "aftersale_placeholder", "complaint_placeholder",
+    "aftersale_placeholder", "complaint_placeholder", "clarify_node",
 ]:
     """根据场景+风险分类确定下一步操作（risk 拦截优先级最高）。
 
@@ -132,7 +134,10 @@ def route_query(
         logger.info("检测到图片路径，转为图片查询处理")
         return "create_image_query"
 
-    if _type == "general":
+    if _type == "clarify":
+        logger.info("意图路由: 类型={} → 节点=clarify_node(意图澄清) | query: '{}'", _type, query)
+        return "clarify_node"
+    elif _type == "general":
         logger.info("意图路由: 类型={} → 节点=respond_to_general_query | query: '{}'", _type, query)
         return "respond_to_general_query"
     elif _type == "presale":
@@ -231,6 +236,41 @@ async def complaint_placeholder(
     """
     logger.info("-----complaint_placeholder: 投诉安抚功能建设中-----")
     return {"messages": [AIMessage(content=COMPLAINT_PLACEHOLDER_REPLY)]}
+
+async def clarify_node(
+    state: AgentState, *, config: RunnableConfig
+) -> Dict[str, List[BaseMessage]]:
+    """意图澄清节点：意图不明时以电商统一风格针对性询问用户真实意图。
+
+    LLM 生成澄清问题（结合用户原话 + router logic），失败/异常降级静态模板。
+    """
+    logger.info("-----clarify_node: 意图不明，询问用户真实意图-----")
+    try:
+        if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
+            model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["clarify"], extra_body={"thinking": {"type": "disabled"}})
+        else:
+            model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["clarify"], extra_body={"thinking": {"type": "disabled"}})
+
+        system_prompt = CLARIFY_SYSTEM_PROMPT.format(
+            logic=state.router["logic"]
+        )
+        question = state.messages[-1].content if state.messages else ""
+
+        # 使用 MemoryManager 管理对话历史，澄清需结合上文判断问什么
+        from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryCache
+        conversation_id = config.get("configurable", {}).get("thread_id", None)
+        memory_manager = MemoryManager(llm=model, cache=MemoryCache())
+        managed_messages = await memory_manager.manage(
+            state.messages, system_prompt=system_prompt, conversation_id=conversation_id
+        )
+        messages = [{"role": "system", "content": system_prompt}] + managed_messages
+        response = await model.ainvoke(messages)
+        if response.content and str(response.content).strip():
+            return {"messages": [response]}
+        logger.warning("澄清节点 LLM 输出为空，降级静态模板")
+    except Exception as e:
+        logger.error("澄清节点生成失败，降级静态模板: {}", str(e))
+    return {"messages": [AIMessage(content=CLARIFY_FALLBACK_REPLY)]}
 
 async def create_image_query(
     state: AgentState, *, config: RunnableConfig
@@ -470,6 +510,7 @@ builder.add_node(transfer_human)
 builder.add_node("create_research_plan", create_research_plan)  # 这里是子图（售前导购复用）
 builder.add_node(aftersale_placeholder)
 builder.add_node(complaint_placeholder)
+builder.add_node(clarify_node)
 builder.add_node(create_image_query)
 
 # 添加边

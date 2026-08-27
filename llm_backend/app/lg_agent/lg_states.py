@@ -13,6 +13,7 @@ class Router(TypedDict):
         "complaint",                # 投诉安抚：情绪不满/投诉（情绪主导）
         "general",                  # 闲聊（原 general-query）
         "image",                    # 图片（原 image-query）
+        "clarify",                  # 意图不明：语义上无法确定用户问什么 → 澄清节点
     ]
     # 售后子场景（return_refund/logistics/order_query）不再由识别层判断——
     # 判断需订单/历史等上下文，下沉到售后 Agent 工作流骨架第一步（简化设计，2026-08-27）
