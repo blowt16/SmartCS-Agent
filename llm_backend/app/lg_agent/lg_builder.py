@@ -1,10 +1,12 @@
 from app.lg_agent.lg_states import AgentState, Router
 from app.lg_agent.lg_prompts import (
     ROUTER_SYSTEM_PROMPT,
-    GET_ADDITIONAL_SYSTEM_PROMPT,
     GENERAL_QUERY_SYSTEM_PROMPT,
     GET_IMAGE_SYSTEM_PROMPT,
-    GUARDRAILS_SYSTEM_PROMPT,
+    RISK_INTERCEPT_REPLY,
+    TRANSFER_HUMAN_REPLY,
+    AFTERSALE_PLACEHOLDER_REPLY,
+    COMPLAINT_PLACEHOLDER_REPLY,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
@@ -19,11 +21,9 @@ from langgraph.graph import END, START, StateGraph
 from app.lg_agent.lg_states import AgentState, InputState, Router
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import create_planner_node
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.workflows.multi_agent.multi_tool import create_multi_tool_workflow
-from pydantic import BaseModel
 from typing import Dict, List
 from langchain_core.messages import AIMessage
 from langchain_core.runnables.base import Runnable
-from langchain_core.prompts import ChatPromptTemplate
 import base64
 import os
 import aiohttp
@@ -32,21 +32,11 @@ import time
 from pathlib import Path
 
 from typing import Literal
-from pydantic import BaseModel, Field
 
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryManager
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.agent_safety import (
     ScopeGuard, TimeoutGuard,
 )
-
-
-class AdditionalGuardrailsOutput(BaseModel):
-    """
-    格式化输出，用于判断用户的问题是否与图谱内容相关
-    """
-    decision: Literal["end", "continue"] = Field(
-        description="Decision on whether the question is related to the graph contents."
-    )
 
 
 # 构建日志记录器
@@ -73,7 +63,7 @@ async def analyze_and_route_query(
     in_scope, scope_reason = scope_guard.check(user_question)
     if not in_scope:
         logger.warning("经营范围预检拦截: {}", scope_reason)
-        return {"router": Router(type="general-query", logic=f"超出经营范围: {scope_reason}")}
+        return {"router": Router(type="general", sub_scenario="none", risk="none", logic=f"超出经营范围: {scope_reason}")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
@@ -98,46 +88,67 @@ async def analyze_and_route_query(
     logger.info("-----Analyze user query type-----")
     logger.info("Managed messages: {} (original: {})", len(managed_messages), len(state.messages))
     
-    # 使用结构化输出，输出问题类型
-    response = cast(
-        Router, await model.with_structured_output(Router).ainvoke(messages)
-    )
+    # 使用结构化输出，输出场景+风险+技术路由三维结果
+    # 校验失败（模型输出非法枚举值）时降级为 general/none，保证路由不抛异常
+    try:
+        response = cast(
+            Router, await model.with_structured_output(Router).ainvoke(messages)
+        )
+    except Exception as e:
+        logger.error("Router 结构化输出失败，降级为 general/none: {}", str(e))
+        response = Router(type="general", sub_scenario="none", risk="none", logic="结构化输出失败降级")
     logger.info("Analyze user query type completed, result: {}", response)
     return {"router": response}
 
 def route_query(
     state: AgentState,
-) -> Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query"]:
-    """根据查询分类确定下一步操作。
+) -> Literal[
+    "risk_intercept", "transfer_human",
+    "respond_to_general_query", "create_research_plan", "create_image_query",
+    "aftersale_placeholder", "complaint_placeholder",
+]:
+    """根据场景+风险分类确定下一步操作（risk 拦截优先级最高）。
 
     Args:
         state (AgentState): 当前代理状态，包括路由器的分类。
 
     Returns:
-        Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query"]: 下一步操作。
+        下一步操作节点名。
     """
     _type = state.router["type"]
+    _risk = state.router["risk"]
     query = state.messages[-1].content if state.messages else ""
+
+    # risk 拦截最优先：违规/高风险消息不进入任何业务处理路径
+    if _risk == "violation":
+        logger.info("意图路由: risk=violation → 节点=risk_intercept | query: '{}'", query)
+        return "risk_intercept"
+    elif _risk == "high_risk":
+        logger.info("意图路由: risk=high_risk → 节点=transfer_human | query: '{}'", query)
+        return "transfer_human"
 
     # 检查配置中是否有图片路径，如果有，优先处理为图片查询
     if hasattr(state, "config") and state.config and state.config.get("configurable", {}).get("image_path"):
         logger.info("检测到图片路径，转为图片查询处理")
         return "create_image_query"
 
-    if _type == "general-query":
+    if _type == "general":
         logger.info("意图路由: 类型={} → 节点=respond_to_general_query | query: '{}'", _type, query)
         return "respond_to_general_query"
-    elif _type == "additional-query":
-        logger.info("意图路由: 类型={} → 节点=get_additional_info | query: '{}'", _type, query)
-        return "get_additional_info"
-    elif _type == "graphrag-query":
+    elif _type == "presale":
         logger.info("意图路由: 类型={} → 节点=create_research_plan(RAG 检索) | query: '{}'", _type, query)
         return "create_research_plan"
-    elif _type == "image-query":
+    elif _type == "aftersale":
+        logger.info("意图路由: 类型={} → 节点=aftersale_placeholder | query: '{}'", _type, query)
+        return "aftersale_placeholder"
+    elif _type == "complaint":
+        logger.info("意图路由: 类型={} → 节点=complaint_placeholder | query: '{}'", _type, query)
+        return "complaint_placeholder"
+    elif _type == "image":
         logger.info("意图路由: 类型={} → 节点=create_image_query | query: '{}'", _type, query)
         return "create_image_query"
     else:
-        logger.error("意图路由: 未知类型 {}（预期四类之一） | query: '{}'", _type, query)
+        logger.error("意图路由: 未知类型 {}（预期五类之一） | query: '{}'", _type, query)
         raise ValueError(f"Unknown router type {_type}")
     
 async def respond_to_general_query(
@@ -177,90 +188,49 @@ async def respond_to_general_query(
     response = await model.ainvoke(messages)
     return {"messages": [response]}
 
-async def get_additional_info(
+async def risk_intercept(
     state: AgentState, *, config: RunnableConfig
 ) -> Dict[str, List[BaseMessage]]:
-    """生成一个响应，要求用户提供更多信息。
+    """风险拦截：违规咨询明确拒绝 + 合规引导（静态话术，不走 LLM）。
 
-    当路由确定需要从用户那里获取更多信息时，将调用此函数。
-
-    Args:
-        state (AgentState): 当前代理状态，包括对话历史和路由逻辑。
-        config (RunnableConfig): 用于配置响应生成的模型。
-
-    Returns:
-        Dict[str, List[BaseMessage]]: 包含'messages'键的字典，其中包含生成的响应。
+    对应福客 D5：违规咨询 AI 使用明确拒绝和平台内合规引导话术。
     """
-    logger.info("------continue to get additional info------")
-    
-    # 使用大模型生成回复
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"], extra_body={"thinking": {"type": "disabled"}})
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["additional_info"], extra_body={"thinking": {"type": "disabled"}})
+    logger.info("-----risk_intercept: violation 违规咨询拦截-----")
+    return {"messages": [AIMessage(content=RISK_INTERCEPT_REPLY)]}
 
-    # 如果用户的问题是电商相关，但与自己的业务无关，则需要返回"无关问题"
 
-    # 定义电商经营范围
-    scope_description = """
-    个人电商经营范围：智能家居产品，包括但不限于：
-    - 智能照明（灯泡、灯带、开关）
-    - 智能安防（摄像头、门锁、传感器）
-    - 智能控制（温控器、遥控器、集线器）
-    - 智能音箱（语音助手、音响）
-    - 智能厨电（电饭煲、冰箱、洗碗机）
-    - 智能清洁（扫地机器人、洗衣机）
+async def transfer_human(
+    state: AgentState, *, config: RunnableConfig
+) -> Dict[str, List[BaseMessage]]:
+    """转人工：高风险操作/投诉升级，说明无法在线直接处理（静态话术）。
 
-    不包含：服装、鞋类、体育用品、化妆品、食品等非智能家居产品。
+    对应福客 D3/D4：敏感问题只述事实不推测原因，转人工复核。
     """
+    logger.info("-----transfer_human: high_risk 高风险操作-----")
+    return {"messages": [AIMessage(content=TRANSFER_HUMAN_REPLY)]}
 
-    scope_context = (
-        f"参考此范围描述来决策:\n{scope_description}"
-        if scope_description is not None
-        else ""
-    )
 
-    message = scope_context + "\nQuestion: {question}"
+async def aftersale_placeholder(
+    state: AgentState, *, config: RunnableConfig
+) -> Dict[str, List[BaseMessage]]:
+    """售后占位节点：返回"服务升级中"提示（静态话术）。
 
-    # 拼接提示模版
-    full_system_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                GUARDRAILS_SYSTEM_PROMPT,
-            ),
-            (
-                "human",
-                (message),
-            ),
-        ]
-    )
+    接口与 multi_tool 子图同构（question+history → answer），
+    后续售后 agent 子图就位后仅替换路由目的地。
+    """
+    logger.info("-----aftersale_placeholder: 售后功能建设中-----")
+    return {"messages": [AIMessage(content=AFTERSALE_PLACEHOLDER_REPLY)]}
 
-    # 构建格式化输出的 Chain， 如果匹配，返回 continue，否则返回 end
-    guardrails_chain = full_system_prompt | model.with_structured_output(AdditionalGuardrailsOutput)
-    guardrails_output = await guardrails_chain.ainvoke(
-            {"question": state.messages[-1].content if state.messages else ""}
-        )
 
-    # 根据格式化输出的结果，返回不同的响应
-    if guardrails_output.decision == "end":
-        logger.info("-----Fail to pass guardrails check-----")
-        return {"messages": [AIMessage(content="抱歉，我家暂时没有这方面的商品，可以在别家看看哦~")]}
-    else:
-        logger.info("-----Pass guardrails check-----")
-        system_prompt = GET_ADDITIONAL_SYSTEM_PROMPT.format(
-            logic=state.router["logic"]
-        )
-        # 使用 MemoryManager 管理对话历史，Redis 缓存增量摘要
-        from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryCache
-        conversation_id = config.get("configurable", {}).get("thread_id", None)
-        memory_manager = MemoryManager(llm=model, cache=MemoryCache())
-        managed_messages = await memory_manager.manage(
-            state.messages, system_prompt=system_prompt, conversation_id=conversation_id
-        )
-        messages = [{"role": "system", "content": system_prompt}] + managed_messages
-        response = await model.ainvoke(messages)
-        return {"messages": [response]}
+async def complaint_placeholder(
+    state: AgentState, *, config: RunnableConfig
+) -> Dict[str, List[BaseMessage]]:
+    """投诉安抚占位节点：返回安抚占位话术（静态话术）。
+
+    后续投诉安抚 agent 子图就位后仅替换路由目的地。
+    """
+    logger.info("-----complaint_placeholder: 投诉安抚功能建设中-----")
+    return {"messages": [AIMessage(content=COMPLAINT_PLACEHOLDER_REPLY)]}
 
 async def create_image_query(
     state: AgentState, *, config: RunnableConfig
@@ -495,8 +465,11 @@ builder = StateGraph(AgentState, input=InputState)
 # 添加节点
 builder.add_node(analyze_and_route_query)
 builder.add_node(respond_to_general_query)
-builder.add_node(get_additional_info)
-builder.add_node("create_research_plan", create_research_plan)  # 这里是子图
+builder.add_node(risk_intercept)
+builder.add_node(transfer_human)
+builder.add_node("create_research_plan", create_research_plan)  # 这里是子图（售前导购复用）
+builder.add_node(aftersale_placeholder)
+builder.add_node(complaint_placeholder)
 builder.add_node(create_image_query)
 
 # 添加边

@@ -2,13 +2,14 @@
 ③ 全局经营范围护栏
 
 为什么需要？
-    原有的 guardrails 只在 multi_tool_workflow（graphrag-query 路径）中生效，
-    respond_to_general_query 和 get_additional_info 等路径没有统一检查。
+    意图识别三维合并输出（场景+风险+技术路由）中，risk 维度负责
+    违规/高风险判断（LLM 层）；本预检用关键词 + 正则做零延迟快速拦截
+    （经营范围/违禁品类），两者互补：规则层先拦、LLM 层精确判。
 
 做法：
     用关键词 + 正则做快速预检（不需要 LLM，零延迟），
     匹配到明显超范围的词直接返回拒绝。
-    不确定的交由后续 LLM guardrails 节点判断。
+    不确定的放行，交由路由层 risk 维度精确判断。
 """
 
 import re
