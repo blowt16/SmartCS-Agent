@@ -143,7 +143,7 @@
 ```mermaid
 graph TD
     U["用户消息（文本/图片）"] --> PR["指代消解<br/>main.py:391 · 前置 · 不变"]
-    PR --> R["意图识别节点 analyze_and_route_query<br/>① ScopeGuard 经营范围预检（关键词级 · 保留）<br/>② LLM 低温合并输出 Router：type + sub_scenario + risk + logic"]
+    PR --> R["意图识别节点 analyze_and_route_query<br/>① ScopeGuard 经营范围预检（关键词级 · 保留）<br/>② LLM 低温合并输出 Router：type + sub_scenario + risk + logic<br/>多意图时扩展 intent_list + primary_intent"]
 
     R -->|"ScopeGuard 超范围"| G1["general 闲聊路径<br/>现状不变"]
     R -->|"risk = violation"| N1["风险拦截节点 · 新增<br/>拒绝话术 + 合规引导"]
@@ -153,6 +153,17 @@ graph TD
     R -->|"type = presale"| N5["现有 RAG 子图 · 复用<br/>create_research_plan<br/>planner → 检索 → summarize → final"]
     R -->|"type = aftersale"| N6["售后占位节点 · 新增<br/>返回“服务升级中”提示 · 接口预留"]
     R -->|"type = complaint"| N7["投诉安抚占位节点 · 新增<br/>返回安抚占位话术 · 接口预留"]
+
+    R -->|"intent_list ≥ 2（演进）"| D["任务分配器（演进）<br/>规则预筛 + LLM 依赖判断兜底<br/>§8.3.5"]
+    D -->|"不同场景 · 无依赖"| P["并行调用（Send）<br/>各 agent 读输入快照"]
+    D -->|"同场景 · 合并"| M1["合并为单任务<br/>直接进对应 agent"]
+    D -->|"含 risk / complaint"| S2["强制串行<br/>拦截/安抚优先"]
+    D -->|"真依赖（预留）"| S1["顺序接力（预留）<br/>context_update 传递<br/>当前项目无真依赖场景"]
+
+    P --> M["主意图 agent 汇总（演进）<br/>§8.3.3"]
+    M1 --> M
+    S2 --> M
+    S1 --> M
 
     N5 -.->|"可选增强 · 后续 spec"| A3["售前 agent<br/>导购话术增强"]
     N6 -.->|"后续演进"| A1["售后 agent 子图<br/>方式 C：信息确认 → RAG tool 政策检索 → 五选一分支决策 → 回答"]
@@ -168,10 +179,12 @@ graph TD
     class G1,N3,N4 keep;
     class N5 reuse;
     class N1,N2,N6,N7 new;
-    class A1,A2,A3 future;
+    class D,P,M,M1,S1,S2,A1,A2,A3 future;
 ```
 
-**读图要点**（颜色对照）：紫色=入口与识别节点；绿色=现有不动；蓝色=复用；橙色=本次新增；黄色虚线=后续业务 agent 演进方向（本阶段只留接口，见 §8）。路由优先级：risk 拦截 > image/general 技术路由 > 场景分支（presale/aftersale/complaint）。
+**读图要点**（颜色对照）：紫色=入口与识别节点；绿色=现有不动；蓝色=复用；橙色=本次新增；黄色虚线=演进方向。路由优先级：risk 拦截 > image/general 技术路由 > 场景分支（presale/aftersale/complaint）。
+
+**多意图演进**（黄色虚线块）：`intent_list ≥ 2` 进入任务分配器——不同场景无依赖 → 并行（Send）；同场景 → 合并单任务；含 risk/complaint → 强制串行（拦截/安抚优先）；真依赖顺序接力为**预留能力**（本项目无订单/状态系统，当前无真依赖场景，见 §8.3.5）。汇总统一由主意图 agent 完成（§8.3.3）。
 
 ### 4.2 意图识别输出结构（Router 扩展）
 
