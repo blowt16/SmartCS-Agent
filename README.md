@@ -18,7 +18,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **5 路意图路由** | LangGraph StateGraph 实现：闲聊 / 追问 / 知识库查询 / 图片分析 / 文件处理，自动识别用户意图并路由 |
+| **三维意图识别路由** | LangGraph StateGraph 单次合并识别：场景意图（售前/售后/投诉安抚）+ 风险意图（违规拦截/高风险转人工）+ 技术路由，场景驱动分支（售前→知识库检索、售后/投诉→业务 Agent 接口占位、闲聊/图片独立分支），风险拦截优先级最高 |
 | **向量知识库检索** | pgvector（HNSW）Top-K 检索 + BM25 混合检索 + LLM 相关性评分，文档上传秒级建索引 |
 | **混合检索 + 相关性评分** | BM25 + 向量检索 RRF 融合，LLM 逐条评分过滤不相关结果，不足时自动切换策略重检索 |
 | **文档向量检索管道** | 解析 → 清洗 → 语义分块 → Embedding → pgvector 入库（HNSW 索引），秒级索引，配合混合检索增强召回 |
@@ -32,14 +32,16 @@
 ```
 用户请求 → FastAPI API 层
   │
-  ├─ /api/langgraph/query ──→ LangGraph Agent（5 路意图路由）
-  │    │
-  │    ├─ general-query → 纯 LLM 闲聊
-  │    ├─ additional-query → 护栏检查 + 追问
-  │    ├─ graphrag-query → Multi-Tool Workflow
+  ├─ /api/langgraph/query ──→ LangGraph Agent（三维意图识别路由）
+  │    │                        risk 拦截优先级最高
+  │    ├─ risk=violation → 风险拦截（明确拒绝 + 合规引导）
+  │    ├─ risk=high_risk → 转人工（说明无法在线直接处理）
+  │    ├─ 售前 presale → RAG 子图（Multi-Tool Workflow）
   │    │    └─ 向量检索（pgvector）→ 混合检索(BM25+向量) → 相关性评分(LLM)
-  │    ├─ image-query → GPT-4o 图片分析
-  │    └─ file-query → 文件处理
+  │    ├─ 售后 aftersale → 售后占位节点（售后 Agent 接口预留，后续接入）
+  │    ├─ 投诉安抚 complaint → 投诉安抚占位节点（安抚 Agent 接口预留，后续接入）
+  │    ├─ 闲聊 general → 纯 LLM 闲聊
+  │    └─ 图片 image → 视觉模型（Qwen-VL）图片分析
   │
   ├─ /api/upload ────────→ 文档解析 → 向量入库（pgvector）
   │
