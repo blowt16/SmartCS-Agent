@@ -235,9 +235,15 @@ python -m evaluation --testset-size 20 --user 1                       # 全流�
 python -m evaluation --only-synthesize --testset-size 10              # 仅合成并缓存
 python -m evaluation --skip-synthesize --testset-file <缓存>.jsonl    # 复用缓存重跑（省钱、可复现）
 python -m evaluation --metrics faithfulness,context_precision --max-docs 50
+python -m evaluation --skip-synthesize --testset-file testsets/testset_jddc_50.jsonl --zh-only   # JDDC 真实客服题评测
 ```
 
-参数：`--testset-size`（默认 `RAGAS_DEFAULT_TESTSET_SIZE=20`）、`--user`（默认 "1"）、`--testset-file`、`--max-docs`（默认 `RAGAS_MAX_CORPUS_DOCS=100`）、`--metrics`、`--concurrency`、`--results-dir`、`--only-synthesize`、`--skip-synthesize`。
+参数：`--testset-size`（默认 `RAGAS_DEFAULT_TESTSET_SIZE=20`）、`--user`（默认 "1"）、`--testset-file`、`--max-docs`（默认 `RAGAS_MAX_CORPUS_DOCS=100`）、`--metrics`、`--concurrency`、`--results-dir`、`--only-synthesize`、`--skip-synthesize`、`--zh-only`（仅保留中文占多数的 query，排除合成器英文/数字噪声题，2026-08-25 增）。
+
+**真实客服 query 评测集**（2026-08-25 增，替代合成器在真实场景覆盖上的不足）：
+- `evaluation/jddc_builder.py`：`python -m evaluation.jddc_builder --count 50`，从 JDDC 镜像（`scripts/.cache_jddc/repo/extract_train.json`，64k 条真实京东客服对话，GitHub 需 schannel clone）提取智能家具品类 QA → `evaluation/testsets/testset_jddc_50.jsonl`（versioned，供手动修改）
+- 筛选：品类词命中（与知识库对齐）+ 优先"品类+属性"产品知识类 + 中文占多数 + 去订单号/占位符噪音 + 过滤纯安抚话术
+- `reference` 为真实客服回答（质量参差属真实场景特征，用户可手动修订）；`reference_contexts` 占位空数组，跑 context_precision/recall 前需补全
 
 ### 4.4 数据流
 

@@ -1,0 +1,50 @@
+{"user_input": "的灯 今天安装是坏的 不亮了", "reference": "申请路径:可通过“我的京东”-“客户服务”-“返修退换货”内申请(也可直接点击此链接:http://myjd.jd.com/repair/orderlist.action;【APP端】可通过“我的”-“客户服务”-“退换/售后“中申请~;可通过个人中心-客户服务-退换/售后进行申请哦~亲，非常抱歉出现这样的情况 麻烦您提交退换货申请 好么手机端 我的-客户服务-退换/售后申请", "reference_contexts": [], "source": "jddc", "dialogue_id": 28572}
+{"user_input": "申请售后了 但提交运单资料时显示的一个灯管还不能改", "reference": "申请路径:可通过“我的京东”-“客户服务”-“返修退换货”内申请(也可直接点击此链接:http://myjd.jd.com/repair/orderlist.action;【APP端】可通过“我的”-“客户服务”-“退换/售后“中申请~;可通过个人中心-客户服务-退换/售后进行申请哦~手机端 我的-客户服务-退换/售后申请", "reference_contexts": [], "source": "jddc", "dialogue_id": 24822}
+{"user_input": "其中一个灯坏了", "reference": "真的是不好意思耽误了您的使用申请路径:可通过“我的京东”-“客户服务”-“返修退换货”内申请(也可直接点击此链接:http://myjd.jd.com/repair/orderlist.action;【APP端】可通过“我的”-“客户服务”-“退换/售后“中申请~;可通过个人中心-客户服务-退换/售后进行申请哦~", "reference_contexts": [], "source": "jddc", "dialogue_id": 60557}
+{"user_input": "我号买了一个大自然床垫过了两天就降价四百，并且货还没收到，我就把贵的退货了但是目前没有收到款，当时又重新购买了降价的价格", "reference": "好的，请您稍等，这边咨询不是一对一，同时需要回复多个消息，我会尽快回复您。拒收之后一般天退回来，收到处理您的退款哈退款完成之后-个工作日返还哦，您这边查收。款项都是原路返还的哦，亲爱的", "reference_contexts": [], "source": "jddc", "dialogue_id": 32633}
+{"user_input": "台灯我收到了，但是台灯是坏的，灯管总是会自动下垂，怎么办", "reference": "商品出现这样问题给您带来不便深表歉意，亲爱的，建议您可以点击“全部订单或我的订单”-找到“返修/退货”里根据需要申请返修退换货服务，最终已审核结果为准哦!", "reference_contexts": [], "source": "jddc", "dialogue_id": 5504}
+{"user_input": "你好在?你好，这个净化器空气质量灯一直不变色，卖家让联系客服维修", "reference": "有什么问题我可以帮您处理或解决呢?还请您稍等，马上为您查询~您好小米(MI)小米净化器智能家用卧室空气净化器除甲醛雾霾PM [商品快照]请问是这个商品吗", "reference_contexts": [], "source": "jddc", "dialogue_id": 19811}
+{"user_input": "我买的一个床显示缺货，但是上面显示的预计送达时间是本周六就想确认一下是否能按时发货，并且准时让我收到货", "reference": "小妹查看下哦，请稍等~非常抱歉了哈这个目前是缺货的状态哦 补货预计一周哈 这个只是一个大概的时间哦一旦补货会尽快给您发货的哈", "reference_contexts": [], "source": "jddc", "dialogue_id": 10871}
+{"user_input": "这个台灯，因为一些特殊原因，不要了，下一步需要怎么操作啊", "reference": "米家(MIJIA)小米生态链LED写字灯 阅读台灯智能台灯 任意调光 APP控制 灯光场景模拟 [商品快照", "reference_contexts": [], "source": "jddc", "dialogue_id": 55777}
+{"user_input": "这两个椅子别发了，搞错了。售后已解决", "reference": "好的，请您稍等，这边咨询不是一对一，同时需要回复多个消息，我会尽快回复您。好的，取消订单吗已经收到了吗", "reference_contexts": [], "source": "jddc", "dialogue_id": 50104}
+{"user_input": "马桶盖申请退货，无法安装2530026是直接退给厂商吗", "reference": "您点击我的订单-订单详情，查询一下订单编号哦为了更快的处理您的问题，辛苦您提供下订单号给我可以吗", "reference_contexts": [], "source": "jddc", "dialogue_id": 50946}
+{"user_input": "我买的床垫，在楼。电梯放不下，怎么处理?在吗", "reference": "好的，请您稍等，这边咨询不是一对一，同时需要回复多个消息，我会尽快回复您。配送联系过您了吗", "reference_contexts": [], "source": "jddc", "dialogue_id": 2597}
+{"user_input": "配送员说两个件放在了一个柜子了，但是我没看到，怎么解决?两个件可以放在一个柜子里吗?快递柜", "reference": "请问您是咨询之前的问题还是有其他的问题需要处理呢?请您稍等一下，正在为您核实处理中哦~", "reference_contexts": [], "source": "jddc", "dialogue_id": 44951}
+{"user_input": "我的床垫还不能发货吗我的床垫还不能发货吗咨询订单号: 订单金额: 下单时间:", "reference": "小妹为您看看，您稍等哦这个是厂家发货的， 建议您九点以后联系商品页面上厂家客服处理下哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 54747}
+{"user_input": "请问现在还发货么床你好", "reference": "对不起，妹子怠慢了，妹子这边咨询的客户有点多，回复较慢，请您见谅下哦京东全年无休的哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 16913}
+{"user_input": "发票可以和椅子一起发货吗", "reference": "您好，您的问题这边正在确认中，因咨询人数较多，请您稍等几分钟谢谢", "reference_contexts": [], "source": "jddc", "dialogue_id": 59191}
+{"user_input": "我昨天刚买的充气床。今天活动降了。还没收到货，就降。是不是有保价?或者我买的直接按照活动价退差价给我", "reference": "有的呢您重新喜爱一个订单不要支付妹子核实一下哈重新下一个订单哈", "reference_contexts": [], "source": "jddc", "dialogue_id": 5221}
+{"user_input": "你们让我申请售后，售后没有任何电话回访，直接显示寄回物品如果有办法解决就不要寄回灯具，拆了再装得多费事", "reference": "售后返件地址: 成都 电话:--    联系人:成都拆包组", "reference_contexts": [], "source": "jddc", "dialogue_id": 525}
+{"user_input": "这批桌子太晃了，我要退货2087071要怎么申请", "reference": "亲爱的客户，还麻烦您提供下订单号，妹子这边给您查询哦~", "reference_contexts": [], "source": "jddc", "dialogue_id": 56594}
+{"user_input": "我发现我这个灯买小了我想退货退款", "reference": "小妹为您看看，您稍等哦亲爱哒， 商品您是收到了吗~", "reference_contexts": [], "source": "jddc", "dialogue_id": 25057}
+{"user_input": "退货有问题退的是一个灯泡的价格吧我要退的是个", "reference": "恩一个服务单一个商品的退几个就申请几个就可以了", "reference_contexts": [], "source": "jddc", "dialogue_id": 40231}
+{"user_input": "那帮我延迟天送货 然后放在速递易柜子里面吧", "reference": "可以的哈 在配送员跟联系的时候协调下就可以啦", "reference_contexts": [], "source": "jddc", "dialogue_id": 49101}
+{"user_input": "发送订单  我今天刚买了台灯 然后显示明天有秒杀活动降价 我只能补差价么 不能的话我这个可以退了 明天再下单么", "reference": "订单完成时间 订单完成天内降价可以申请差价", "reference_contexts": [], "source": "jddc", "dialogue_id": 31138}
+{"user_input": "送货时间能改明天吗买的床垫", "reference": "[ORDERID_10000914]", "reference_contexts": [], "source": "jddc", "dialogue_id": 31765}
+{"user_input": "请问这个椅子怎么味道这么大?放外面通风了一周还是一样", "reference": "有什么问题我可以帮您处理或解决呢?", "reference_contexts": [], "source": "jddc", "dialogue_id": 23821}
+{"user_input": "你好我购买的那个灯还没发货", "reference": "有什么问题我可以帮您处理或解决呢?", "reference_contexts": [], "source": "jddc", "dialogue_id": 27387}
+{"user_input": "我今天刚买了台灯  然后显示明天有秒杀活动降价  我只能补差价么   不能的话我这个可以退了 明天再下单么", "reference": "有什么问题我可以帮您处理或解决呢?", "reference_contexts": [], "source": "jddc", "dialogue_id": 31137}
+{"user_input": "多少钱这个椅子", "reference": "有什么问题我可以帮您处理或解决呢?", "reference_contexts": [], "source": "jddc", "dialogue_id": 34762}
+{"user_input": "我那个灯泡我在申请售后的时候", "reference": "有什么问题我可以帮您处理或解决呢?", "reference_contexts": [], "source": "jddc", "dialogue_id": 41146}
+{"user_input": "是送货入户吗?毕竟是好大几件灯饰送货前打收件人电话，谢谢", "reference": "恩 配送前师傅会提前联系您的哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 33302}
+{"user_input": "你好，我这边购买的椅子，安装了个，有一个椅背的螺丝拧不好。需要更换。只用更换椅背那一部分即可。你好", "reference": "小妹这边建议您提交售后处理呢", "reference_contexts": [], "source": "jddc", "dialogue_id": 15947}
+{"user_input": "买的椅子少个螺丝17602156535申请售后了 来电话说要告知一下补件地址", "reference": "好的 您说明 我记录一下哈", "reference_contexts": [], "source": "jddc", "dialogue_id": 53079}
+{"user_input": "可我怎么知道是哪个柜子，才能打开呢", "reference": "到时会给您发送验证码的呢", "reference_contexts": [], "source": "jddc", "dialogue_id": 5175}
+{"user_input": "但这是在京东超市买的，也是厂家安排送货吗?而且同一页面中的灯管是京东送的货", "reference": "是的呢是厂家直送的呢", "reference_contexts": [], "source": "jddc", "dialogue_id": 12875}
+{"user_input": "麻烦快点3945858我已经上配送员别送桌子了3945858要不然你退我要不然我重新拍", "reference": "订单显示已经完成了呢如果有差价您可以申请您也可以，手机APP端进入—我的—客户服务—价格保护申请—输入订单号—查询—申请d:\\program files\\jd\\jdkf\\face\\ 电脑端—我的京东—客户服务 —价格保护—输入订单号—查询—申请", "reference_contexts": [], "source": "jddc", "dialogue_id": 57539}
+{"user_input": "没了谢谢这么早起床工作辛苦了妇女节快乐哈哈哈哈哈哈哈", "reference": "谢谢了哈妹子过女神节哈感谢您对京东的支持，祝您生活愉快，再见!缘聚缘散缘如水，背负万丈尘寰，只为一句，等待下一次相逢，还请您空闲时点击 “满意度评价”为我加油，也好让我们能再续良缘哦~谢谢您哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 34876}
+{"user_input": "是耳机灯一直闪烁，充电也是一样，而且开关机没有反应没有声音提示开关机", "reference": "充电也闪，??、橙色:充电中;白色:电池已充满; 、电量低于0%:橙灯每分钟快闪次; 、开机进入配对链接状态或断开连接:白灯快闪; 、连接成功:白灯长亮秒熄灭; 、工作状态:白灯0s点亮一次", "reference_contexts": [], "source": "jddc", "dialogue_id": 46338}
+{"user_input": "蓝牙耳机充电灯一直不亮，没法充电昨天到货的耳机右耳没法充电", "reference": "QCY Q 迷你真无线TWS蓝牙耳机 蓝牙 单双耳均可使用 小米苹果安卓通用 白色 [商品快照]为了更好的解决您的问题，需要核实一下商品的信息奥，请问是这个商品吗?", "reference_contexts": [], "source": "jddc", "dialogue_id": 13887}
+{"user_input": "没有红蓝灯，这个是低音炮不是耳机说明书纯英文，看不懂#E-s", "reference": "音响蓝牙配对:按住 PAIRING按钮，直至听到提示音，并且(BLUETOOTH)指示灯开始以白色快速闪烁。 扬声器进入配对模式。再将您的设备打开蓝牙搜索", "reference_contexts": [], "source": "jddc", "dialogue_id": 34030}
+{"user_input": "你好，晾衣架的包装内没有纸质发票", "reference": "小妹为您看看，您稍等哦您的发票已经显示开具咯，发票一般是粘贴在商品外包装上或者在外包装夹层里，还请您再仔细找找哦，应该是在某个角落呢。建议找找呢", "reference_contexts": [], "source": "jddc", "dialogue_id": 2071}
+{"user_input": "买的那个踏上去轮子不转了，左边亮红灯，而且发出滴滴滴的声音5393564是的", "reference": "厂家服务 本产品全国联保，享受三包服务，质保期为:一年质保自签收商品第二日算起，天无理由退货，天质量问题换货的  超出天质保内的可以申请维修的。", "reference_contexts": [], "source": "jddc", "dialogue_id": 11487}
+{"user_input": "水没烧开灯就跳了，不一会又亮了，一直重复", "reference": "非常抱歉，商品有质量问题的话小妹建议您申请售后处理哦。 打开 京东——打开 我的——打开 订单——申请售后 这样就可以了哦 。", "reference_contexts": [], "source": "jddc", "dialogue_id": 2993}
+{"user_input": "灯一直闪，不能连接手机", "reference": "酷狗(KUGOU)小酷M 无线运动蓝牙耳机 手机耳机 磁吸入耳式耳机 音乐耳机 可通话 超长续航全金属轻小 升请问是这个商品吗", "reference_contexts": [], "source": "jddc", "dialogue_id": 46336}
+{"user_input": "今天快递小哥说帮我把快递放柜子，但我没收到开箱号码", "reference": "好的，请您稍等，这边咨询不是一对一，同时需要回复多个消息，我会尽快回复您。这边联系师傅核实让配送联系您可以吗实在很抱歉", "reference_contexts": [], "source": "jddc", "dialogue_id": 38804}
+{"user_input": "麻烦给我取消一下儿童衣柜的订单!谢谢", "reference": "亲爱的客户，麻烦您点击对话框右下角的“+”，点击“订单”后，选择一下您需要咨询的订单哦，小妹这边帮您查询一下哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 26314}
+{"user_input": "我买这个灯开发票是京东给开么", "reference": "亲爱的客户，麻烦您点击对话框右下角的“+”，点击“订单”后，选择一下您需要咨询的订单哦，小妹这边帮您查询一下哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 40635}
+{"user_input": "订单这边只有显示一个包裹，显示已经完成了椅子直接送到我手上的", "reference": "您别着急，这边给您联系站点核实，有咱们的配送员联系您确认商品具体的情况，还请您放心商品一定给您配送到。", "reference_contexts": [], "source": "jddc", "dialogue_id": 25809}
+{"user_input": "我的大自然床垫是京东自营，物流应该很快的，前天订购的", "reference": "您的订单已进入调度系统，预约客服会在收货日期的前一天与您联系确认送货哦咱们这边帮您核实您希望送货日期哦", "reference_contexts": [], "source": "jddc", "dialogue_id": 35454}
+{"user_input": "我拍的这个灯管没货了", "reference": "好的，请您稍等，这边咨询不是一对一，同时需要回复多个消息，我会尽快回复您。您的订单预计月日送达您手中", "reference_contexts": [], "source": "jddc", "dialogue_id": 23944}
+{"user_input": "不要叫我亲爱的，难道能上床", "reference": "这个目前是缺货的状态哦 补货预计一周哈 这个只是一个大概的时间哦一旦补货会尽快给您发货的哈", "reference_contexts": [], "source": "jddc", "dialogue_id": 19498}
+{"user_input": "一个应急灯还有-个灭蝇灯没有找过了", "reference": "我们可以给您提供发票的扫描件，同样可以作为保修使用，但是不能用来报销了哟，您看可以吗?", "reference_contexts": [], "source": "jddc", "dialogue_id": 32903}

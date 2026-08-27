@@ -10,6 +10,7 @@
 """
 import argparse
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import List
@@ -47,6 +48,8 @@ def parse_args():
                    help=f"报告输出目录（默认 {settings.RAGAS_RESULTS_DIR}，相对 llm_backend/）")
     p.add_argument("--only-synthesize", action="store_true", help="仅合成评测集并缓存，不跑评测")
     p.add_argument("--skip-synthesize", action="store_true", help="复用 --testset-file 缓存，不重新合成")
+    p.add_argument("--zh-only", action="store_true",
+                   help="仅保留含中文的 query（排除合成器产生的英文/纯数字噪声题）")
     return p.parse_args()
 
 
@@ -77,6 +80,18 @@ async def main(args) -> int:
             return 0
 
     rows = testset.to_list()
+    # 中文过滤：合成器 personas 偏英文，会产出英文/纯数字噪声题（实测 5 题中 3 题），
+    # 业务知识库为中文——评测只保留中文占多数的 query（--zh-only 开关）
+    if args.zh_only:
+        def _is_zh(q: str) -> bool:
+            q = (q or "").replace(" ", "")
+            if not q:
+                return False
+            return sum(1 for c in q if "一" <= c <= "鿿") / len(q) >= 0.6
+
+        before = len(rows)
+        rows = [r for r in rows if _is_zh(str(r.get("user_input") or ""))]
+        logger.info("中文过滤: {} → {} 题", before, len(rows))
     references: List[dict] = []
     questions: List[str] = []
     for row in rows:
