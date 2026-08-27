@@ -358,6 +358,57 @@ MVP 阶段的单标签 + 次要意图记 logic（准则 4）即为本演进的�
 
 并行约束：并行 agent 的共享上下文为**输入快照**（不读对方中间产出，避免竞态）；无论并行/顺序，汇总统一由主意图 agent 完成（§8.3.3）。
 
+#### 8.3.5 任务分配器（演进设计）
+
+> 触发与调度组件：意图识别输出 `intent_list` 长度 ≥ 2 时启用；意图数 = 1（或 risk/image/general 单独出现）时直通现有路由，不经分配器。
+
+**两层实现（借鉴福客 FDE 分级自主性 H2：规则清晰→自动化，动态判断→Agent）**：
+
+```
+intent_list 长度 ≥ 2
+   │
+   ▼
+任务分配器（主图路由层演进）
+   ├─ ① 规则预筛（零 LLM，零延迟）
+   │     · 含 risk/complaint → 强制串行（拦截/安抚最优先，不与其他任务并行）
+   │     · 同场景子场景（return_refund + logistics）→ 合并为一个任务
+   │     · 明显无关联（aftersale + presale，无因果词）→ 直接标记 parallel
+   ├─ ② 规则无法判定（存在因果/顺序语义）→ LLM 低温结构化输出依赖判断
+   │     （如"退了我再买个新的"→ dependency=sequential，对应福客 B6 链路接力）
+   └─ 输出 TaskPlan（结构化任务序列）
+```
+
+**TaskPlan 输出结构**：
+
+```python
+class TaskPlan(TypedDict):
+    tasks: list[Task]          # 任务序列
+    primary_intent: str        # 汇总归属（§8.3.3 主意图 agent）
+    logic: str                 # 分配理由
+
+class Task(TypedDict):
+    intent: str                # 意图（如 aftersale/return_refund）
+    agent: str                 # 目标子 agent（如 after-sale-agent）
+    mode: Literal["parallel", "sequential"]
+    order: int                 # 执行顺序（parallel 组内同 order）
+    depends_on: str | None     # 顺序模式下的前置任务
+```
+
+**执行层（LangGraph）**：
+
+- `mode=parallel` 任务组 → Send 并发（map-reduce 先例，`multi_tool.py:69-73`）；各 agent 读共享上下文**输入快照**，不读对方中间产出（防竞态）
+- `mode=sequential` 任务 → 顺序接力：前置任务 `context_update` 传入后置任务（对应福客 B6"跟进内容延续此前咨询"）
+- 汇总：`primary_intent` 对应 agent 整合各产出（§8.3.3）
+
+**与任务拆解的分工**（两层不冲突）：
+
+| 层 | 管什么 | 由谁实现 |
+|----|--------|---------|
+| 任务分配器（本设计） | **意图之间**的依赖与调度（并行/串行/合并） | 主图路由层演进 |
+| 任务拆解（已有） | **单个意图内部**拆检索子任务（M3 模式） | multi_tool 子图 planner 节点 |
+
+**选型理由**：纯 LLM 判断——每个多意图消息多一次调用，但"同场景合并/含风险串行"规则清晰，白花成本；纯规则——"退了我再买个新的"的依赖是语义级，关键词规则写不全。规则预筛 + LLM 兜底兼顾零成本与语义弹性，即 H2 分级自主性的落地。
+
 ---
 
 ## 9. 边界情况处理表
@@ -460,6 +511,7 @@ MVP 阶段的单标签 + 次要意图记 logic（准则 4）即为本演进的�
 | 9 | 图片/闲聊 | 路由与节点不动 | 2026-08-27 |
 | 10 | 多意图处理（演进设计） | 识别可多处理选一：intent_list + primary_intent；优先级 risk > complaint > aftersale > presale > general > image；MVP 降级为单标签+次要意图记 logic | 2026-08-27 |
 | 11 | 子 agent 协同（演进设计） | 流程导向 + 共享 Context（福客 §6.5）；主意图 agent 汇总回答；无依赖并行 / 有依赖顺序 / 风险串行（Send 并行先例） | 2026-08-27 |
+| 12 | 任务分配器（演进设计） | intent_list ≥ 2 时启用；规则预筛 + LLM 依赖判断兜底（H2 分级自主性）；输出 TaskPlan（并行 Send / 串行接力 / 主 agent 汇总） | 2026-08-27 |
 
 ---
 
