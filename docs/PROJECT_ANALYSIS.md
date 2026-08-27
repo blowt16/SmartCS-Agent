@@ -25,7 +25,7 @@
 
 SmartCS-Agent 是一个**基于 FastAPI + LangGraph 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、混合检索、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
-**核心能力**: 4 路智能意图路由 → 多工具编排 → 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
+**核心能力**: 三维意图识别路由（场景 + 风险 + 技术路由单次合并输出）→ 场景驱动分支 → 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
 
 ---
 
@@ -44,7 +44,7 @@ graph TB
     end
 
     subgraph "Agent 编排层 Orchestration"
-        C[LangGraph StateGraph<br/>4 路意图路由 + 子图工作流]
+        C[LangGraph StateGraph<br/>三维意图识别路由 + 子图工作流]
     end
 
     subgraph "LLM 服务层"
@@ -130,11 +130,12 @@ flowchart TB
 
     subgraph Agent["🤖 LangGraph Agent 层"]
         direction TB
-        ROUTER["意图路由器<br/>4 路分类 + 复杂度评估"]
-        GEN["闲聊节点"]
-        ADD["追问节点<br/>护栏检查"]
+        ROUTER["意图路由器<br/>三维合并识别<br/>场景+风险+技术路由"]
+        RISK["风险拦截/转人工节点<br/>静态话术"]
+        GEN["闲聊节点<br/>general"]
         IMG["图片分析节点<br/>Vision API"]
-        KG["知识库查询子图<br/>Multi-Tool Workflow"]
+        KG["知识库查询子图<br/>Multi-Tool Workflow（售前）"]
+        PLACE["售后/投诉安抚占位节点<br/>业务 Agent 接口预留"]
     end
 
     subgraph KGTools["🔧 知识检索工具链"]
@@ -151,7 +152,7 @@ flowchart TB
     Browser --> FastAPI
     FastAPI --> Factory
     Factory --> Agent
-    AGENT_ROUTER --> GEN & ADD & IMG & KG
+    ROUTER --> RISK & GEN & IMG & KG & PLACE
     KG --> KGTools
     KGTools --> Redis
     LLMF --> PostgreSQL
@@ -300,19 +301,25 @@ flowchart TD
 
 ### 4.4 LangGraph Agent 路由器 (`app/lg_agent/lg_builder.py`)
 
-4 路意图路由是系统核心调度器：
+三维合并意图识别（场景 + 风险 + 技术路由）是系统核心调度器，单次 LLM 低温结构化输出（ROUTER_TEMPERATURE=0）同时判定三个维度，risk 拦截优先级最高：
 
 ```mermaid
 stateDiagram-v2
     [*] --> analyze_and_route_query: START
-    analyze_and_route_query --> respond_to_general_query: general-query
-    analyze_and_route_query --> get_additional_info: additional-query
-    analyze_and_route_query --> create_research_plan: graphrag-query
-    analyze_and_route_query --> create_image_query: image-query
+    analyze_and_route_query --> risk_intercept: risk=violation
+    analyze_and_route_query --> transfer_human: risk=high_risk
+    analyze_and_route_query --> respond_to_general_query: type=general
+    analyze_and_route_query --> create_research_plan: type=presale
+    analyze_and_route_query --> aftersale_placeholder: type=aftersale
+    analyze_and_route_query --> complaint_placeholder: type=complaint
+    analyze_and_route_query --> create_image_query: type=image
 
+    risk_intercept --> [*]: 违规拒绝话术（静态）
+    transfer_human --> [*]: 转人工话术（静态）
     respond_to_general_query --> [*]: 纯 LLM 闲聊
-    get_additional_info --> [*]: 追问引导
-    create_research_plan --> [*]: 知识库查询子图
+    aftersale_placeholder --> [*]: 售后功能建设中提示（接口预留）
+    complaint_placeholder --> [*]: 安抚占位话术（接口预留）
+    create_research_plan --> [*]: 知识库查询子图（售前导购复用）
     create_image_query --> [*]: Qwen-VL 视觉分析
 
     state create_research_plan {
@@ -329,14 +336,28 @@ stateDiagram-v2
     }
 ```
 
-**路由分类 + 复杂度评估**:
+**路由输出结构**（`lg_states.py` Router TypedDict）：
 
-| 路由类型 | 触发条件 | 复杂度 | 处理节点 |
-|---------|---------|--------|---------|
-| `general-query` | 闲聊、非业务问题 | - | 纯 LLM 回复 |
-| `additional-query` | 信息不足需追问 | - | 护栏检查 + 追问 |
-| `graphrag-query` | 产品/知识库查询 | 0.0-1.0 | 知识检索子图 |
-| `image-query` | 用户上传图片 | - | Qwen-VL 视觉分析 + LLM |
+| 维度 | 取值 | 说明 |
+|------|------|------|
+| `type` | presale / aftersale / complaint / general / image | 场景路由（原 4 类技术路由合并，graphrag-query→presale，additional-query 删除） |
+| `sub_scenario` | return_refund / logistics / order_query / none | 售后子场景，为售后 Agent 预留分流决策输入 |
+| `risk` | none / violation / high_risk | 风险意图（violation 违规拦截；high_risk 高风险转人工） |
+| `logic` | str | 分类理由（供回答生成参考，多意图时简述次要意图） |
+
+**路由表**（risk 优先级最高；售后/投诉安抚走占位节点，业务 Agent 就位后仅替换路由目的地）：
+
+| 路由条件 | 处理节点 |
+|---------|---------|
+| `risk=violation` | 风险拦截（明确拒绝 + 合规引导，静态话术） |
+| `risk=high_risk` | 转人工（说明无法在线直接处理，静态话术） |
+| `type=image` | Qwen-VL 视觉分析 + LLM |
+| `type=general` | 纯 LLM 闲聊 |
+| `type=presale` | 知识检索子图（Multi-Tool Workflow，售前导购） |
+| `type=aftersale` | 售后占位节点（返回"服务升级中"提示，接口与 multi_tool 子图同构） |
+| `type=complaint` | 投诉安抚占位节点（返回安抚占位话术） |
+
+> 结构化输出校验失败时降级为 general/none（不抛异常）。追问逻辑（原 additional-query）已下沉到后续业务 Agent（售前/售后 Agent prompt 内置"信息不足先追问"），本阶段删除独立追问节点。设计依据见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md`。
 
 ### 4.5 Multi-Tool 工作流 (`workflows/multi_agent/multi_tool.py`)
 
@@ -436,17 +457,23 @@ flowchart TD
     HIT --> SSE
 
     STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
-    SG -->|"不通过"| GQ["兜底回复<br/>提示超出经营范围"]
-    SG -->|"通过"| RT["LLM 路由器<br/>4 路分类 + 复杂度评估"]
+    SG -->|"不通过"| GQ["general 闲聊节点<br/>超经营范围拒绝话术"]
+    SG -->|"通过"| RT["LLM 路由器<br/>三维合并识别：type + sub_scenario + risk"]
 
-    RT -->|"闲聊/非业务"| GEN["5.3 general-query<br/>纯 LLM 闲聊"]
-    RT -->|"信息不足"| ADD["5.4 additional-query<br/>护栏 + 追问"]
-    RT -->|"知识库查询"| KG["5.5 graphrag-query<br/>向量检索子图"]
-    RT -->|"图片分析"| IMG["5.6 image-query<br/>Qwen-VL + LLM"]
+    RT -->|"risk=violation"| RISK["5.4 风险拦截<br/>违规拒绝话术"]
+    RT -->|"risk=high_risk"| TRANS["5.4 转人工<br/>无法在线处理话术"]
+    RT -->|"type=general"| GEN["5.3 general 闲聊<br/>纯 LLM 闲聊"]
+    RT -->|"type=presale"| KG["5.5 presale 售前<br/>向量检索子图"]
+    RT -->|"type=aftersale"| PLACE["5.7 售后占位<br/>接口预留"]
+    RT -->|"type=complaint"| PLACE2["5.7 投诉安抚占位<br/>接口预留"]
+    RT -->|"type=image"| IMG["5.6 image 图片<br/>Qwen-VL + LLM"]
 
     GEN --> SSE["SSE 流式返回<br/>逐 chunk 推送 data: {content}"]
-    ADD --> SSE
+    RISK --> SSE
+    TRANS --> SSE
     KG --> SSE
+    PLACE --> SSE
+    PLACE2 --> SSE
     IMG --> SSE
     GQ --> SSE
     KG -.->|"完整回答生成后"| WRITEBACK["语义缓存回写<br/>update（非空才写）"]
@@ -473,22 +500,23 @@ flowchart TD
     RESOLVE --> CACHE
     CACHE -->|"命中"| SHORT["⚡ 短路返回缓存回答<br/>不进图"]
     CACHE -->|"未命中"| SG
-    SG -->|不通过| GEN["general-query<br/>回复: 超出经营范围"]
-    SG -->|通过| ROUTER["LLM 路由器<br/>4路分类+复杂度评估"]
+    SG -->|"不通过"| GEN["general 闲聊节点<br/>超经营范围拒绝话术"]
+    SG -->|"通过"| ROUTER["LLM 路由器<br/>三维合并识别<br/>type + sub_scenario + risk<br/>（ROUTER_TEMPERATURE=0）"]
 
-    ROUTER -->|"闲聊/非业务"| GEN2["general-query<br/>纯 LLM 电商客服风格回复"]
-    ROUTER -->|"信息不足"| ADD["additional-query<br/>护栏: 业务范围判断"]
-    ADD -->|"范围外"| REJECT["回复: 暂无此商品"]
-    ADD -->|"范围内"| ASK["友好追问引导"]
-    ROUTER -->|"知识库查询"| KG["graphrag-query"]
-    ROUTER -->|"图片分析"| IMG["image-query<br/>Qwen-VL + LLM"]
+    ROUTER -->|"risk=violation"| RISK["风险拦截<br/>明确拒绝 + 合规引导"]
+    ROUTER -->|"risk=high_risk"| TRANS["转人工<br/>无法在线直接处理"]
+    ROUTER -->|"type=general"| GEN2["general 闲聊<br/>纯 LLM 电商客服风格回复"]
+    ROUTER -->|"type=presale"| KG["presale 售前<br/>知识库检索子图"]
+    ROUTER -->|"type=aftersale"| PLACE["售后占位<br/>（售后 Agent 接口预留）"]
+    ROUTER -->|"type=complaint"| PLACE2["投诉安抚占位<br/>（安抚 Agent 接口预留）"]
+    ROUTER -->|"type=image"| IMG["image 图片<br/>Qwen-VL + LLM"]
 
     KG --> GRAG["向量检索 vector_search_query<br/>HNSW ∥ pg_jieba BM25 → RRF → 精排"]
 ```
 
-### 5.3 general-query 闲聊意图运行流程
+### 5.3 general 闲聊意图运行流程
 
-节点 `respond_to_general_query`：纯 LLM 对话，不调用任何外部检索；历史消息经 MemoryManager 压缩（Redis 摘要缓存）后注入提示词。
+节点 `respond_to_general_query`：纯 LLM 对话，不调用任何外部检索；历史消息经 MemoryManager 压缩（Redis 摘要缓存）后注入提示词。ScopeGuard 超经营范围拦截后也走本节点（注入"超出经营范围"logic 触发拒绝话术）。
 
 ```mermaid
 flowchart TD
@@ -500,27 +528,20 @@ flowchart TD
     F --> G["SSE 流式返回前端"]
 ```
 
-### 5.4 additional-query 追问意图运行流程
+### 5.4 风险拦截 / 转人工运行流程
 
-节点 `get_additional_info`：先做经营范围护栏检查（结构化输出 decision），范围内才生成友好追问。
+节点 `risk_intercept`（risk=violation）与 `transfer_human`（risk=high_risk）：**静态话术节点，不走 LLM**——违规咨询明确拒绝 + 合规引导（对应福客 D5），高风险操作/投诉升级说明无法在线直接处理（对应福客 D3/D4 转人工复核）。原 additional-query 追问节点已删除（追问逻辑下沉到后续业务 Agent）。
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>get_additional_info"] --> B["模型选择<br/>AGENT_SERVICE: DeepSeek / Ollama"]
-    B --> C["护栏提示词<br/>GUARDRAILS_SYSTEM_PROMPT<br/>+ 经营范围描述（智能家居品类白名单）"]
-    C --> D["LLM 结构化输出<br/>decision: continue / end"]
-    D -->|"end 范围外"| E["直接回复<br/>「抱歉，我家暂时没有这方面的商品，<br/>可以在别家看看哦~」"]
-    D -->|"continue 范围内"| F["追问提示词<br/>GET_ADDITIONAL_SYSTEM_PROMPT<br/>注入路由 logic"]
-    F --> G["历史管理<br/>MemoryManager + Redis 摘要缓存"]
-    G --> H["LLM 生成友好追问"]
-    E --> I["返回 {messages: [AIMessage]}"]
-    H --> I
-    I --> J["SSE 流式返回前端"]
+    A["进入节点<br/>risk_intercept / transfer_human"] --> B["静态话术常量<br/>RISK_INTERCEPT_REPLY / TRANSFER_HUMAN_REPLY"]
+    B --> C["返回 {messages: [AIMessage(content=话术)]}"]
+    C --> D["SSE 流式返回前端"]
 ```
 
-### 5.5 graphrag-query 知识库查询意图运行流程
+### 5.5 presale 售前导购运行流程（原 graphrag-query）
 
-节点 `create_research_plan`：直接进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护），查询预处理管道（纠错/扩展/Multi-Query+HyDE）与 BudgetGuard 已移除（2026-08-21）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
+节点 `create_research_plan`：售前场景（商品参数/价格/推荐/使用咨询）复用现有 RAG 子图，直接进入 Multi-Tool 子图（TimeoutGuard 30 秒超时保护）。入口环节（main.py `/api/langgraph/query`，图执行前）：指代消解（多轮代词/主语补全）→ 语义缓存检索——命中直接短路返回（不进图），未命中才进入本节点（query 已是完整问题），完整回答生成后回写缓存。
 
 ```mermaid
 flowchart TD
@@ -558,6 +579,17 @@ flowchart TD
     F1 --> I
     H --> I
     I --> J["SSE 流式返回前端"]
+```
+
+### 5.7 售后 / 投诉安抚占位节点
+
+节点 `aftersale_placeholder` / `complaint_placeholder`：**业务 Agent 接口占位**——返回"服务升级中"提示（静态话术，不走 LLM）。接口与 multi_tool 子图同构（`question+history → answer`），后续售后 Agent（工作流骨架 + LLM 决策点 + RAG tool，方式 C）/ 投诉安抚 Agent 子图就位后，仅替换路由目的地，识别模块与接口形状不动。售后子场景（return_refund/logistics/order_query）已由 Router 输出，供后续售后 Agent 分流决策。
+
+```mermaid
+flowchart TD
+    A["进入节点<br/>aftersale_placeholder / complaint_placeholder"] --> B["静态话术<br/>AFTERSALE_PLACEHOLDER_REPLY<br/>/ COMPLAINT_PLACEHOLDER_REPLY"]
+    B --> C["返回 {messages: [AIMessage(content=话术)]}"]
+    C --> D["SSE 流式返回前端"]
 ```
 
 ---
@@ -617,20 +649,36 @@ flowchart TD
 
 ## 8. 项目亮点深度分析
 
-### 8.1 🌟 4 路智能意图路由 + 复杂度量化评估
+### 8.1 🌟 三维合并意图识别路由
 
-**创新点**: 不是简单的关键词匹配，而是让 LLM 同时完成**分类 + 复杂度量化 + 推理需求判断**。
+**创新点**: 一次 LLM 低温结构化输出同时判定**场景意图 + 风险意图 + 技术路由**三个维度，risk 拦截优先级最高（违规/高风险消息不进入任何业务处理路径），场景驱动路由并预留业务 Agent 接口。
 
 ```python
 class Router(TypedDict):
-    type: Literal["general-query", "additional-query", "graphrag-query", "image-query"]
-    complexity: float              # 0-1 查询复杂度
-    relationship_intensity: float  # 0-1 关系密集度
-    reasoning_required: bool       # 是否需要多跳推理
-    entity_count: int              # 实体数量
+    """Classify user query: scenario + risk + routing type."""
+    logic: str                      # 分类理由（多意图时简述次要意图）
+    type: Literal[
+        "presale",                  # 售前：商品咨询/参数/价格活动/推荐导购
+        "aftersale",                # 售后：退货退款/物流异常/订单查询
+        "complaint",                # 投诉安抚：情绪不满/投诉（情绪主导）
+        "general",                  # 闲聊
+        "image",                    # 图片
+    ]
+    sub_scenario: Literal[
+        "return_refund", "logistics", "order_query", "none",
+    ]                               # 仅 aftersale 时有效；为售后 Agent 预留分流决策输入
+    risk: Literal[
+        "none", "violation", "high_risk",
+    ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
 ```
 
-**技术价值**: 通过一次 LLM 调用同时获得路由决策和元信息。复杂度四元组当前作为路由元信息记录（早期曾驱动 Text2Cypher/预定义模板/向量检索的三分策略，该分支已随 Neo4j 退役移除），可继续用于检索流程的动态调节与效果评估。
+**技术价值**:
+
+- 原 4 类技术路由合并进场景体系（graphrag-query→presale，additional-query 删除——追问下沉到业务 Agent）
+- 多意图取主导/最紧急意图（优先级 risk > complaint > aftersale > presale > general > image），次要意图记入 logic
+- 售后/投诉安抚占位节点接口与 RAG 子图同构，业务 Agent（售前/售后/安抚）就位后仅改路由目的地
+- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（42 条，含意图模糊/多意图/超范围/图片风险/多轮上下文）三维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
+- 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
 
 ### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
 
@@ -753,13 +801,13 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 ### 10.2 中等问题 🟡
 
-#### 10.2.1 缺少单元测试
+#### 10.2.1 单元测试覆盖不足（已部分缓解）
 
-项目中**没有 pytest 单元测试体系**（`app/test/` 仅有手写冒烟/基准脚本；指代消解功能已有 41 项断言的验证脚本 `test_pronoun_resolve.py`，但非 pytest 框架），对于生产级质量保障是高风险问题。
+已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（42 条三维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
 
 **建议**:
 
-- 为核心模块（向量检索、语义缓存、路由逻辑、混合检索）添加 pytest 测试
+- 为向量检索、语义缓存、混合检索添加 pytest 测试
 - 集成 LangGraph 的测试工具进行 Agent 行为验证
 
 #### 10.2.2 前端过于简单
