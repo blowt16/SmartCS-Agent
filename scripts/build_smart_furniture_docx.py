@@ -49,14 +49,12 @@ def add_product(doc: Document, row: dict) -> None:
     """单个商品: H3 商品名称 + H4 子章节。"""
     doc.add_heading(row[COL_NAME].strip(), level=3)
 
-    # 商品信息
+    # 商品信息（价格为动态信息，存储于数据库 product_price_stock 表，不入文档）
     doc.add_heading("商品信息", level=4)
     if row[COL_BRAND].strip():
         doc.add_paragraph(f"品牌：{row[COL_BRAND].strip()}")
     if row[COL_CATEGORY].strip():
         doc.add_paragraph(f"品类：{row[COL_CATEGORY].strip()}")
-    if row[COL_PRICE].strip():
-        doc.add_paragraph(f"参考价格：{row[COL_PRICE].strip()} 元（活动/参考价，以京东实时结算为准）")
 
     # 功能特点
     if row[COL_FEATURES].strip():
@@ -70,10 +68,17 @@ def add_product(doc: Document, row: dict) -> None:
         for item in split_bullets(row[COL_SPECS]):
             doc.add_paragraph(item, style="List Bullet")
 
-    # 售后服务
-    if row[COL_AFTERSALES].strip():
+    # 售后服务（京东自营 → 引用独立政策文档；否则原文要点）
+    aftersales = row[COL_AFTERSALES].strip()
+    if aftersales == "京东自营":
         doc.add_heading("售后服务", level=4)
-        for item in split_bullets(row[COL_AFTERSALES]):
+        doc.add_paragraph(
+            "本商品为京东自营，适用《京东自营售后政策》（独立知识文档，已随知识库上传）",
+            style="List Bullet",
+        )
+    elif aftersales:
+        doc.add_heading("售后服务", level=4)
+        for item in split_bullets(aftersales):
             doc.add_paragraph(item, style="List Bullet")
 
     # 参考来源
@@ -99,7 +104,10 @@ def main():
         "本文档涵盖京东在售智能家具商品的真实信息，包括电动智能沙发、按摩椅、智能电动床、"
         "智能床垫、电动升降桌、智能晾衣架、智能窗帘、智能门锁、智能床头柜九大品类，"
         "共计 50 款商品。商品名称、品牌、型号、参数均来自京东及公开渠道的真实在售信息，"
-        "价格为活动/参考价，实际以京东实时结算为准。整理日期：2026年8月。"
+        "整理日期：2026年8月。"
+    )
+    doc.add_paragraph(
+        "商品价格与库存为动态信息，存储于系统数据库中（product_price_stock 表），本文档不包含。"
     )
 
     # 按品类分组（保持 TSV 出现顺序），中文序号
