@@ -25,7 +25,7 @@
 
 SmartCS-Agent 是一个**基于 FastAPI + LangGraph 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、混合检索、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
-**核心能力**: 三维意图识别路由（场景 + 风险 + 技术路由单次合并输出）→ 场景驱动分支 → 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
+**核心能力**: 场景+风险双维意图识别（单次合并输出，场景驱动分支、风险拦截优先）→ 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
 
 ---
 
@@ -44,7 +44,7 @@ graph TB
     end
 
     subgraph "Agent 编排层 Orchestration"
-        C[LangGraph StateGraph<br/>三维意图识别路由 + 子图工作流]
+        C[LangGraph StateGraph<br/>场景+风险双维意图识别 + 子图工作流]
     end
 
     subgraph "LLM 服务层"
@@ -130,7 +130,7 @@ flowchart TB
 
     subgraph Agent["🤖 LangGraph Agent 层"]
         direction TB
-        ROUTER["意图路由器<br/>三维合并识别<br/>场景+风险+技术路由"]
+        ROUTER["意图路由器<br/>场景+风险双维合并识别"]
         RISK["风险拦截/转人工节点<br/>静态话术"]
         GEN["闲聊节点<br/>general"]
         IMG["图片分析节点<br/>Vision API"]
@@ -301,7 +301,7 @@ flowchart TD
 
 ### 4.4 LangGraph Agent 路由器 (`app/lg_agent/lg_builder.py`)
 
-三维合并意图识别（场景 + 风险 + 技术路由）是系统核心调度器，单次 LLM 低温结构化输出（ROUTER_TEMPERATURE=0）同时判定三个维度，risk 拦截优先级最高：
+场景+风险双维合并意图识别是系统核心调度器，单次 LLM 低温结构化输出（ROUTER_TEMPERATURE=0）同时判定场景与风险两个维度，risk 拦截优先级最高（售后子场景由售后 Agent 内部判断，识别层不承担）：
 
 ```mermaid
 stateDiagram-v2
@@ -341,7 +341,6 @@ stateDiagram-v2
 | 维度 | 取值 | 说明 |
 |------|------|------|
 | `type` | presale / aftersale / complaint / general / image | 场景路由（原 4 类技术路由合并，graphrag-query→presale，additional-query 删除） |
-| `sub_scenario` | return_refund / logistics / order_query / none | 售后子场景，为售后 Agent 预留分流决策输入 |
 | `risk` | none / violation / high_risk | 风险意图（violation 违规拦截；high_risk 高风险转人工） |
 | `logic` | str | 分类理由（供回答生成参考，多意图时简述次要意图） |
 
@@ -458,7 +457,7 @@ flowchart TD
 
     STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
     SG -->|"不通过"| GQ["general 闲聊节点<br/>超经营范围拒绝话术"]
-    SG -->|"通过"| RT["LLM 路由器<br/>三维合并识别：type + sub_scenario + risk"]
+    SG -->|"通过"| RT["LLM 路由器<br/>场景+风险双维识别：type + risk"]
 
     RT -->|"risk=violation"| RISK["5.4 风险拦截<br/>违规拒绝话术"]
     RT -->|"risk=high_risk"| TRANS["5.4 转人工<br/>无法在线处理话术"]
@@ -501,7 +500,7 @@ flowchart TD
     CACHE -->|"命中"| SHORT["⚡ 短路返回缓存回答<br/>不进图"]
     CACHE -->|"未命中"| SG
     SG -->|"不通过"| GEN["general 闲聊节点<br/>超经营范围拒绝话术"]
-    SG -->|"通过"| ROUTER["LLM 路由器<br/>三维合并识别<br/>type + sub_scenario + risk<br/>（ROUTER_TEMPERATURE=0）"]
+    SG -->|"通过"| ROUTER["LLM 路由器<br/>场景+风险双维合并识别<br/>type + risk<br/>（ROUTER_TEMPERATURE=0）"]
 
     ROUTER -->|"risk=violation"| RISK["风险拦截<br/>明确拒绝 + 合规引导"]
     ROUTER -->|"risk=high_risk"| TRANS["转人工<br/>无法在线直接处理"]
@@ -583,7 +582,7 @@ flowchart TD
 
 ### 5.7 售后 / 投诉安抚占位节点
 
-节点 `aftersale_placeholder` / `complaint_placeholder`：**业务 Agent 接口占位**——返回"服务升级中"提示（静态话术，不走 LLM）。接口与 multi_tool 子图同构（`question+history → answer`），后续售后 Agent（工作流骨架 + LLM 决策点 + RAG tool，方式 C）/ 投诉安抚 Agent 子图就位后，仅替换路由目的地，识别模块与接口形状不动。售后子场景（return_refund/logistics/order_query）已由 Router 输出，供后续售后 Agent 分流决策。
+节点 `aftersale_placeholder` / `complaint_placeholder`：**业务 Agent 接口占位**——返回"服务升级中"提示（静态话术，不走 LLM）。接口与 multi_tool 子图同构（`question+history → answer`），后续售后 Agent（工作流骨架 + LLM 决策点 + RAG tool，方式 C）/ 投诉安抚 Agent 子图就位后，仅替换路由目的地，识别模块与接口形状不动。售后子场景（退货退款/物流/订单查询）由售后 Agent 工作流骨架第一步结合订单/历史上下文判断，识别层不承担。
 
 ```mermaid
 flowchart TD
@@ -649,13 +648,13 @@ flowchart TD
 
 ## 8. 项目亮点深度分析
 
-### 8.1 🌟 三维合并意图识别路由
+### 8.1 🌟 场景+风险双维合并意图识别路由
 
-**创新点**: 一次 LLM 低温结构化输出同时判定**场景意图 + 风险意图 + 技术路由**三个维度，risk 拦截优先级最高（违规/高风险消息不进入任何业务处理路径），场景驱动路由并预留业务 Agent 接口。
+**创新点**: 一次 LLM 低温结构化输出同时判定**场景意图 + 风险意图**两个维度，risk 拦截优先级最高（违规/高风险消息不进入任何业务处理路径），场景驱动路由并预留业务 Agent 接口。
 
 ```python
 class Router(TypedDict):
-    """Classify user query: scenario + risk + routing type."""
+    """Classify user query: scenario + risk."""
     logic: str                      # 分类理由（多意图时简述次要意图）
     type: Literal[
         "presale",                  # 售前：商品咨询/参数/价格活动/推荐导购
@@ -664,9 +663,6 @@ class Router(TypedDict):
         "general",                  # 闲聊
         "image",                    # 图片
     ]
-    sub_scenario: Literal[
-        "return_refund", "logistics", "order_query", "none",
-    ]                               # 仅 aftersale 时有效；为售后 Agent 预留分流决策输入
     risk: Literal[
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
@@ -675,9 +671,10 @@ class Router(TypedDict):
 **技术价值**:
 
 - 原 4 类技术路由合并进场景体系（graphrag-query→presale，additional-query 删除——追问下沉到业务 Agent）
-- 多意图取主导/最紧急意图（优先级 risk > complaint > aftersale > presale > general > image），次要意图记入 logic
+- 多意图取主导意图（句首发/最强烈者；risk/complaint 永远优先），次要意图记入 logic
+- 售后子场景（退货/物流/订单）不由识别层判断——判断需订单/历史上下文，下沉到售后 Agent 工作流骨架第一步（简化设计 2026-08-27）
 - 售后/投诉安抚占位节点接口与 RAG 子图同构，业务 Agent（售前/售后/安抚）就位后仅改路由目的地
-- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（42 条，含意图模糊/多意图/超范围/图片风险/多轮上下文）三维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
+- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（42 条，含意图模糊/多意图/超范围/图片风险/多轮上下文）二维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
 - 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
 
 ### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
@@ -803,7 +800,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.1 单元测试覆盖不足（已部分缓解）
 
-已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（42 条三维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
+已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（42 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
 
 **建议**:
 

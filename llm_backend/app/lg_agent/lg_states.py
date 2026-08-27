@@ -5,7 +5,7 @@ from langgraph.graph import add_messages
 
 
 class Router(TypedDict):
-    """Classify user query: scenario + risk + routing type."""
+    """Classify user query: scenario + risk."""
     logic: str                      # 分类理由（供回答生成参考）
     type: Literal[
         "presale",                  # 售前：商品咨询/参数/价格活动/推荐导购
@@ -14,9 +14,8 @@ class Router(TypedDict):
         "general",                  # 闲聊（原 general-query）
         "image",                    # 图片（原 image-query）
     ]
-    sub_scenario: Literal[
-        "return_refund", "logistics", "order_query", "none",
-    ]                               # 仅 aftersale 时有效；为售后 agent 预留分流决策输入
+    # 售后子场景（return_refund/logistics/order_query）不再由识别层判断——
+    # 判断需订单/历史等上下文，下沉到售后 Agent 工作流骨架第一步（简化设计，2026-08-27）
     risk: Literal[
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
@@ -68,7 +67,7 @@ class InputState:
 @dataclass(kw_only=True)
 class AgentState(InputState):
     """State of the retrieval graph / agent."""
-    router: Router = field(default_factory=lambda: Router(type="general", sub_scenario="none", risk="none", logic=""))
+    router: Router = field(default_factory=lambda: Router(type="general", risk="none", logic=""))
     """The router's classification of the user's query."""
     steps: list[str] = field(default_factory=list)
     """Populated by the retriever. This is a list of documents that the agent can reference."""

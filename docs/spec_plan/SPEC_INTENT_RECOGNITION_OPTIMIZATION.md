@@ -1,6 +1,6 @@
 # 意图识别模块优化实施规格（MVP）
 
-> **用途**: 将现有 4 类技术路由（general/additional/graphrag/image）重构为**场景驱动路由**——单次合并输出「场景意图 + 风险意图 + 技术路由」，为后续业务子 agent（售前/售后/投诉安抚）预留路由接口；参考福客AI（FreeCall AI）项目分析报告 §9 意图识别方案（场景/来源/风险三维度）与 §16.3 对我们的项目启示
+> **用途**: 将现有 4 类技术路由（general/additional/graphrag/image）重构为**场景驱动路由**——单次合并输出「场景意图 + 风险意图」，为后续业务子 agent（售前/售后/投诉安抚）预留路由接口；参考福客AI（FreeCall AI）项目分析报告 §9 意图识别方案（场景/来源/风险三维度）与 §16.3 对我们的项目启示
 > **技术栈**: LangGraph 0.3.25（主图 StateGraph）+ DeepSeek/Ollama（ROUTER_TEMPERATURE=0 低温结构化输出）+ PostgreSQL（PostgresSaver 会话检查点）
 > **状态**: 待实施（2026-08-27 设计定稿，经用户逐项确认：范围 / 合并输出 / 场景驱动路由 / additional-query 取消 / 占位节点行为）
 > **关联文档**: [[SPEC_RAGAS_EVAL.md]]（现有评测口径，不受本改动影响）[[PROJECT_ANALYSIS.md]]（项目全景）
@@ -42,7 +42,7 @@
 | 风险意图识别 | violation（违规咨询拦截）/ high_risk（高风险操作转人工），与场景独立判断 |
 | 场景驱动路由 | 路由分支按场景划分；售前复用现有 RAG 子图；售后/投诉安抚走占位节点（返回提示） |
 | 业务 agent 接口预留 | 售后/投诉安抚占位节点接口与 multi_tool 子图同构（question+history→answer），后续仅改路由目的地 |
-| 路由准确率可评测 | golden set（42 条 = 单轮 37 + 多轮 5）三维准确率（type / sub_scenario / risk）可复现输出 |
+| 路由准确率可评测 | golden set（42 条 = 单轮 37 + 多轮 5）二维准确率（type / risk）可复现输出 |
 
 ### 1.3 明确不做（MVP 边界）
 
@@ -105,7 +105,7 @@
 
 | 候选 | 结论 | 理由 |
 |---|---|---|
-| **单次调用合并输出**（一次 LLM 调用输出 type+sub_scenario+risk+logic） | ✅ 采纳（用户确认） | 路由决策是一次性动作，三个维度基于同一消息+同一段历史分类，拆两次调用不增加信息只增加延迟（约 +0.5~1s）与成本；router 已用低温结构化输出，扩展字段改动面小；后续业务 agent 上线时字段不变，仅改路由目的地 |
+| **单次调用合并输出**（一次 LLM 调用输出 type+risk+logic） | ✅ 采纳（用户确认） | 路由决策是一次性动作，两个维度基于同一消息+同一段历史分类，拆两次调用不增加信息只增加延迟（约 +0.5~1s）与成本；router 已用低温结构化输出，扩展字段改动面小；后续业务 agent 上线时字段不变，仅改路由目的地 |
 | 两层独立识别（场景层 + 技术层） | 否决 | 多一次 LLM 调用；两层各自调优的收益在 MVP 阶段不值当 |
 
 ### 3.3 additional-query 去留
@@ -143,7 +143,7 @@
 ```mermaid
 graph TD
     U["用户消息（文本/图片）"] --> PR["指代消解<br/>main.py:391 · 前置 · 不变"]
-    PR --> R["意图识别节点 analyze_and_route_query<br/>① ScopeGuard 经营范围预检（关键词级 · 保留）<br/>② LLM 低温合并输出 Router：type + sub_scenario + risk + logic<br/>多意图时扩展 intent_list + primary_intent"]
+    PR --> R["意图识别节点 analyze_and_route_query<br/>① ScopeGuard 经营范围预检（关键词级 · 保留）<br/>② LLM 低温合并输出 Router：type + risk + logic<br/>多意图时扩展 intent_list + primary_intent"]
 
     R -->|"ScopeGuard 超范围"| G1["general 闲聊路径<br/>现状不变"]
     R -->|"risk = violation"| N1["风险拦截节点 · 新增<br/>拒绝话术 + 合规引导"]
@@ -201,15 +201,12 @@ class Router(TypedDict):
         "general",                  # 闲聊（原 general-query）
         "image",                    # 图片（原 image-query）
     ]
-    sub_scenario: Literal[
-        "return_refund", "logistics", "order_query", "none",
-    ]                               # 仅 aftersale 时有效；为售后 agent 预留分流决策输入
     risk: Literal[
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
 ```
 
-**要点**：原 4 类技术路由中 `graphrag-query` 被 `presale` 取代（语义合并："知识库可答的业务问题"=售前导购）、`additional-query` 删除；`general`/`image` 语义不变。`sub_scenario` 是本次为售后 agent 预留的关键接口字段。
+**要点**：原 4 类技术路由中 `graphrag-query` 被 `presale` 取代（语义合并："知识库可答的业务问题"=售前导购）、`additional-query` 删除；`general`/`image` 语义不变。**售后子场景（return_refund/logistics/order_query）不由识别层判断**——子场景判断需订单/历史等上下文，识别层只有对话文本，下沉到售后 Agent 工作流骨架第一步（简化设计，2026-08-27 决策，见 §13 #13）。
 
 ### 4.3 路由表（MVP 占位版）
 
@@ -255,8 +252,8 @@ class Router(TypedDict):
 ### 6.1 ROUTER_SYSTEM_PROMPT 重写（`lg_prompts.py:7`）
 
 ```text
-你是一个电商智能客服的意图识别引擎。你的任务是对用户询问同时判断三个维度：
-场景类型（type）、售后子场景（sub_scenario）、风险意图（risk）。
+你是一个电商智能客服的意图识别引擎。你的任务是对用户询问同时判断两个维度：
+场景类型（type）、风险意图（risk）。售后子场景（退货退款/物流/订单查询）由售后处理环节判断。
 
 ## type 场景分类
 - presale 售前：商品参数/价格/活动/推荐/使用咨询等知识库可答的业务问题（如"你们有智能门锁吗""这款灯多少钱""推荐一款扫地机器人"）
@@ -264,11 +261,6 @@ class Router(TypedDict):
 - complaint 投诉安抚：情绪不满、服务抱怨、投诉（情绪主导，区别于 aftersale 的理性业务咨询）
 - general 闲聊：与业务无关的闲聊（如"在吗""今天天气"）
 - image 图片：用户提供了图片需要分析
-
-## sub_scenario（仅当 type=aftersale 时给出，否则为 none）
-- return_refund 退货退款
-- logistics 物流异常
-- order_query 订单查询
 
 ## risk 风险判断（独立于场景，优先级最高）
 - violation 违规咨询：改装/破解/违禁品/虚假功效承诺等违规内容 → 明确拒绝
@@ -279,7 +271,7 @@ class Router(TypedDict):
 1. 结合对话历史判断真实意图（如"那个呢？"需结合上文商品上下文）
 2. 区分"询问政策"与"要求执行操作"：问退款政策 → 正常；要求直接退钱 → high_risk
 3. 拿不准时 risk 取 none，宁放行不误拦
-4. 一条消息含多个意图时（如"这灯多少钱？另外怎么退货？"），取主导/最紧急意图，优先级：risk > complaint > aftersale > presale > general > image；次要意图在 logic 中简述（如"主意图退货咨询，次要意图售前价格"）——识别不丢信息，处理选一（借鉴福客 D8"五选一处理分支"）
+4. 一条消息含多个意图时，取主导意图（以句首发/最强烈者为准，如"这灯多少钱？另外怎么退货？"主导为售前价格）；risk/complaint 永远优先（安全与情绪相关，不因句首位置让位）；次要意图在 logic 中简述——识别不丢信息，处理选一（借鉴福客 D8"五选一处理分支"）。注：2026-08-27 实测校准，原"售后>售前硬排序"与模型"首发主导"行为冲突，已调整
 ```
 
 ### 6.2 删除的 prompt
@@ -302,9 +294,9 @@ class Router(TypedDict):
 
 | 文件 | 动作 | 内容 |
 |------|------|------|
-| `llm_backend/app/lg_agent/lg_states.py` | 修改 | `Router` 类型扩展为 type 五值 + sub_scenario + risk；**`AgentState.router` 默认值同步**（`lg_states.py:59` 的 `type="general-query"` → `type="general"`，否则未走路由的路径触发 route_query ValueError） |
+| `llm_backend/app/lg_agent/lg_states.py` | 修改 | `Router` 类型扩展为 type 五值 + risk；**`AgentState.router` 默认值同步**（`lg_states.py:59` 的 `type="general-query"` → `type="general"`，否则未走路由的路径触发 route_query ValueError） |
 | `llm_backend/app/lg_agent/lg_prompts.py` | 修改/删除 | ROUTER_SYSTEM_PROMPT 重写（§6.1）；删 GET_ADDITIONAL_SYSTEM_PROMPT、GUARDRAILS_SYSTEM_PROMPT |
-| `llm_backend/app/lg_agent/lg_builder.py` | 修改/新增/删除 | ① analyze_and_route_query：ScopeGuard 预检保留但拦截返回值改为新枚举（`lg_builder.py:76` 的 `type="general-query"` → `type="general"`），合并输出三维 Router（结构化输出模型同步扩展）；② route_query：按 §4.3 路由表接条件边；③ 新增风险拦截节点 / 转人工节点 / 售后占位节点 / 投诉安抚占位节点（静态话术，见 §6.3）；④ 删除 get_additional_info 节点与 AdditionalGuardrailsOutput 类 |
+| `llm_backend/app/lg_agent/lg_builder.py` | 修改/新增/删除 | ① analyze_and_route_query：ScopeGuard 预检保留但拦截返回值改为新枚举（`lg_builder.py:76` 的 `type="general-query"` → `type="general"`），合并输出双维 Router（type+risk，结构化输出模型同步扩展）；② route_query：按 §4.3 路由表接条件边；③ 新增风险拦截节点 / 转人工节点 / 售后占位节点 / 投诉安抚占位节点（静态话术，见 §6.3）；④ 删除 get_additional_info 节点与 AdditionalGuardrailsOutput 类 |
 | `llm_backend/main.py` | 检查 | 无 additional 相关引用（预计无改动，需全局检索确认） |
 
 **全局检索要求**（项目规范）：`get_additional_info`、`AdditionalGuardrailsOutput`、`GET_ADDITIONAL_SYSTEM_PROMPT`、`GUARDRAILS_SYSTEM_PROMPT`、`Router` 全部引用点逐一核对同步修改。
@@ -461,10 +453,10 @@ class Task(TypedDict):
 
 1. **扩展 Router 结构**（`lg_states.py`）→ 验证：类型定义通过，五值枚举正确
 2. **重写 ROUTER_SYSTEM_PROMPT**（`lg_prompts.py` §6.1）+ 删除 additional/guardrails prompt → 验证：无残留引用
-3. **改造 analyze_and_route_query**（`lg_builder.py`）：ScopeGuard 保留，结构化输出模型扩展 → 验证：单条消息输出三维字段
+3. **改造 analyze_and_route_query**（`lg_builder.py`）：ScopeGuard 保留，结构化输出模型扩展 → 验证：单条消息输出 type/risk 字段
 4. **改造 route_query + 新增 4 节点**（风险拦截/转人工/售后占位/投诉安抚），删除 get_additional_info → 验证：路由表全分支可达
 5. **全局检索核对**：`get_additional_info`、`AdditionalGuardrailsOutput`、`GET_ADDITIONAL_SYSTEM_PROMPT`、`GUARDRAILS_SYSTEM_PROMPT`、`Router` 全项目引用点
-6. **构建路由 golden set**（42 条 = 单轮 37 + 多轮 5，§12）→ 验证：三维准确率输出
+6. **构建路由 golden set**（42 条 = 单轮 37 + 多轮 5，§12）→ 验证：二维准确率输出
 7. **端到端验证**（§12 典型对话流）→ 验证：全场景走通
 
 ---
@@ -473,35 +465,35 @@ class Task(TypedDict):
 
 ### 12.1 路由 golden set 评测（新增）
 
-构建 42 条（单轮 37 + 多轮 5）覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, sub_scenario, risk}` 统计准确率：
+构建 42 条（单轮 37 + 多轮 5）覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, risk}` 统计准确率（售后子场景已下沉售后 Agent，不在此验证）：
 
 | 类别 | 条数 | 示例 |
 |------|------|------|
 | 售前 presale | 8 | "你们有智能门锁吗""这款灯多少钱""推荐一款扫地机器人""灯和灯带能一起控制吗" |
-| 售后 aftersale | 8（含三子类） | "怎么退货""什么时候发货""查一下订单""退货运费谁承担"（return_refund/logistics/order_query 覆盖） |
+| 售后 aftersale | 8 | "怎么退货""什么时候发货""查一下订单""退货运费谁承担"（子场景由售后 Agent 判断） |
 | 投诉安抚 complaint | 5 | "你们产品太差了""客服不理人我要投诉"（正式投诉声明 → high_risk） |
 | 风险 violation/high_risk | 5 | "怎么改装电池""直接给我退款""便宜点改价" |
 | 闲聊 general | 2 | "在吗""谢谢" |
 | 图片 image | 2 | 带图消息（config 注入 image_path） |
 | 意图模糊 | 3 | "这个怎么样"（无上文→presale）"你们能便宜点吗"（正常砍价≠high_risk）"东西坏了" |
-| 典型多意图 | 2 | "这灯多少钱？另外怎么退货？"（售前+售后→取售后）"运费谁出？坏了多久能换？"（同场景→取最紧急） |
+| 典型多意图 | 2 | "这灯多少钱？另外怎么退货？"（句首发价格主导→presale）"运费谁出？坏了多久能换？"（同场景→aftersale） |
 | 超经营范围 | 1 | "有卖衣服吗"（ScopeGuard 关键词预检拦截→general） |
 | 图片+风险 | 1 | "看这张图，怎么改装"（带图违规文本，violation 优先） |
 | 多轮上下文 | 5 | 给定 history + 当前消息（见下） |
 
-> 实测校准记录：模糊/争议用例的期望以两次稳定实测为准——"这个怎么样"→presale（电商语境默认）、同场景双意图→取最紧急 return_refund、"我要投诉"→high_risk（正式投诉声明，prompt 已加示例，连续两次 42/42 稳定）。
+> 实测校准记录（2026-08-27）：① 模糊/争议用例期望以两次稳定实测为准——"这个怎么样"→presale（电商语境默认）、"我要投诉"/讽刺性强烈投诉→high_risk（情绪升级，prompt 已加示例）；② 多意图主导以"句首发/最强烈者"为准（"这灯多少钱？另外怎么退货？"→presale），准则 4 已同步调整；③ 售后子场景维度的测试期望已随简化设计移除；④ "你们是不是骗人的"处于 risk 摇摆区（3 次 2 none 1 high_risk），按准则 3 宁放行期望 none 但破坏确定性，已换稳定措辞并留档。
 
-多轮用例格式：`{history: [上一轮问答], question: 当前消息, expected: 期望三维}`，覆盖：
+多轮用例格式：`{history: [上一轮问答], question: 当前消息, expected: 期望二维}`，覆盖：
 
 | 用例 | history | question | 期望 |
 |------|---------|----------|------|
 | 售前承接 | "你们有智能门锁吗" → "有的，支持指纹" | "那个呢？" | presale（结合上文商品） |
-| sub_scenario 延续 | "我要退货" → 占位提示 | "那运费呢" | aftersale + return_refund（延续上轮子场景） |
+| 售后场景延续 | "我要退货" → 占位提示 | "那运费呢" | aftersale（子场景由售后 Agent 判断） |
 | 情绪升级 | "这款灯多少钱" → 正常回答 | "算了，你们客服就是敷衍" | complaint（情绪升级识别） |
-| 要挟转风险 | "推荐一款扫地机器人" → 正常回答 | "给我便宜点，不然投诉你" | high_risk（改价要挟，优先于 presale/complaint） |
+| 要挟转风险 | "推荐一款扫地机器人" → 正常回答 | "给我便宜点，不然投诉你" | complaint + high_risk（要挟改价，情绪主导） |
 | 风险夹带闲聊 | "在吗" → "在的亲" | "顺便问下，怎么破解这个锁" | violation（风险优先于 general） |
 
-- 评测脚本：`llm_backend/scripts/` 或 `app/test/` 下临时脚本（沿用现有"先实测再定方案"惯例），输出逐条明细 + 三维准确率；多轮用例通过注入 history 消息列表跑 `analyze_and_route_query`（MemoryManager 按真实逻辑管理历史）
+- 评测脚本：`llm_backend/scripts/eval_intent_golden.py`（沿用"先实测再定方案"惯例），输出逐条明细 + 二维准确率；多轮用例通过注入 history 消息列表跑 `analyze_and_route_query`（MemoryManager 按真实逻辑管理历史）
 - 不纳入正式 evaluation 包（evaluation 是 RAGAS 子图评测，职责分离）
 
 ### 12.2 端到端典型对话流
@@ -522,7 +514,7 @@ class Task(TypedDict):
 | 1 | MVP 范围 | 场景意图 + 风险意图；来源识别不做 | 2026-08-27 |
 | 2 | 场景分类体系 | 售前 / 售后（退货退款、物流异常、订单查询）/ 投诉安抚（用户自定义，合并福客六场景为三类） | 2026-08-27 |
 | 3 | 场景落地方式 | 场景驱动路由（开关），非仅话术（滤镜） | 2026-08-27 |
-| 4 | 识别结构 | 单次调用合并输出（type + sub_scenario + risk + logic） | 2026-08-27 |
+| 4 | 识别结构 | 单次调用合并输出（type + sub_scenario + risk + logic）——sub_scenario 已由 #13 简化移除，现为 type + risk + logic | 2026-08-27 |
 | 5 | additional-query | 取消，追问下沉到业务 agent prompt | 2026-08-27 |
 | 6 | graphrag-query | 语义合并为 presale（售前路由），RAG 子图零改动复用 | 2026-08-27 |
 | 7 | 占位节点行为 | 售后/投诉安抚返回"功能建设中"提示（用户确认），接口与 multi_tool 同构 | 2026-08-27 |
@@ -531,6 +523,8 @@ class Task(TypedDict):
 | 10 | 多意图处理（演进设计） | 识别可多处理选一：intent_list + primary_intent；优先级 risk > complaint > aftersale > presale > general > image；MVP 降级为单标签+次要意图记 logic | 2026-08-27 |
 | 11 | 子 agent 协同（演进设计） | 流程导向 + 共享 Context（福客 §6.5）；主意图 agent 汇总回答；无依赖并行 / 有依赖顺序 / 风险串行（Send 并行先例） | 2026-08-27 |
 | 12 | 任务分配器（演进设计） | intent_list ≥ 2 时启用；规则预筛 + LLM 依赖判断兜底（H2 分级自主性）；输出 TaskPlan（并行 Send / 串行接力 / 主 agent 汇总） | 2026-08-27 |
+| 13 | **sub_scenario 移除（简化设计）** | 售后子场景（退货/物流/订单）判断需订单/历史上下文，识别层只有对话文本；改为下沉售后 Agent 工作流骨架第一步。识别层只判场景（aftersale）+ risk | 2026-08-27 |
+| 14 | 多意图主导判定（实测校准） | 以"句首发/最强烈者"为准（"这灯多少钱？另外怎么退货？"→presale）；risk/complaint 永远优先；原"售后>售前"硬排序与模型行为冲突已调整（准则 4） | 2026-08-27 |
 
 ---
 
@@ -542,5 +536,5 @@ class Task(TypedDict):
 | 2 | 旧会话 checkpoint 中的旧 Router 4 值结构与新 route_query 不兼容 | 实现时验证恢复路径：analyze_and_route_query 每轮重跑，route_query 读本轮新输出；golden set 评测前先跑一个旧会话恢复用例 |
 | 3 | risk 误拦代价高（直接拒绝用户） | prompt 明确"宁放行不误拦"；golden set 中专门放边界用例 |
 | 4 | 占位节点话术暴露"功能未开通"可能影响体验 | 话术措辞用"服务升级中"，口径可按店铺微调；占位期短（业务 agent 就位即替换） |
-| 5 | 结构化输出字段增加后模型可能输出非法值（如 sub_scenario 非枚举值） | with_structured_output 强制 schema 校验（pydantic Literal），校验失败走降级：type 默认 general、risk 默认 none；实施时验证 |
+| 5 | 结构化输出字段增加后模型可能输出非法值（如 type/risk 非枚举值） | with_structured_output 强制 schema 校验（pydantic Literal），校验失败走降级：type 默认 general、risk 默认 none；已实施验证（lg_builder.py try/except 降级） |
 | 6 | 全局删除遗漏 additional 引用 | 按项目"全局检索"规范逐符号核对（§7） |

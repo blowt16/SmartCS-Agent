@@ -63,7 +63,7 @@ async def analyze_and_route_query(
     in_scope, scope_reason = scope_guard.check(user_question)
     if not in_scope:
         logger.warning("经营范围预检拦截: {}", scope_reason)
-        return {"router": Router(type="general", sub_scenario="none", risk="none", logic=f"超出经营范围: {scope_reason}")}
+        return {"router": Router(type="general", risk="none", logic=f"超出经营范围: {scope_reason}")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
@@ -96,7 +96,7 @@ async def analyze_and_route_query(
         )
     except Exception as e:
         logger.error("Router 结构化输出失败，降级为 general/none: {}", str(e))
-        response = Router(type="general", sub_scenario="none", risk="none", logic="结构化输出失败降级")
+        response = Router(type="general", risk="none", logic="结构化输出失败降级")
     logger.info("Analyze user query type completed, result: {}", response)
     return {"router": response}
 
