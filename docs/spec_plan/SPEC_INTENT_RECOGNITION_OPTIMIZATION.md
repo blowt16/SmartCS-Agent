@@ -140,54 +140,38 @@
 
 ### 4.1 目标架构总览（树形）
 
-```
-                        用户消息（文本/图片）
-                              │
-                              ▼
-                     指代消解（main.py:391，前置，不变）
-                              │
-                              ▼
-        ┌─────────────────────────────────────────────┐
-        │ 意图识别节点 analyze_and_route_query          │
-        │  ① ScopeGuard 经营范围预检（关键词级，保留）    │
-        │     └─ 超范围 → 走 general 闲聊路径（现状不变） │
-        │  ② LLM 低温合并输出 Router                    │
-        │     {type + sub_scenario + risk + logic}     │
-        └─────────────────────────────────────────────┘
-                              │ risk 优先级最高
-        ┌──────────┬──────────┼───────────┬────────────┬───────────────┐
-        ▼          ▼          ▼           ▼            ▼               ▼
-   risk=       risk=      type=image  type=general  type=presale  场景分支
-  violation   high_risk    图片节点    闲聊节点       售前路由
-        │          │       【现有      【现有      │【复用现有 RAG 子图】
-        │          │        ·不动】     ·不动】     ▼
-        ▼          ▼                               现有 RAG 子图
-   风险拦截节点   转人工节点                          (create_research_plan)
-  【新增】       【新增】                            planner→检索→summarize→final
-   拒绝话术      无法在线处理话术                     （售前导购，零改动）
-                                                          │
-                                              ┌───────────┴───────────┐
-                                              ▼                       ▼
-                                        type=aftersale          type=complaint
-                                        售后路由                投诉安抚路由
-                                        │【新增·占位】           │【新增·占位】
-                                        ▼                       ▼
-                                    售后占位节点               投诉安抚占位节点
-                                    （返回"服务升级中"提示，    （返回安抚占位话术，
-                                      接口预留）                接口预留）
-                                        │                       │
-                                        └────── 后续演进 ────────┘
-                                                │
-                          ┌─────────────────────┼──────────────────────┐
-                          ▼                     ▼                      ▼
-                    售后 agent 子图        投诉安抚 agent 子图      售前 agent（可选增强）
-                    （方式 C 骨架：        （安抚话术 + 情绪升级     （复用 RAG 子图 +
-                     信息确认 → RAG tool   判断 → high_risk 升级）     导购话术，后续 spec）
-                     → 政策检索 → 五选一
-                     分支决策 → 回答）
+```mermaid
+graph TD
+    U["用户消息（文本/图片）"] --> PR["指代消解<br/>main.py:391 · 前置 · 不变"]
+    PR --> R["意图识别节点 analyze_and_route_query<br/>① ScopeGuard 经营范围预检（关键词级 · 保留）<br/>② LLM 低温合并输出 Router：type + sub_scenario + risk + logic"]
+
+    R -->|"ScopeGuard 超范围"| G1["general 闲聊路径<br/>现状不变"]
+    R -->|"risk = violation"| N1["风险拦截节点 · 新增<br/>拒绝话术 + 合规引导"]
+    R -->|"risk = high_risk"| N2["转人工节点 · 新增<br/>无法在线处理话术"]
+    R -->|"type = image"| N3["图片节点 · 现有不动<br/>create_image_query"]
+    R -->|"type = general"| N4["闲聊节点 · 现有不动<br/>respond_to_general_query"]
+    R -->|"type = presale"| N5["现有 RAG 子图 · 复用<br/>create_research_plan<br/>planner → 检索 → summarize → final"]
+    R -->|"type = aftersale"| N6["售后占位节点 · 新增<br/>返回“服务升级中”提示 · 接口预留"]
+    R -->|"type = complaint"| N7["投诉安抚占位节点 · 新增<br/>返回安抚占位话术 · 接口预留"]
+
+    N5 -.->|"可选增强 · 后续 spec"| A3["售前 agent<br/>导购话术增强"]
+    N6 -.->|"后续演进"| A1["售后 agent 子图<br/>方式 C：信息确认 → RAG tool 政策检索 → 五选一分支决策 → 回答"]
+    N7 -.->|"后续演进"| A2["投诉安抚 agent 子图<br/>安抚话术 + 情绪升级判断 → high_risk 升级"]
+
+    classDef input fill:#f3e5f5,stroke:#8e24aa,color:#000;
+    classDef keep fill:#e8f5e9,stroke:#43a047,color:#000;
+    classDef reuse fill:#bbdefb,stroke:#1976d2,color:#000;
+    classDef new fill:#ffccbc,stroke:#e64a19,color:#000;
+    classDef future fill:#fff9c4,stroke:#f9a825,color:#000,stroke-dasharray: 6 4;
+
+    class U,PR,R input;
+    class G1,N3,N4 keep;
+    class N5 reuse;
+    class N1,N2,N6,N7 new;
+    class A1,A2,A3 future;
 ```
 
-**读图要点**：深色实线框为本次改动/新增；虚线框为后续业务 agent 演进方向（本阶段只留接口，见 §8）。路由优先级从上到下递减：risk 拦截 > image/general 技术路由 > 场景分支（presale/aftersale/complaint）。
+**读图要点**（颜色对照）：紫色=入口与识别节点；绿色=现有不动；蓝色=复用；橙色=本次新增；黄色虚线=后续业务 agent 演进方向（本阶段只留接口，见 §8）。路由优先级：risk 拦截 > image/general 技术路由 > 场景分支（presale/aftersale/complaint）。
 
 ### 4.2 意图识别输出结构（Router 扩展）
 
