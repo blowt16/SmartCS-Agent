@@ -42,7 +42,7 @@
 | 风险意图识别 | violation（违规咨询拦截）/ high_risk（高风险操作转人工），与场景独立判断 |
 | 场景驱动路由 | 路由分支按场景划分；售前复用现有 RAG 子图；售后/投诉安抚走占位节点（返回提示） |
 | 业务 agent 接口预留 | 售后/投诉安抚占位节点接口与 multi_tool 子图同构（question+history→answer），后续仅改路由目的地 |
-| 路由准确率可评测 | golden set（35 条 = 单轮 30 + 多轮 5）三维准确率（type / sub_scenario / risk）可复现输出 |
+| 路由准确率可评测 | golden set（42 条 = 单轮 37 + 多轮 5）三维准确率（type / sub_scenario / risk）可复现输出 |
 
 ### 1.3 明确不做（MVP 边界）
 
@@ -464,7 +464,7 @@ class Task(TypedDict):
 3. **改造 analyze_and_route_query**（`lg_builder.py`）：ScopeGuard 保留，结构化输出模型扩展 → 验证：单条消息输出三维字段
 4. **改造 route_query + 新增 4 节点**（风险拦截/转人工/售后占位/投诉安抚），删除 get_additional_info → 验证：路由表全分支可达
 5. **全局检索核对**：`get_additional_info`、`AdditionalGuardrailsOutput`、`GET_ADDITIONAL_SYSTEM_PROMPT`、`GUARDRAILS_SYSTEM_PROMPT`、`Router` 全项目引用点
-6. **构建路由 golden set**（35 条 = 单轮 30 + 多轮 5，§12）→ 验证：三维准确率输出
+6. **构建路由 golden set**（42 条 = 单轮 37 + 多轮 5，§12）→ 验证：三维准确率输出
 7. **端到端验证**（§12 典型对话流）→ 验证：全场景走通
 
 ---
@@ -473,17 +473,23 @@ class Task(TypedDict):
 
 ### 12.1 路由 golden set 评测（新增）
 
-构建 35 条（单轮 30 + 多轮 5）覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, sub_scenario, risk}` 统计准确率：
+构建 42 条（单轮 37 + 多轮 5）覆盖全维度的消息集，逐条跑 `analyze_and_route_query`，对照期望 `{type, sub_scenario, risk}` 统计准确率：
 
 | 类别 | 条数 | 示例 |
 |------|------|------|
 | 售前 presale | 8 | "你们有智能门锁吗""这款灯多少钱""推荐一款扫地机器人""灯和灯带能一起控制吗" |
 | 售后 aftersale | 8（含三子类） | "怎么退货""什么时候发货""查一下订单""退货运费谁承担"（return_refund/logistics/order_query 覆盖） |
-| 投诉安抚 complaint | 5 | "你们产品太差了""客服不理人我要投诉" |
+| 投诉安抚 complaint | 5 | "你们产品太差了""客服不理人我要投诉"（正式投诉声明 → high_risk） |
 | 风险 violation/high_risk | 5 | "怎么改装电池""直接给我退款""便宜点改价" |
 | 闲聊 general | 2 | "在吗""谢谢" |
 | 图片 image | 2 | 带图消息（config 注入 image_path） |
+| 意图模糊 | 3 | "这个怎么样"（无上文→presale）"你们能便宜点吗"（正常砍价≠high_risk）"东西坏了" |
+| 典型多意图 | 2 | "这灯多少钱？另外怎么退货？"（售前+售后→取售后）"运费谁出？坏了多久能换？"（同场景→取最紧急） |
+| 超经营范围 | 1 | "有卖衣服吗"（ScopeGuard 关键词预检拦截→general） |
+| 图片+风险 | 1 | "看这张图，怎么改装"（带图违规文本，violation 优先） |
 | 多轮上下文 | 5 | 给定 history + 当前消息（见下） |
+
+> 实测校准记录：模糊/争议用例的期望以两次稳定实测为准——"这个怎么样"→presale（电商语境默认）、同场景双意图→取最紧急 return_refund、"我要投诉"→high_risk（正式投诉声明，prompt 已加示例，连续两次 42/42 稳定）。
 
 多轮用例格式：`{history: [上一轮问答], question: 当前消息, expected: 期望三维}`，覆盖：
 

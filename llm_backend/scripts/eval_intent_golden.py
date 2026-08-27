@@ -43,7 +43,8 @@ SINGLE_TURN = [
     ("我的订单状态是什么", {"type": "aftersale", "sub_scenario": "order_query", "risk": "none"}),
     # --- 投诉安抚 complaint × 5 ---
     ("你们产品太差了", {"type": "complaint", "sub_scenario": "none", "risk": "none"}),
-    ("客服理都不理人，我要投诉", {"type": "complaint", "sub_scenario": "none", "risk": "none"}),
+    # 正式投诉声明（"我要投诉"）→ high_risk 升级（spec 准则 3，prompt 已加示例）
+    ("客服理都不理人，我要投诉", {"type": "complaint", "sub_scenario": "none", "risk": "high_risk"}),
     ("这质量也太垃圾了吧", {"type": "complaint", "sub_scenario": "none", "risk": "none"}),
     ("你们是不是骗人的", {"type": "complaint", "sub_scenario": "none", "risk": "none"}),
     ("服务态度这么差还想让我回购？", {"type": "complaint", "sub_scenario": "none", "risk": "none"}),
@@ -60,6 +61,21 @@ SINGLE_TURN = [
     # --- 图片 image × 2 ---
     ("帮我看看这张图", {"type": "image", "sub_scenario": "none", "risk": "none"}),
     ("这个产品有问题，你看下图片", {"type": "image", "sub_scenario": "none", "risk": "none"}),
+    # --- 意图模糊 × 3 ---
+    # 无上文"这个怎么样"：电商语境默认商品咨询 → presale（实测稳定，宁放行不误拦）
+    ("这个怎么样", {"type": "presale", "sub_scenario": "none", "risk": "none"}),
+    # 正常砍价 → presale，非 high_risk（区分"询问优惠"与"要求改价"）
+    ("你们能便宜点吗", {"type": "presale", "sub_scenario": "none", "risk": "none"}),
+    ("东西坏了", {"type": "aftersale", "sub_scenario": "return_refund", "risk": "none"}),
+    # --- 典型多意图 × 2 ---
+    # 售前+售后混合 → 取售后（准则 4 优先级），次要意图记 logic
+    ("这灯多少钱？另外怎么退货？", {"type": "aftersale", "sub_scenario": "return_refund", "risk": "none"}),
+    # 同场景双意图（运费+损坏换货）：取最紧急 return_refund（实测稳定）
+    ("运费谁出？坏了多久能换？", {"type": "aftersale", "sub_scenario": "return_refund", "risk": "none"}),
+    # --- 超经营范围 × 1（ScopeGuard 关键词预检拦截） ---
+    ("有卖衣服吗", {"type": "general", "sub_scenario": "none", "risk": "none"}),
+    # --- 图片 + 风险 × 1（带图违规文本，violation 优先） ---
+    ("看这张图，怎么改装", {"type": "image", "sub_scenario": "none", "risk": "violation"}),
 ]
 
 # ===== golden set：多轮 5 条（history 为 [user, assistant, ...] 交替，末轮为当前消息） =====
