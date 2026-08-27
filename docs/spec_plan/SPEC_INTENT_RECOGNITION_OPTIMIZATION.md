@@ -138,7 +138,58 @@
 
 ## 4. 目标架构
 
-### 4.1 意图识别输出结构（Router 扩展）
+### 4.1 目标架构总览（树形）
+
+```
+                        用户消息（文本/图片）
+                              │
+                              ▼
+                     指代消解（main.py:391，前置，不变）
+                              │
+                              ▼
+        ┌─────────────────────────────────────────────┐
+        │ 意图识别节点 analyze_and_route_query          │
+        │  ① ScopeGuard 经营范围预检（关键词级，保留）    │
+        │     └─ 超范围 → 走 general 闲聊路径（现状不变） │
+        │  ② LLM 低温合并输出 Router                    │
+        │     {type + sub_scenario + risk + logic}     │
+        └─────────────────────────────────────────────┘
+                              │ risk 优先级最高
+        ┌──────────┬──────────┼───────────┬────────────┬───────────────┐
+        ▼          ▼          ▼           ▼            ▼               ▼
+   risk=       risk=      type=image  type=general  type=presale  场景分支
+  violation   high_risk    图片节点    闲聊节点       售前路由
+        │          │       【现有      【现有      │【复用现有 RAG 子图】
+        │          │        ·不动】     ·不动】     ▼
+        ▼          ▼                               现有 RAG 子图
+   风险拦截节点   转人工节点                          (create_research_plan)
+  【新增】       【新增】                            planner→检索→summarize→final
+   拒绝话术      无法在线处理话术                     （售前导购，零改动）
+                                                          │
+                                              ┌───────────┴───────────┐
+                                              ▼                       ▼
+                                        type=aftersale          type=complaint
+                                        售后路由                投诉安抚路由
+                                        │【新增·占位】           │【新增·占位】
+                                        ▼                       ▼
+                                    售后占位节点               投诉安抚占位节点
+                                    （返回"服务升级中"提示，    （返回安抚占位话术，
+                                      接口预留）                接口预留）
+                                        │                       │
+                                        └────── 后续演进 ────────┘
+                                                │
+                          ┌─────────────────────┼──────────────────────┐
+                          ▼                     ▼                      ▼
+                    售后 agent 子图        投诉安抚 agent 子图      售前 agent（可选增强）
+                    （方式 C 骨架：        （安抚话术 + 情绪升级     （复用 RAG 子图 +
+                     信息确认 → RAG tool   判断 → high_risk 升级）     导购话术，后续 spec）
+                     → 政策检索 → 五选一
+                     分支决策 → 回答）
+```
+
+**读图要点**：深色实线框为本次改动/新增；虚线框为后续业务 agent 演进方向（本阶段只留接口，见 §8）。路由优先级从上到下递减：risk 拦截 > image/general 技术路由 > 场景分支（presale/aftersale/complaint）。
+
+### 4.2 意图识别输出结构（Router 扩展）
 
 `lg_states.py:7` 改造：
 
@@ -163,7 +214,7 @@ class Router(TypedDict):
 
 **要点**：原 4 类技术路由中 `graphrag-query` 被 `presale` 取代（语义合并："知识库可答的业务问题"=售前导购）、`additional-query` 删除；`general`/`image` 语义不变。`sub_scenario` 是本次为售后 agent 预留的关键接口字段。
 
-### 4.2 路由表（MVP 占位版）
+### 4.3 路由表（MVP 占位版）
 
 ```
 意图识别输出（risk 优先级最高）
@@ -179,7 +230,7 @@ class Router(TypedDict):
 
 **路由优先级原则**：risk 拦截最优先——违规/高风险消息不进入任何业务处理路径（福客 D5"违规咨询明确拒绝"）。
 
-### 4.3 状态设计
+### 4.4 状态设计
 
 - `AgentState` 结构不变（`router` 字段已存在，`lg_states.py:59`），仅 `Router` 类型扩展
 - 占位节点不写状态字段（纯静态话术返回），避免为一次性占位设计持久化
@@ -255,7 +306,7 @@ class Router(TypedDict):
 |------|------|------|
 | `llm_backend/app/lg_agent/lg_states.py` | 修改 | `Router` 类型扩展为 type 五值 + sub_scenario + risk |
 | `llm_backend/app/lg_agent/lg_prompts.py` | 修改/删除 | ROUTER_SYSTEM_PROMPT 重写（§6.1）；删 GET_ADDITIONAL_SYSTEM_PROMPT、GUARDRAILS_SYSTEM_PROMPT |
-| `llm_backend/app/lg_agent/lg_builder.py` | 修改/新增/删除 | ① analyze_and_route_query：ScopeGuard 预检保留但拦截返回值改为新枚举（`lg_builder.py:76` 的 `type="general-query"` → `type="general"`），合并输出三维 Router（结构化输出模型同步扩展）；② route_query：按 §4.2 路由表接条件边；③ 新增风险拦截节点 / 转人工节点 / 售后占位节点 / 投诉安抚占位节点（静态话术，见 §6.3）；④ 删除 get_additional_info 节点与 AdditionalGuardrailsOutput 类 |
+| `llm_backend/app/lg_agent/lg_builder.py` | 修改/新增/删除 | ① analyze_and_route_query：ScopeGuard 预检保留但拦截返回值改为新枚举（`lg_builder.py:76` 的 `type="general-query"` → `type="general"`），合并输出三维 Router（结构化输出模型同步扩展）；② route_query：按 §4.3 路由表接条件边；③ 新增风险拦截节点 / 转人工节点 / 售后占位节点 / 投诉安抚占位节点（静态话术，见 §6.3）；④ 删除 get_additional_info 节点与 AdditionalGuardrailsOutput 类 |
 | `llm_backend/main.py` | 检查 | 无 additional 相关引用（预计无改动，需全局检索确认） |
 
 **全局检索要求**（项目规范）：`get_additional_info`、`AdditionalGuardrailsOutput`、`GET_ADDITIONAL_SYSTEM_PROMPT`、`GUARDRAILS_SYSTEM_PROMPT`、`Router` 全部引用点逐一核对同步修改。
