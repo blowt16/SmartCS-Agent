@@ -266,7 +266,7 @@ class Router(TypedDict):
 1. 结合对话历史判断真实意图（如"那个呢？"需结合上文商品上下文）
 2. 区分"询问政策"与"要求执行操作"：问退款政策 → 正常；要求直接退钱 → high_risk
 3. 拿不准时 risk 取 none，宁放行不误拦
-4. 一条消息含多个意图时（如"这灯多少钱？另外怎么退货？"），取主导/最紧急意图——售后/投诉/风险优先于售前
+4. 一条消息含多个意图时（如"这灯多少钱？另外怎么退货？"），取主导/最紧急意图，优先级：risk > complaint > aftersale > presale > general > image；次要意图在 logic 中简述（如"主意图退货咨询，次要意图售前价格"）——识别不丢信息，处理选一（借鉴福客 D8"五选一处理分支"）
 ```
 
 ### 6.2 删除的 prompt
@@ -316,6 +316,48 @@ InputState{question: str, history: list} → OutputState{answer: str}
 - **投诉安抚 agent**：安抚话术 + 情绪升级判断（high_risk 升级路径），是否挂 RAG tool 由后续 spec 定
 - **售前 agent**：复用现有 RAG 子图，可增强为导购话术（后续 spec）
 
+### 8.3 多意图处理与 Agent 协同演进（后续 agent 方案的设计依据）
+
+> 本节为后续业务 agent 方案的多意图/协同设计依据，**本阶段不实现**；接口形状（§8.1）与 Router 结构（§4.2）已兼容下述演进。
+
+#### 8.3.1 多意图识别与处理（借鉴福客："识别可多、处理选一"）
+
+| 机制 | 福客出处 | 本项目演进设计 |
+|------|---------|---------------|
+| 多维意图并存 | §9.2（推断） | Router 增加 `intent_list`（多值）+ `primary_intent`（主意图）字段——TypedDict 加字段向后兼容 |
+| 处理选一 | §10.2 D8 五选一 | `primary_intent` 决定路由，优先级：risk > complaint > aftersale > presale > general > image |
+| 任务拆解 | 附录A M3（媒体） | 复杂请求在业务 agent 内部分解为动作序列（"帮我换个颜色"→ 订单识别/库存查询/差价计算…），复用 `multi_tool` 子图 planner 模式（`planner/node.py` 任务分解） |
+| 多轮引导收敛 | §9.3 SPIIN（F3） | 信息不足时 agent 先追问、信息收齐再处理，不硬答 |
+
+MVP 阶段的单标签 + 次要意图记 logic（准则 4）即为本演进的降级形态。
+
+#### 8.3.2 子 agent 协同机制（借鉴福客："流程导向 + 共享 Context"）
+
+福客核心结论（§6.5）：**Agent 之间通过共享 Context（记忆标签+已确认信息）协同，而非对话协商**。本项目设计：
+
+| 设计点 | 内容 | 福客对应 |
+|--------|------|---------|
+| 流程编排非自由协商 | Agent 拓扑由业务处理顺序决定；不引入 agent 互发消息机制 | §6.5 流程导向、§6.1 A2 场景化动态编排 |
+| 共享上下文字段 | 主图 AgentState 扩展业务上下文（已确认信息、场景标签、前序产出摘要）；子图接口演进为 `question+history+context → answer+context_update` | 记忆标签共享（E1-E2）、链路接力（B6） |
+| 记忆共享（远期） | 用户级记忆标签（场景限定提取+字段化标签+声明式注入）；现状 MemoryManager 为会话级摘要 | §8 记忆画像 Agent |
+| 输出校验与交接 | 子图输出低温结构化可校验；high_risk 交接预留"已核对信息/进度/风险点"字段（未来接入人工/工单） | 结果校验（A5）、转人工三件套（D2） |
+
+#### 8.3.3 汇总回答归属：主意图 agent 汇总
+
+多意图处理后的最终回答**由主意图（primary_intent）对应 agent 整合产出**：编排器将 intent_list 与各 agent 产出（以 context 注入）交给主 agent，由其组织成一份完整回答。不引入独立"汇总 agent"（避免多一次 LLM 调用与无业务上下文的生硬拼接）。
+
+#### 8.3.4 多 agent 并行调用规则
+
+项目已有并行先例：`multi_tool` 子图 map-reduce 并行检索（Send API，`multi_tool.py:69-73`）。并行规则：
+
+| 场景 | 处理 |
+|------|------|
+| 意图间无依赖（如 aftersale 退货 + presale 价格） | ✅ 并行（延迟减半） |
+| 意图间有依赖（如"退了我再买个新的"） | ❌ 顺序接力（上下文携带前序产出，对应福客 B6） |
+| 含 risk/投诉 | ❌ 永远串行优先（拦截/安抚最优先，D8） |
+
+并行约束：并行 agent 的共享上下文为**输入快照**（不读对方中间产出，避免竞态）；无论并行/顺序，汇总统一由主意图 agent 完成（§8.3.3）。
+
 ---
 
 ## 9. 边界情况处理表
@@ -334,7 +376,7 @@ InputState{question: str, history: list} → OutputState{answer: str}
 | 10 | 超经营范围（"有卖衣服吗"） | ScopeGuard 关键词预检拦截 → general 路径的"无关问题"话术（保留现状） |
 | 11 | 拿不准的消息 | risk 取 none，type 按最可能场景；不误拦 |
 | 12 | 带图违规消息（"看这张图怎么改"） | risk=violation 优先拦截，不进图片节点 |
-| 13 | 多意图消息（"这灯多少钱？另外怎么退货？"） | 取主导/最紧急意图（准则 4）：售后优先 → aftersale |
+| 13 | 多意图消息（"这灯多少钱？另外怎么退货？"） | 取主导/最紧急意图（准则 4，优先级 risk > complaint > aftersale > presale > general > image）：售后优先 → aftersale，次要意图记入 logic |
 
 ---
 
@@ -416,6 +458,8 @@ InputState{question: str, history: list} → OutputState{answer: str}
 | 7 | 占位节点行为 | 售后/投诉安抚返回"功能建设中"提示（用户确认），接口与 multi_tool 同构 | 2026-08-27 |
 | 8 | 售后 agent 架构（后续 spec 依据） | 工作流骨架 + LLM 决策点 + 工具（福客 F4/F5/D8/H2 映射，方式 C） | 2026-08-27 |
 | 9 | 图片/闲聊 | 路由与节点不动 | 2026-08-27 |
+| 10 | 多意图处理（演进设计） | 识别可多处理选一：intent_list + primary_intent；优先级 risk > complaint > aftersale > presale > general > image；MVP 降级为单标签+次要意图记 logic | 2026-08-27 |
+| 11 | 子 agent 协同（演进设计） | 流程导向 + 共享 Context（福客 §6.5）；主意图 agent 汇总回答；无依赖并行 / 有依赖顺序 / 风险串行（Send 并行先例） | 2026-08-27 |
 
 ---
 
