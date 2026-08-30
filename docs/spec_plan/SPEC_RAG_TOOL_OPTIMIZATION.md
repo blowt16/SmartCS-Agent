@@ -154,13 +154,14 @@ async def _search_with_retry(query: str) -> list[dict]:
             raise
 
 
-def _tool_error(error_type: str, message: str) -> str:
+def _tool_error(error_type: str, retryable: bool, message: str) -> str:
     """错误信息（统一 JSON 协议，与 product_stock_lookup 一致）。
 
-    tool 内部已自动重试过瞬时错误，retryable 一律 false（LLM 不再盲目重试）。
+    瞬时类错误 tool 内部已自动重试过 → retryable=false（LLM 不再盲目重试）；
+    仅 invalid_argument（入参错误）为 true——修正参数后重试有意义。
     """
     return json.dumps(
-        {"status": "error", "error_type": error_type, "retryable": False, "message": message},
+        {"status": "error", "error_type": error_type, "retryable": retryable, "message": message},
         ensure_ascii=False,
     )
 
@@ -193,14 +194,22 @@ async def rag_retrieval(query: str) -> str:
         空结果：提示未检索到 + 可执行建议；
         失败：统一错误 JSON（status=error，含 error_type/retryable/message）。
     """
+    # 入参校验：query 为空 → 明确错误，引导 LLM 提供问题（retryable=true）
+    if not query or not query.strip():
+        return _tool_error(
+            "invalid_argument", True,
+            "参数错误：query 不能为空。请根据用户消息生成完整检索问题（可补全指代）后重试，"
+            "若确实无法生成检索问题，请直接回答或向用户澄清。",
+        )
+
     try:
         # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
-        docs = await _search_with_retry(query)
+        docs = await _search_with_retry(query.strip())
     except Exception as e:
         error_type, _ = _classify_error(e)
         logger.warning("RAG 检索异常: {} ({})", type(e).__name__, error_type)
         return _tool_error(
-            error_type,
+            error_type, False,
             f"知识检索失败（{error_type}），已自动重试仍未恢复。"
             "请告知用户当前知识检索暂不可用，稍后重试或转人工处理，不要编造知识库中不存在的内容。",
         )
@@ -247,6 +256,7 @@ async def rag_retrieval(query: str) -> str:
 |---|------|---------|
 | 1 | 正常检索（命中） | 文档片段列表，每段带【来源:文件名】前缀 |
 | 2 | 空结果（知识库无相关内容） | 提示 + 建议（换措辞/转 product_stock_lookup/说明未收录） |
+| 2a | query 为空/空白（LLM 参数错误） | error/invalid_argument（retryable=true），message 引导生成完整检索问题或直接回答/澄清 |
 | 3 | search 异常（DB 不可用） | 自动重试 1 次 → 仍失败 → 错误 JSON（db_timeout/db_connection，retryable=false），引导转人工，不抛异常、不编造 |
 | 3a | 检索挂死/超时 | wait_for(10s) → 自动重试 1 次 → 仍超时 → error/db_timeout，不无限等待 |
 | 3b | 永久错误（表不存在/认证失败） | 不重试 → error/db_config，LLM 直接转人工 |
@@ -298,6 +308,7 @@ async def rag_retrieval(query: str) -> str:
 | 3 | 来源溯源 | `【来源:{Path(file_path).name}】` 前缀——回答可追溯（福客 A4），file_path 空回退「未知」 | 2026-08-28 |
 | 4 | 错误兜底 | try/except 不抛异常，返回"暂不可用+转人工"提示，LLM 不得编造 | 2026-08-28 |
 | 5 | 错误处理分层（与商品 tool 对齐） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ 错误分类（db_timeout/db_connection 瞬时 vs db_config 永久）+ retryable=false；错误路径统一 JSON 协议（成功/空保持文本） | 2026-08-31 |
+| 6 | 入参校验（用户确认） | query 空值 → error/invalid_argument（retryable=true）返回 LLM；`_tool_error` 增加 retryable 参数（与商品 tool invalid_argument 行为一致）；空串不再直接检索 | 2026-08-31 |
 
 ---
 
@@ -310,3 +321,4 @@ async def rag_retrieval(query: str) -> str:
 | 3 | 返回格式变化影响未知消费方 | 实施步骤 3 全项目检索确认（当前无消费方，后续 agent 是唯一消费方） |
 | 4 | logger 未导入导致 NameError | 实施时补 `from app.core.logger import get_logger; logger = get_logger(service="rag_tool")` |
 | 5 | 自动重试放大检索压力 | 重试仅 1 次 + 仅瞬时错误；检索管线内部已有单路降级（_safe），重试叠加可控 |
+| 6 | 空串检索行为未定义 | 入参校验拦截（query 空值返回 invalid_argument），空串不再进入检索管线 |
