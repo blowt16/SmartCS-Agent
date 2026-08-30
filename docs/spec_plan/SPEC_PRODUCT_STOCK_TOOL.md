@@ -111,10 +111,19 @@ import json
 from typing import Optional
 
 from langchain_core.tools import tool
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import AsyncSessionLocal
 from app.models.product_price_stock import ProductPriceStock
+
+
+def _normalize_keyword(name: str) -> str:
+    """参数预处理：去全部空格 + 转义 ILIKE 通配符（%/_），防止注入式全表匹配。
+
+    空格去除后与表内名称（同样压缩空格）连续匹配——"京东京造 智能门锁"
+    可命中表内"京东京造 智能门锁 全自动3D人脸识别"（保留词序，精确度高）。
+    """
+    return name.replace(" ", "").replace("%", r"\%").replace("_", r"\_")
 
 
 def _ok(records: list[dict]) -> str:
@@ -169,12 +178,17 @@ async def product_stock_lookup(
             "若确实无法提取，请向用户询问具体想查询哪款商品。",
         )
     limit = max(1, min(int(limit), 20))  # 钳制 1~20，防超量
+    kw = _normalize_keyword(product_name)  # 去空格 + 通配符转义
 
     try:
         async with AsyncSessionLocal() as session:
             stmt = (
                 select(ProductPriceStock)
-                .where(ProductPriceStock.product_name.ilike(f"%{product_name.strip()}%"))
+                .where(
+                    func.replace(ProductPriceStock.product_name, " ", "").ilike(
+                        f"%{kw}%", escape="\\"
+                    )
+                )
                 .limit(limit)
             )
             if category:
@@ -215,7 +229,7 @@ async def product_stock_lookup(
 
 其他要点：
 
-- **模糊匹配**：`product_name ILIKE '%keyword%'`——传简称可命中完整长名（"门锁"→"京东京造智能门锁 全自动3D人脸识别..."）
+- **去空格容错匹配**（用户确认方案）：参数与表内名称均压缩空格后连续匹配——`func.replace(列, ' ', '') ILIKE '%压缩后关键词%'`。"京东京造 智能门锁"（参数含空格）可命中表内"京东京造 智能门锁 全自动3D人脸识别"；**保留词序约束**（精确度高，优于 AND 多词拆分）；参数侧同时转义 `%`/`_` 通配符（防注入式全表匹配）
 - **品类过滤**：`category = '智能门锁'` 精确等于（品类名来自 TSV 固定集合）
 - **排序**：不排序（按表内 id 顺序），LLM 从结果中自行选择——MVP 简单化
 - **limit 钳制**：1~20（`int()` 转换 + 钳制，防 LLM 传非数字/超大值）
@@ -290,6 +304,7 @@ async def product_stock_lookup(
 | 3 | 返回格式 | JSON 数组字符串，空结果 `[]` | 2026-08-28 |
 | 4 | 封装模式 | langchain `@tool` 薄封装（复用 rag_tool.py 模式），内部直接 SQLAlchemy 查询 | 2026-08-28 |
 | 5 | 错误处理（用户补充） | **不抛异常**——所有路径（成功/空/入参错误/DB 异常）返回结构化三态 JSON，error/empty 携带详细 message 与可执行建议，供 LLM 自主判断下一步 | 2026-08-28 |
+| 6 | 空格差异匹配（用户方案） | 参数与表内名称**两侧去空格**后连续匹配（func.replace 列 + 参数预处理），保留词序、精确度高；替代 AND 多词拆分 | 2026-08-28 |
 
 ---
 
@@ -297,7 +312,7 @@ async def product_stock_lookup(
 
 | # | 风险 | 对策 |
 |---|------|------|
-| 1 | ILIKE 模糊匹配命中噪声（"灯"匹配灯带/灯泡/床头灯） | limit 截断 + LLM 从结果选；需要时后续可加名称相关度排序（LENGTH 升序） |
+| 1 | 去空格连续匹配仍会命中噪声（"灯"匹配灯带/灯泡/床头灯） | limit 截断 + LLM 从结果选；需要时后续可加名称相关度排序（LENGTH 升序）；通配符转义已在参数预处理中（_normalize_keyword） |
 | 2 | LLM 抽取商品名失败（长名） | 模糊匹配已缓解；prompt 引导传简称；边界 #4 空结果转 rag_retrieval |
 | 3 | tool 与 rag_retrieval 混用混乱 | docstring 明确分工；empty 状态 message 内引导转 rag_retrieval；后续 agent prompt 注明"价格库存→product_stock_lookup，参数政策→rag_retrieval" |
 | 4 | AsyncSessionLocal 生命周期（tool 内建会话） | 每次调用独立 `async with`，无跨请求会话泄漏 |
