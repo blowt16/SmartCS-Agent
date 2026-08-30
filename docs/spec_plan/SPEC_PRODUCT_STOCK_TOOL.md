@@ -260,6 +260,7 @@ async def product_stock_lookup(
 | 7 | 库存 0 商品 | status=ok，返回 stock_quantity=0，LLM 回答"无货" |
 | 8 | 价格范围格式（"1999-2999 元"已均值入库） | 返回单值 current_price（导入脚本已处理） |
 | 9 | DB 连接异常 | status=error/database，message 告知用户暂不可用稍后重试/转人工（**不抛异常**，错误信息给 LLM 判断） |
+| 10 | 通配符注入（LLM 传 "%" 或 "_"） | `_normalize_keyword` 转义为 `\%`/`\_` + `escape="\\"`——匹配不到任何商品返回 empty（而非全表返回） |
 
 ---
 
@@ -305,6 +306,7 @@ async def product_stock_lookup(
 | 4 | 封装模式 | langchain `@tool` 薄封装（复用 rag_tool.py 模式），内部直接 SQLAlchemy 查询 | 2026-08-28 |
 | 5 | 错误处理（用户补充） | **不抛异常**——所有路径（成功/空/入参错误/DB 异常）返回结构化三态 JSON，error/empty 携带详细 message 与可执行建议，供 LLM 自主判断下一步 | 2026-08-28 |
 | 6 | 空格差异匹配（用户方案） | 参数与表内名称**两侧去空格**后连续匹配（func.replace 列 + 参数预处理），保留词序、精确度高；替代 AND 多词拆分 | 2026-08-28 |
+| 7 | 通配符转义（用户采纳） | `_normalize_keyword` 转义 `%`/`_` + `ilike(..., escape="\\")`——防注入式全表匹配（边界 #10） | 2026-08-28 |
 
 ---
 
