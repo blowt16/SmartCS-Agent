@@ -84,6 +84,16 @@
 | 空结果 | ① 换措辞/更具体重试；② 若询问价格/库存 → 用 product_stock_lookup；③ 可向用户说明暂未收录该信息 |
 | 检索异常 | 告知用户当前知识检索暂不可用，稍后重试或转人工；不编造内容 |
 
+### 3.4 错误处理分层（与 product_stock_lookup 对齐）
+
+| 层 | 手段 | 说明 |
+|----|------|------|
+| ① 超时保护 | `asyncio.wait_for(10s)` | DB/Embedding API 挂死时 tool 调用不无限等待 |
+| ② 自动重试 | 瞬时错误重试 1 次（0.5s 间隔） | `db_timeout`/`db_connection` 类瞬时故障自愈；SELECT 幂等重试安全 |
+| ③ 错误分类 + retryable | `_classify_error` 异常映射 | 瞬时（timeout/connection）vs 永久（config/unknown）；**tool 已自动重试过，返回的 error 一律 retryable=false**，防 LLM 盲目重试 |
+
+**错误信息统一 JSON 协议**（与 product_stock_lookup 完全一致）：成功/空结果保持文本形态（文档片段），**错误路径返回 JSON**——`{"status":"error","error_type":"...","retryable":false,"message":"..."}`。agent 处理逻辑：尝试解析 JSON，status=error 即按错误协议处理；解析失败=成功内容。
+
 ---
 
 ## 4. 目标设计
@@ -103,11 +113,56 @@ RAG 检索工具（langchain @tool 薄封装）
     llm.bind_tools([rag_retrieval, product_stock_lookup])
 """
 
+import asyncio
+import json
 from pathlib import Path
 
 from langchain_core.tools import tool
+from sqlalchemy.exc import InvalidPasswordError, OperationalError, ProgrammingError
 
 from app.services.rag_retriever_service import get_rag_retriever_service
+
+# 检索超时与重试配置（与 product_stock_lookup 对齐）
+DB_TIMEOUT_SECONDS = 10.0   # 超时保护：检索挂死时 tool 调用不无限等待
+DB_RETRY_TIMES = 1          # 瞬时错误自动重试次数（检索幂等，重试安全）
+DB_RETRY_INTERVAL = 0.5     # 重试间隔（秒）
+
+
+def _classify_error(e: Exception) -> tuple[str, bool]:
+    """异常 → (error_type, retryable)。瞬时类（超时/连接）可自动重试；永久类不重试。"""
+    if isinstance(e, asyncio.TimeoutError):
+        return "db_timeout", True
+    if isinstance(e, OperationalError):
+        return "db_connection", True
+    if isinstance(e, (ProgrammingError, InvalidPasswordError)):
+        return "db_config", False
+    return "unknown", False
+
+
+async def _search_with_retry(query: str) -> list[dict]:
+    """超时保护 + 瞬时错误自动重试（与 product_stock_lookup._query_with_retry 同模式）。"""
+    for attempt in range(DB_RETRY_TIMES + 1):
+        try:
+            return await asyncio.wait_for(
+                get_rag_retriever_service().search(query), timeout=DB_TIMEOUT_SECONDS
+            )
+        except Exception as e:
+            _, retryable = _classify_error(e)
+            if attempt < DB_RETRY_TIMES and retryable:
+                await asyncio.sleep(DB_RETRY_INTERVAL)
+                continue
+            raise
+
+
+def _tool_error(error_type: str, message: str) -> str:
+    """错误信息（统一 JSON 协议，与 product_stock_lookup 一致）。
+
+    tool 内部已自动重试过瞬时错误，retryable 一律 false（LLM 不再盲目重试）。
+    """
+    return json.dumps(
+        {"status": "error", "error_type": error_type, "retryable": False, "message": message},
+        ensure_ascii=False,
+    )
 
 
 @tool
@@ -136,15 +191,18 @@ async def rag_retrieval(query: str) -> str:
     Returns:
         成功：相关文档片段列表（每段以换行分隔，含【来源:文件名】前缀）；
         空结果：提示未检索到 + 可执行建议；
-        失败：提示检索暂不可用。
+        失败：统一错误 JSON（status=error，含 error_type/retryable/message）。
     """
     try:
-        docs = await get_rag_retriever_service().search(query)
+        # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
+        docs = await _search_with_retry(query)
     except Exception as e:
-        logger.warning("RAG 检索异常: {}", e)
-        return (
-            "知识检索暂不可用（检索服务异常）。请告知用户稍后重试或转人工处理，"
-            "不要编造知识库中不存在的内容。"
+        error_type, _ = _classify_error(e)
+        logger.warning("RAG 检索异常: {} ({})", type(e).__name__, error_type)
+        return _tool_error(
+            error_type,
+            f"知识检索失败（{error_type}），已自动重试仍未恢复。"
+            "请告知用户当前知识检索暂不可用，稍后重试或转人工处理，不要编造知识库中不存在的内容。",
         )
 
     if not docs:
@@ -161,7 +219,7 @@ async def rag_retrieval(query: str) -> str:
     )
 ```
 
-> 说明：`logger` 需从 `app.core.logger` 导入（`get_logger(service="rag_tool")`），代码中补上。
+> 说明：`logger` 从 `app.core.logger` 导入（`get_logger(service="rag_tool")`），代码中补上（`_tool_error` 分支前）。
 
 ### 4.2 优化点对照
 
@@ -189,7 +247,9 @@ async def rag_retrieval(query: str) -> str:
 |---|------|---------|
 | 1 | 正常检索（命中） | 文档片段列表，每段带【来源:文件名】前缀 |
 | 2 | 空结果（知识库无相关内容） | 提示 + 建议（换措辞/转 product_stock_lookup/说明未收录） |
-| 3 | search 异常（DB 不可用） | 提示暂不可用 + 引导转人工，不抛异常、不编造 |
+| 3 | search 异常（DB 不可用） | 自动重试 1 次 → 仍失败 → 错误 JSON（db_timeout/db_connection，retryable=false），引导转人工，不抛异常、不编造 |
+| 3a | 检索挂死/超时 | wait_for(10s) → 自动重试 1 次 → 仍超时 → error/db_timeout，不无限等待 |
+| 3b | 永久错误（表不存在/认证失败） | 不重试 → error/db_config，LLM 直接转人工 |
 | 4 | file_path 为空 | 来源回退「未知」 |
 | 5 | 多文档命中 | 各段独立【来源】前缀，LLM 可区分多来源 |
 | 6 | 查询含特殊字符（%/_） | RAG 管线内部处理（向量/BM25 参数化），tool 层透传不干预 |
@@ -237,6 +297,7 @@ async def rag_retrieval(query: str) -> str:
 | 2 | 返回形态 | 文本形态 + 三态语义（成功=文档列表；空/错误=带建议提示），不 JSON 化（文档片段是自然语言） | 2026-08-28 |
 | 3 | 来源溯源 | `【来源:{Path(file_path).name}】` 前缀——回答可追溯（福客 A4），file_path 空回退「未知」 | 2026-08-28 |
 | 4 | 错误兜底 | try/except 不抛异常，返回"暂不可用+转人工"提示，LLM 不得编造 | 2026-08-28 |
+| 5 | 错误处理分层（与商品 tool 对齐） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ 错误分类（db_timeout/db_connection 瞬时 vs db_config 永久）+ retryable=false；错误路径统一 JSON 协议（成功/空保持文本） | 2026-08-31 |
 
 ---
 
@@ -248,3 +309,4 @@ async def rag_retrieval(query: str) -> str:
 | 2 | LLM 忽略空结果建议继续编造 | 空结果提示措辞明确"未检索到"；后续 agent prompt 加约束（与商品 tool 风险 #6 一致） |
 | 3 | 返回格式变化影响未知消费方 | 实施步骤 3 全项目检索确认（当前无消费方，后续 agent 是唯一消费方） |
 | 4 | logger 未导入导致 NameError | 实施时补 `from app.core.logger import get_logger; logger = get_logger(service="rag_tool")` |
+| 5 | 自动重试放大检索压力 | 重试仅 1 次 + 仅瞬时错误；检索管线内部已有单路降级（_safe），重试叠加可控 |

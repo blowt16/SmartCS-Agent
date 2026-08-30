@@ -107,14 +107,21 @@
     from app.services.product_stock_tool import product_stock_lookup
     llm.bind_tools([product_stock_lookup, rag_retrieval])
 """
+import asyncio
 import json
 from typing import Optional
 
 from langchain_core.tools import tool
 from sqlalchemy import func, select
+from sqlalchemy.exc import InvalidPasswordError, OperationalError, ProgrammingError
 
 from app.core.database import AsyncSessionLocal
 from app.models.product_price_stock import ProductPriceStock
+
+# 查询超时与重试配置
+DB_TIMEOUT_SECONDS = 10.0   # 超时保护：DB 挂死时 tool 调用不无限等待
+DB_RETRY_TIMES = 1          # 瞬时错误自动重试次数（SELECT 幂等，重试安全）
+DB_RETRY_INTERVAL = 0.5     # 重试间隔（秒）
 
 
 def _normalize_keyword(name: str) -> str:
@@ -124,6 +131,41 @@ def _normalize_keyword(name: str) -> str:
     可命中表内"京东京造 智能门锁 全自动3D人脸识别"（保留词序，精确度高）。
     """
     return name.replace(" ", "").replace("%", r"\%").replace("_", r"\_")
+
+
+def _classify_error(e: Exception) -> tuple[str, bool]:
+    """异常 → (error_type, retryable)。
+
+    瞬时类（超时/连接）可自动重试；永久类（配置/认证/SQL）重试无意义。
+    """
+    if isinstance(e, asyncio.TimeoutError):
+        return "db_timeout", True
+    if isinstance(e, OperationalError):          # 连接失败/断连/连接池耗尽
+        return "db_connection", True
+    if isinstance(e, (ProgrammingError, InvalidPasswordError)):
+        return "db_config", False                # 表不存在/认证失败/SQL 错误
+    return "unknown", False
+
+
+async def _query_with_retry(stmt) -> list:
+    """超时保护 + 瞬时错误自动重试。
+
+    asyncio.wait_for 防 DB 挂死；瞬时错误（timeout/connection）自动重试
+    DB_RETRY_TIMES 次；永久错误不重试直接抛出。重试后仍失败由调用方
+    返回 error（retryable=false，LLM 不再盲目重试）。
+    """
+    for attempt in range(DB_RETRY_TIMES + 1):
+        try:
+            async with AsyncSessionLocal() as session:
+                return (await asyncio.wait_for(
+                    session.execute(stmt), timeout=DB_TIMEOUT_SECONDS
+                )).scalars().all()
+        except Exception as e:
+            _, retryable = _classify_error(e)
+            if attempt < DB_RETRY_TIMES and retryable:
+                await asyncio.sleep(DB_RETRY_INTERVAL)
+                continue
+            raise
 
 
 def _ok(records: list[dict]) -> str:
@@ -141,9 +183,15 @@ def _empty(product_name: str, category: Optional[str]) -> str:
     return json.dumps({"status": "empty", "count": 0, "data": [], "message": msg}, ensure_ascii=False)
 
 
-def _error(error_type: str, message: str) -> str:
+def _error(error_type: str, retryable: bool, message: str) -> str:
+    """错误信息（统一协议）：error_type 分类 + retryable 标志供 LLM 决策。
+
+    注意：tool 内部已自动重试过瞬时错误，返回的 error 一律 retryable=false
+    （LLM 不再盲目重试）；仅 invalid_argument 为 true（修正参数后重试）。
+    """
     return json.dumps(
-        {"status": "error", "error_type": error_type, "count": 0, "data": [], "message": message},
+        {"status": "error", "error_type": error_type, "retryable": retryable,
+         "count": 0, "data": [], "message": message},
         ensure_ascii=False,
     )
 
@@ -170,34 +218,37 @@ async def product_stock_lookup(
         - empty: 无匹配，message 含建议
         - error: 入参/数据库异常，error_type + message 供 LLM 判断
     """
-    # 入参校验：product_name 为空 → 明确错误，引导 LLM 提取商品名重试
+    # 入参校验：product_name 为空 → 明确错误，引导 LLM 提取商品名重试（retryable=true）
     if not product_name or not product_name.strip():
         return _error(
-            "invalid_argument",
+            "invalid_argument", True,
             "参数错误：product_name 不能为空。请从用户消息中提取商品名称关键词（可传简称）后重试，"
             "若确实无法提取，请向用户询问具体想查询哪款商品。",
         )
     limit = max(1, min(int(limit), 20))  # 钳制 1~20，防超量
     kw = _normalize_keyword(product_name)  # 去空格 + 通配符转义
 
-    try:
-        async with AsyncSessionLocal() as session:
-            stmt = (
-                select(ProductPriceStock)
-                .where(
-                    func.replace(ProductPriceStock.product_name, " ", "").ilike(
-                        f"%{kw}%", escape="\\"
-                    )
-                )
-                .limit(limit)
+    stmt = (
+        select(ProductPriceStock)
+        .where(
+            func.replace(ProductPriceStock.product_name, " ", "").ilike(
+                f"%{kw}%", escape="\\"
             )
-            if category:
-                stmt = stmt.where(ProductPriceStock.category == category)
-            rows = (await session.execute(stmt)).scalars().all()
+        )
+        .limit(limit)
+    )
+    if category:
+        stmt = stmt.where(ProductPriceStock.category == category)
+
+    try:
+        # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
+        rows = await _query_with_retry(stmt)
     except Exception as e:
+        error_type, _ = _classify_error(e)
         return _error(
-            "database",
-            f"商品数据查询失败（数据库异常：{type(e).__name__}）。请告知用户当前价格查询暂不可用，稍后重试或转人工。",
+            error_type, False,
+            f"商品数据查询失败（{error_type}），已自动重试仍未恢复。"
+            "请告知用户当前价格查询暂不可用，稍后重试或转人工，不要编造价格。",
         )
 
     if not rows:
@@ -224,8 +275,17 @@ async def product_stock_lookup(
 |------|------|------|---------------------------|
 | `ok` | 查到 ≥1 条 | count + data 数组 | — |
 | `empty` | 无匹配（正常查询结果） | count=0 + message | 换关键词重试 / 转 rag_retrieval 查静态信息 / 向用户澄清 |
-| `error/invalid_argument` | product_name 空 | error_type + message | 重新提取商品名重试 / 询问用户具体商品 |
-| `error/database` | DB 查询异常 | error_type + message | 告知用户暂不可用稍后重试 / 转人工 |
+| `error/invalid_argument` | product_name 空 | error_type + **retryable=true** + message | 重新提取商品名重试 / 询问用户具体商品 |
+| `error/db_timeout` | 查询超时（10s，自动重试后） | error_type + **retryable=false** + message | 告知用户暂不可用稍后重试 / 转人工 |
+| `error/db_connection` | 连接失败/断连（自动重试后） | error_type + **retryable=false** + message | 同上 |
+| `error/db_config` | 表不存在/认证失败/SQL 错误（不重试） | error_type + **retryable=false** + message | 告知服务不可用，转人工 |
+| `error/unknown` | 其他异常 | error_type + **retryable=false** + message | 同上 |
+
+**错误处理分层**（解决 DB 连接等问题的三道防线）：
+
+1. **超时保护**：查询包 `asyncio.wait_for(10s)`——DB 挂死时 tool 调用不无限等待，变成"可分类的错误"
+2. **自动重试**：瞬时错误（`db_timeout`/`db_connection`）tool 内部自动重试 1 次（0.5s 间隔）——SELECT 幂等，重试安全；大部分瞬时故障自愈，根本不返回错误
+3. **错误分类 + retryable**：`_classify_error` 将异常映射为 `error_type` + `retryable`（瞬时可重试 / 永久不重试）；**tool 已自动重试过，返回给 LLM 的 error 一律 `retryable=false`**——避免 LLM 盲目重试循环；仅 `invalid_argument` 为 true（改参数后重试有意义）
 
 其他要点：
 
@@ -259,8 +319,10 @@ async def product_stock_lookup(
 | 6 | LLM 传 limit=100 或非数字 | 钳制为 20（int 转换 + 钳制，非数字按 5） |
 | 7 | 库存 0 商品 | status=ok，返回 stock_quantity=0，LLM 回答"无货" |
 | 8 | 价格范围格式（"1999-2999 元"已均值入库） | 返回单值 current_price（导入脚本已处理） |
-| 9 | DB 连接异常 | status=error/database，message 告知用户暂不可用稍后重试/转人工（**不抛异常**，错误信息给 LLM 判断） |
+| 9 | DB 连接异常 | 自动重试 1 次 → 仍失败 → status=error/db_connection（retryable=false），message 告知暂不可用/转人工（**不抛异常**，错误信息给 LLM 判断） |
 | 10 | 通配符注入（LLM 传 "%" 或 "_"） | `_normalize_keyword` 转义为 `\%`/`\_` + `escape="\\"`——匹配不到任何商品返回 empty（而非全表返回） |
+| 11 | DB 挂死/查询超时 | `asyncio.wait_for(10s)` 触发 → 自动重试 1 次 → 仍超时 → error/db_timeout（retryable=false），不无限等待 |
+| 12 | 表不存在/认证失败（永久错误） | 不重试（`_classify_error` 判 db_config）→ error/db_config（retryable=false），LLM 直接转人工 |
 
 ---
 
@@ -307,6 +369,7 @@ async def product_stock_lookup(
 | 5 | 错误处理（用户补充） | **不抛异常**——所有路径（成功/空/入参错误/DB 异常）返回结构化三态 JSON，error/empty 携带详细 message 与可执行建议，供 LLM 自主判断下一步 | 2026-08-28 |
 | 6 | 空格差异匹配（用户方案） | 参数与表内名称**两侧去空格**后连续匹配（func.replace 列 + 参数预处理），保留词序、精确度高；替代 AND 多词拆分 | 2026-08-28 |
 | 7 | 通配符转义（用户采纳） | `_normalize_keyword` 转义 `%`/`_` + `ilike(..., escape="\\")`——防注入式全表匹配（边界 #10） | 2026-08-28 |
+| 8 | 错误处理分层（DB 连接问题） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ `_classify_error` 错误分类 + retryable 标志（error 一律 false，防 LLM 盲目重试） | 2026-08-31 |
 
 ---
 
@@ -320,3 +383,4 @@ async def product_stock_lookup(
 | 4 | AsyncSessionLocal 生命周期（tool 内建会话） | 每次调用独立 `async with`，无跨请求会话泄漏 |
 | 5 | Decimal 序列化 | `float()` 转换后进 JSON（价格精度 2 位小数，float 足够） |
 | 6 | 错误信息被 LLM 忽略（继续编造价格） | message 措辞明确"未找到/查询失败"；后续 agent prompt 加约束"tool 返回 error/empty 时不得编造价格，按 message 建议执行" |
+| 7 | 自动重试放大 DB 压力 | 重试仅限 1 次 + 仅瞬时错误（timeout/connection），永久错误不重试；配置常量（DB_RETRY_TIMES）可调 |
