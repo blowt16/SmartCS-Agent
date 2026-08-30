@@ -89,10 +89,12 @@
 | 层 | 手段 | 说明 |
 |----|------|------|
 | ① 超时保护 | `asyncio.wait_for(10s)` | DB/Embedding API 挂死时 tool 调用不无限等待 |
-| ② 自动重试 | 瞬时错误重试 1 次（0.5s 间隔） | `db_timeout`/`db_connection` 类瞬时故障自愈；SELECT 幂等重试安全 |
-| ③ 错误分类 + retryable | `_classify_error` 异常映射 | 瞬时（timeout/connection）vs 永久（config/unknown）；**tool 已自动重试过，返回的 error 一律 retryable=false**，防 LLM 盲目重试 |
+| ② 自动重试 | 瞬时错误重试 1 次（0.5s 间隔） | `db_timeout`/`db_connection`/`api_unavailable` 类瞬时故障自愈；SELECT 幂等重试安全 |
+| ③ 错误分类 + retryable | `_classify_error` 异常映射 | 瞬时（timeout/connection/**api_unavailable**）vs 永久（config/unknown）；**tool 已自动重试过，返回的 error 一律 retryable=false**，防 LLM 盲目重试 |
 
-**错误信息统一 JSON 协议**（与 product_stock_lookup 完全一致）：成功/空结果保持文本形态（文档片段），**错误路径返回 JSON**——`{"status":"error","error_type":"...","retryable":false,"message":"..."}`。agent 处理逻辑：尝试解析 JSON，status=error 即按错误协议处理；解析失败=成功内容。
+**错误信息统一 JSON 协议**（与 product_stock_lookup 完全一致）：成功/空结果保持文本形态（文档片段），**错误路径返回 JSON**——`{"status":"error","error_type":"...","retryable":false,"message":"..."}`。
+
+**agent 消费约定（前缀匹配，非 try-parse）**：错误 JSON 用**固定前缀判断**——`text.startswith('{"status": "error"')` 即按错误协议处理；否则为成功/空内容。**不用 `json.loads` 试探**：成功内容（文档片段）理论可能是合法 JSON（知识库若含 JSON 文本），try-parse 存在误判歧义且以异常作正常路径；固定前缀匹配零歧义、零成本。LLM 消费同约定（agent prompt 注明"tool 返回以 `{"status": "error"` 开头即为错误"）。
 
 ---
 
@@ -114,6 +116,7 @@ RAG 检索工具（langchain @tool 薄封装）
 """
 
 import asyncio
+import aiohttp
 import json
 from pathlib import Path
 
@@ -129,13 +132,15 @@ DB_RETRY_INTERVAL = 0.5     # 重试间隔（秒）
 
 
 def _classify_error(e: Exception) -> tuple[str, bool]:
-    """异常 → (error_type, retryable)。瞬时类（超时/连接）可自动重试；永久类不重试。"""
+    """异常 → (error_type, retryable)。瞬时类（超时/连接/API）可自动重试；永久类不重试。"""
     if isinstance(e, asyncio.TimeoutError):
         return "db_timeout", True
     if isinstance(e, OperationalError):
         return "db_connection", True
     if isinstance(e, (ProgrammingError, InvalidPasswordError)):
         return "db_config", False
+    if isinstance(e, aiohttp.ClientError):          # Embedding API/HTTP 调用异常（网络抖动/限流）
+        return "api_unavailable", True
     return "unknown", False
 
 
@@ -260,6 +265,7 @@ async def rag_retrieval(query: str) -> str:
 | 3 | search 异常（DB 不可用） | 自动重试 1 次 → 仍失败 → 错误 JSON（db_timeout/db_connection，retryable=false），引导转人工，不抛异常、不编造 |
 | 3a | 检索挂死/超时 | wait_for(10s) → 自动重试 1 次 → 仍超时 → error/db_timeout，不无限等待 |
 | 3b | 永久错误（表不存在/认证失败） | 不重试 → error/db_config，LLM 直接转人工 |
+| 3c | Embedding API/HTTP 异常（网络抖动/限流） | 归 api_unavailable（瞬时）→ 自动重试 1 次 → 仍失败 → error/api_unavailable（retryable=false） |
 | 4 | file_path 为空 | 来源回退「未知」 |
 | 5 | 多文档命中 | 各段独立【来源】前缀，LLM 可区分多来源 |
 | 6 | 查询含特殊字符（%/_） | RAG 管线内部处理（向量/BM25 参数化），tool 层透传不干预 |
@@ -293,9 +299,11 @@ async def rag_retrieval(query: str) -> str:
 | 验证项 | 方法 |
 |--------|------|
 | 三态返回 | pytest：正常（带来源前缀）/ 空（建议文本）/ 异常（兜底文本） |
+| 异常分类 | pytest：注入 TimeoutError/OperationalError/ProgrammingError/aiohttp.ClientError/其他，断言 error_type 与 retryable 映射正确（含 api_unavailable） |
+| 入参校验 | pytest：query 空/空白 → invalid_argument + retryable=true |
 | description 正确性 | 人工核对无"价格、库存"误导；分工/触发/不触发完整 |
 | bind_tools 兼容 | DeepSeek/Ollama 绑定工具定义成功 |
-| 与商品 tool 协议一致性 | 后续 agent prompt 一套工具处理逻辑覆盖两 tool（成功=内容、非成功=按 message 行动） |
+| 与商品 tool 协议一致性 | 后续 agent prompt 一套工具处理逻辑覆盖两 tool（成功=内容、非成功=按 message 行动；错误判断用前缀匹配） |
 
 ---
 
@@ -309,6 +317,8 @@ async def rag_retrieval(query: str) -> str:
 | 4 | 错误兜底 | try/except 不抛异常，返回"暂不可用+转人工"提示，LLM 不得编造 | 2026-08-28 |
 | 5 | 错误处理分层（与商品 tool 对齐） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ 错误分类（db_timeout/db_connection 瞬时 vs db_config 永久）+ retryable=false；错误路径统一 JSON 协议（成功/空保持文本） | 2026-08-31 |
 | 6 | 入参校验（用户确认） | query 空值 → error/invalid_argument（retryable=true）返回 LLM；`_tool_error` 增加 retryable 参数（与商品 tool invalid_argument 行为一致）；空串不再直接检索 | 2026-08-31 |
+| 7 | 错误分类补 HTTP/API 异常（问题 A） | aiohttp.ClientError → api_unavailable（瞬时，可自动重试）——覆盖 Embedding API/远程调用异常（此前归 unknown 永久类，重试机会被浪费） | 2026-08-31 |
+| 8 | agent 解析歧义（问题 D） | 错误 JSON 用**前缀匹配**判断（`startswith('{"status": "error"')`）而非 try-parse——防知识库 JSON 片段误判；LLM 消费同约定 | 2026-08-31 |
 
 ---
 
