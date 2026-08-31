@@ -216,7 +216,8 @@ class ProductStockLookupInput(BaseModel):
     )
     limit: int = Field(
         default=5, ge=1, le=20,
-        description="返回条数上限（1~20）",
+        description="返回条数上限（1~20）。泛查询（用户问'有哪些 XX/卖什么'，无指定商品）"
+        "传 20 获取全量清单；单商品详情查询保持默认 5",
     )
 
 
@@ -230,6 +231,10 @@ async def product_stock_lookup(
 
     当用户询问商品价格、是否有货、库存情况时使用。动态数据（价格/库存）存储在
     数据库中，商品参数/规格/售后政策等静态信息请使用 rag_retrieval。
+
+    泛查询（用户问"有哪些沙发/卖什么"，未指定具体商品）：
+    - 以品类词作为 product_name 传入（如"沙发"），并传 limit=20 获取全量清单；
+      动态清单（名称/价格/库存）配合 rag_retrieval 的静态概述组装回答
 
     何时不要使用本工具：
     - 询问商品参数/规格/功能特点/售后政策 → 使用 rag_retrieval（静态知识库检索）
@@ -353,7 +358,8 @@ LLM 消费侧决策表（agent prompt 需注明，两 tool 共用一套逻辑）
 
 | 返回 | 判定 | 动作 |
 |------|------|------|
-| `ok` | count ≥ 1 | 从 data 选匹配商品直接回答价格/库存；多条无法区分时向用户澄清具体哪款 |
+| `ok`（单商品意图） | count ≥ 1 | 从 data 选匹配商品直接回答价格/库存；多条无法区分时向用户澄清具体哪款 |
+| `ok`（列表/泛查询意图） | count ≥ 1（limit=20） | 以 data 全量清单为主体（名称+价格+库存），配合 rag_retrieval 静态概述组装"有哪些 XX"回答；count=20 达上限时提示用户按品类/名称进一步筛选 |
 | `empty` | count = 0 | ① 换简称/关键词重试（**至多 1 次**，防无谓循环）② 用户意图为静态信息（参数/规格/政策）→ 转 `rag_retrieval` ③ 仍无 → 告知用户该信息暂未收录，或向用户澄清具体商品 |
 | `error` + retryable=true | 仅 `invalid_argument` | 修正参数（补商品名/品类）后重试 |
 | `error` + retryable=false | 其余全部 | **不再重试**；告知用户服务暂不可用，稍后重试或转人工；**禁止编造价格/库存** |
@@ -396,6 +402,7 @@ product_stock_lookup（动态：价格/库存）
 | 10 | 通配符注入（LLM 传 "%" 或 "_"） | `_normalize_keyword` 转义为 `\%`/`\_` + `escape="\\"`——匹配不到任何商品返回 empty（而非全表返回） |
 | 11 | DB 挂死/查询超时 | `asyncio.wait_for(10s)` 触发 → 自动重试 1 次 → 仍超时 → error/db_timeout（retryable=false），不无限等待 |
 | 12 | 表不存在/认证失败（永久错误） | 不重试（`_classify_error` 判 db_config）→ error/db_config（retryable=false），LLM 直接转人工 |
+| 13 | 泛查询（"你们有哪些沙发"，无指定商品） | description 指引品类词+limit=20 → status=ok 全量清单；LLM 组装清单回答；count=20 达上限提示进一步筛选 |
 
 ---
 
@@ -426,6 +433,7 @@ product_stock_lookup（动态：价格/库存）
 |--------|------|
 | 查询正确性 | pytest：mock 数据验证 ILIKE/category/limit/空结果/钳制逻辑/updated_at 降序排序 |
 | 参数 schema 完整性 | pytest 断言 `product_stock_lookup.args_schema.model_json_schema()`：三参数 description 存在、limit 含 minimum=1/maximum=20 |
+| limit 意图语义 | description 核对：含泛查询（limit=20）与单商品详情（默认 5）指引；mock 验证 limit=20 时 `stmt.limit(20)` 拼接正确 |
 | 真实数据（可选） | Postgres 起库 + 导入脚本后，`product_stock_lookup.ainvoke({"product_name": "门锁"})` 返回真实记录 |
 | bind_tools 兼容 | DeepSeek/Ollama 绑定 tool 定义不报错（工具 schema 生成成功） |
 | 后续 agent 预留 | spec 记录：售前/售后 agent 方案中 `bind_tools([product_stock_lookup, rag_retrieval])` |
@@ -447,6 +455,7 @@ product_stock_lookup（动态：价格/库存）
 | 9 | 目录结构（用户确认） | 两 tool 统一放 `app/tools/` 包：`product_stock_tool.py` 新建于此、`rag_tool.py` 自 `app/services/` 迁入（详见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #9）；检索管线（`rag_retriever_service` 等）不动 | 2026-08-31 |
 | 10 | 参数 schema 强化（主流最佳实践对照） | `@tool(args_schema=ProductStockLookupInput)`——Pydantic `Field` 承载参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema（langchain 默认 parse_docstring=False，docstring Args 不进 schema）；docstring 精简并补"何时不使用"负向段；排序改 `updated_at DESC`（结果序确定）；schema 内容纳入 pytest 断言 | 2026-08-31 |
 | 11 | 返回示例与降级流程文档化（用户要求） | §4.3 返回 JSON 示例（ok/empty/error 全形态，含 invalid_argument/db_connection）；§4.4 降级流程三层：tool 内部自动重试 → LLM 三态消费决策（empty 换词重试至多 1 次/静态意图转 rag_retrieval、error 不再重试）→ 跨工具降级链（error 禁止用 rag_retrieval 编造） | 2026-08-31 |
+| 12 | limit 按查询意图区分（用户确认） | **泛查询**（列表/浏览意图，无指定商品，"有哪些 XX/卖什么"）传 `limit=20` 获取全量清单；**单商品详情**查询保持默认 `limit=5`；Field description、tool description、§4.4 消费约定、边界 #13 同步注明 | 2026-08-31 |
 
 ---
 
