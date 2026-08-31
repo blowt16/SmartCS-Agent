@@ -320,6 +320,53 @@ async def product_stock_lookup(
 - **库存语义**：`stock_quantity=0` 表示无货，输出中保留原始值，由 LLM 理解（"无货"）
 - **参数 schema 强化**：`@tool(args_schema=ProductStockLookupInput)`（Pydantic + `Field`）——参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema，模型可见可遵循（langchain 默认 `parse_docstring=False`，docstring Args 不进 schema）；docstring 精简（Args 段删除，信息移入 Field）；代码内钳制保留为双保险
 
+### 4.3 返回 JSON 示例（真实数据风格）
+
+```json
+// status=ok：命中 2 条（同名前多商品按 updated_at DESC 排序；stock_quantity=0 表示无货）
+{"status":"ok","count":2,"data":[
+  {"product_name":"京东京造 智能门锁 全自动3D人脸识别","category":"智能门锁","current_price":899.0,"stock_quantity":156,"updated_at":"2026-08-30T14:23:11+08:00"},
+  {"product_name":"京东京造 智能门锁 指纹密码 标准款","category":"智能门锁","current_price":699.0,"stock_quantity":0,"updated_at":"2026-08-29T09:10:45+08:00"}
+]}
+
+// status=empty：无匹配（message 携带可执行建议）
+{"status":"empty","count":0,"data":[],"message":"未找到名称包含「冰箱」的商品。建议：1) 缩短或更换商品名关键词重试；2) 若用户询问的是商品参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；3) 若用户提供的商品名过于模糊，可向用户澄清具体商品。"}
+
+// status=error/invalid_argument：入参错误（retryable=true——修正参数后可重试）
+{"status":"error","error_type":"invalid_argument","retryable":true,"count":0,"data":[],"message":"参数错误：product_name 不能为空。请从用户消息中提取商品名称关键词（可传简称）后重试，若确实无法提取，请向用户询问具体想查询哪款商品。"}
+
+// status=error/db_connection：瞬时故障（tool 已自动重试 1 次，retryable=false——LLM 不得再重试）
+{"status":"error","error_type":"db_connection","retryable":false,"count":0,"data":[],"message":"商品数据查询失败（db_connection），已自动重试仍未恢复。请告知用户当前价格查询暂不可用，稍后重试或转人工，不要编造价格。"}
+```
+
+### 4.4 tool 降级流程
+
+三层降级：**① tool 内部自动重试（代码层）→ ② LLM 三态消费决策（agent 层）→ ③ 跨工具降级链（动态→静态）**。
+
+| 层 | 触发 | 动作 |
+|----|------|------|
+| ① tool 内部自动降级 | 瞬时错误（`db_timeout`/`db_connection`） | 自动重试 1 次（0.5s 间隔）→ 仍失败 → error JSON（retryable=false）；永久错误（`db_config`/`unknown`）不重试直接 error JSON |
+| ② LLM 消费侧决策 | 收到三态返回 | 按下表 status 走对应动作（错误判定用前缀匹配 `startswith('{"status": "error"')`，见 §3.4） |
+| ③ 跨工具降级 | empty / 静态信息意图 | 转 `rag_retrieval`；**error 禁止降级编造** |
+
+LLM 消费侧决策表（agent prompt 需注明，两 tool 共用一套逻辑）：
+
+| 返回 | 判定 | 动作 |
+|------|------|------|
+| `ok` | count ≥ 1 | 从 data 选匹配商品直接回答价格/库存；多条无法区分时向用户澄清具体哪款 |
+| `empty` | count = 0 | ① 换简称/关键词重试（**至多 1 次**，防无谓循环）② 用户意图为静态信息（参数/规格/政策）→ 转 `rag_retrieval` ③ 仍无 → 告知用户该信息暂未收录，或向用户澄清具体商品 |
+| `error` + retryable=true | 仅 `invalid_argument` | 修正参数（补商品名/品类）后重试 |
+| `error` + retryable=false | 其余全部 | **不再重试**；告知用户服务暂不可用，稍后重试或转人工；**禁止编造价格/库存** |
+
+跨工具降级链（与 `rag_retrieval` 配合，知识分层约束）：
+
+```
+product_stock_lookup（动态：价格/库存）
+ ├─ ok ──────────→ 直接回答
+ ├─ empty ───────→ 用户意图为静态信息（参数/规格/政策）→ rag_retrieval（docx 知识库）
+ └─ error ───────→ 告知暂不可用/转人工（禁止用 rag_retrieval 兜底——知识分层：docx 无价格/库存）
+```
+
 ---
 
 ## 5. 文件改动清单
@@ -399,6 +446,7 @@ async def product_stock_lookup(
 | 8 | 错误处理分层（DB 连接问题） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ `_classify_error` 错误分类 + retryable 标志（error 一律 false，防 LLM 盲目重试） | 2026-08-31 |
 | 9 | 目录结构（用户确认） | 两 tool 统一放 `app/tools/` 包：`product_stock_tool.py` 新建于此、`rag_tool.py` 自 `app/services/` 迁入（详见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #9）；检索管线（`rag_retriever_service` 等）不动 | 2026-08-31 |
 | 10 | 参数 schema 强化（主流最佳实践对照） | `@tool(args_schema=ProductStockLookupInput)`——Pydantic `Field` 承载参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema（langchain 默认 parse_docstring=False，docstring Args 不进 schema）；docstring 精简并补"何时不使用"负向段；排序改 `updated_at DESC`（结果序确定）；schema 内容纳入 pytest 断言 | 2026-08-31 |
+| 11 | 返回示例与降级流程文档化（用户要求） | §4.3 返回 JSON 示例（ok/empty/error 全形态，含 invalid_argument/db_connection）；§4.4 降级流程三层：tool 内部自动重试 → LLM 三态消费决策（empty 换词重试至多 1 次/静态意图转 rag_retrieval、error 不再重试）→ 跨工具降级链（error 禁止用 rag_retrieval 编造） | 2026-08-31 |
 
 ---
 
