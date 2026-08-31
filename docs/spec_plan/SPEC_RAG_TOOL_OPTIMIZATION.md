@@ -322,6 +322,7 @@ async def rag_retrieval(query: str) -> str:
 | 7 | 错误分类补 HTTP/API 异常（问题 A） | aiohttp.ClientError → api_unavailable（瞬时，可自动重试）——覆盖 Embedding API/远程调用异常（此前归 unknown 永久类，重试机会被浪费） | 2026-08-31 |
 | 8 | agent 解析歧义（问题 D） | 错误 JSON 用**前缀匹配**判断（`startswith('{"status": "error"')`）而非 try-parse——防知识库 JSON 片段误判；LLM 消费同约定 | 2026-08-31 |
 | 9 | 目录结构（用户确认） | `rag_tool.py` 与 `product_stock_tool.py` 统一放 `app/tools/` 包（项目历史工具目录，含 `__init__.py`）；`rag_retriever_service` 等检索管线仍留 `app/services/` | 2026-08-31 |
+| 10 | SKU 标注演进方向（关联商品 spec） | 片段前缀可扩展【商品:XX｜SKU:S1,S2】作为 SKU 商品对齐的数据源（方案 A：chunk metadata 多值挂 SKU，见 SPEC_PRODUCT_STOCK_TOOL §12.1）——**当前不实施**，演进时与本工具三态语义兼容 | 2026-08-31 |
 
 ---
 

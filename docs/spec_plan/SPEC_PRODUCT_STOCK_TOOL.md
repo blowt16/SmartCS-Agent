@@ -20,6 +20,7 @@
 9. [验证方案](#9-验证方案)
 10. [决策记录](#10-决策记录)
 11. [风险与避坑清单](#11-风险与避坑清单)
+12. [演进方向](#12-演进方向)
 
 ---
 
@@ -456,6 +457,7 @@ product_stock_lookup（动态：价格/库存）
 | 10 | 参数 schema 强化（主流最佳实践对照） | `@tool(args_schema=ProductStockLookupInput)`——Pydantic `Field` 承载参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema（langchain 默认 parse_docstring=False，docstring Args 不进 schema）；docstring 精简并补"何时不使用"负向段；排序改 `updated_at DESC`（结果序确定）；schema 内容纳入 pytest 断言 | 2026-08-31 |
 | 11 | 返回示例与降级流程文档化（用户要求） | §4.3 返回 JSON 示例（ok/empty/error 全形态，含 invalid_argument/db_connection）；§4.4 降级流程三层：tool 内部自动重试 → LLM 三态消费决策（empty 换词重试至多 1 次/静态意图转 rag_retrieval、error 不再重试）→ 跨工具降级链（error 禁止用 rag_retrieval 编造） | 2026-08-31 |
 | 12 | limit 按查询意图区分（用户确认） | **泛查询**（列表/浏览意图，无指定商品，"有哪些 XX/卖什么"）传 `limit=20` 获取全量清单；**单商品详情**查询保持默认 `limit=5`；Field description、tool description、§4.4 消费约定、边界 #13 同步注明 | 2026-08-31 |
+| 13 | SKU 对齐演进方向（用户要求） | 方案 A（chunk metadata 多值挂 SKU 列表）写入 §12 演进方向，**不实施**；前置验证：SKU 数据来源 + 混合块占比实测；rag 侧标注引用见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #10 | 2026-08-31 |
 
 ---
 
@@ -471,3 +473,33 @@ product_stock_lookup（动态：价格/库存）
 | 6 | 错误信息被 LLM 忽略（继续编造价格） | message 措辞明确"未找到/查询失败"；后续 agent prompt 加约束"tool 返回 error/empty 时不得编造价格，按 message 建议执行" |
 | 7 | 自动重试放大 DB 压力 | 重试仅限 1 次 + 仅瞬时错误（timeout/connection），永久错误不重试；配置常量（DB_RETRY_TIMES）可调 |
 | 8 | `updated_at DESC` 受 NULL 影响（PostgreSQL DESC 默认 NULLS FIRST） | 导入脚本幂等 upsert 必写 `updated_at`（非空），排序稳定；若未来允许 NULL 再补 `.nullslast()` |
+
+---
+
+## 12. 演进方向（未实施，2026-08-31 记录）
+
+### 12.1 SKU 商品对齐（方案 A：chunk metadata 多值挂 SKU 列表）
+
+**背景**：当前两 tool 对齐靠商品名文本匹配（LLM 从片段提取 → ILIKE 模糊），名称歧义/提取失败场景无结构化对齐键；SKU 作为全局唯一标识可实现**确定性对齐**。
+
+**前置核查（2026-08-31 实测）**：
+- TSV 无 SKU 字段（8 列：品类/名称/品牌/价格/功能/规格/售后/来源链接）
+- 切分器"全文统一递归切分"（`indexing_service.py` 字符轴，chunk 归属=块内首个非空段，`chapter` 单值）——**chunk 可跨多商品**，SKU 写入 metadata 需**多值挂载**
+- `product_price_stock` 无 SKU 列
+
+**目标设计（五步）**：
+1. **数据**：TSV 增 SKU 列（京东 SKU = `item.jd.com/xxx.html` 的 xxx，来源抓取/手工补待确认）
+2. **索引侧**：`document_chunk` 增 `sku_codes` 列（JSON 数组）；`indexing_service` 字符轴扩展——parse 阶段跟踪 H3 商品名→SKU 映射，切分后 `_locate_skus` 收集字符轴区间内**全部**段 SKU（多值去重保序，**不猜主体**——主体判断下放 LLM 结合 query）
+3. **表侧**：`product_price_stock` 增 `sku` 列（unique），导入脚本从 TSV upsert
+4. **tool 侧**：`product_stock_lookup` 增 `sku` 可选参数（传入→精确匹配优先；未传→现有 product_name 模糊路径，向后兼容）；返回记录带 `sku` 字段；`rag_retrieval` 片段前缀扩展【商品:XX｜SKU:S1,S2】
+5. **消费约定**：LLM 优先 SKU 精确对齐；混合块多值按 query 判断主体；SKU 失效/对齐失败**回退名称匹配**兜底
+
+**明确不做（暂缓）**：
+- 切分策略 H3 硬边界（方案 B，chunk 永不跨商品）——动索引核心 + 召回评测，另立专项
+- SKU 写进 docx 文本——机器标识污染面向用户的知识文本
+
+**前置验证（先实测再实施）**：
+- SKU 数据来源确认（抓取/手工补，50 行级一次性）
+- **混合块占比实测**：现有 docx 解析+切分，统计跨商品 chunk 占比——决定方案 A 是否够用、方案 B 是否排期
+
+**改动文件预估**：TSV（数据）/ `product_price_stock.py` + `document_chunk.py`（模型）/ `import_product_price_stock.py` / `indexing_service.py` / 两 tool；`build_smart_furniture_docx.py` 不改（SKU 不进 docx）
