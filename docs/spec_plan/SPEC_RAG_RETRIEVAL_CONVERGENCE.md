@@ -237,7 +237,7 @@ async def search(query: str, top_k: int) -> List[Dict[str, Any]]:
 - 评分：`model.predict([(query, doc_text) for doc in candidates], batch_size=RERANKER_BATCH_SIZE)` → 按分数降序取 top-`RERANKER_TOP_K`，doc 附加 `rerank_score`
 - 输入截取：融合结果前 `RERANKER_INPUT_TOP_K` 条（默认 20，与"检索 top-20 → 精排 top-5"口径一致）
 
-### 5.6 Tool 封装（`app/services/rag_tool.py` 新增）
+### 5.6 Tool 封装（`app/tools/rag_tool.py` 新增；2026-08-31 目录调整：自 `app/services/` 迁入 `app/tools/`，详见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #9）
 
 ```python
 @tool

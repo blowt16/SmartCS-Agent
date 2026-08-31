@@ -1,6 +1,6 @@
 # RAG 检索 Tool 优化实施规格
 
-> **用途**: 优化 `rag_retrieval` tool（`llm_backend/app/services/rag_tool.py`）——修正过时 description（价格/库存已移出知识库）、空结果与错误返回语义（供 LLM 自主判断）、结果携带来源溯源（可追溯判断依据）；与 `product_stock_lookup`（SPEC_PRODUCT_STOCK_TOOL.md）形成"动态查库 + 静态查知识库"的互补工具对
+> **用途**: 优化 `rag_retrieval` tool（`llm_backend/app/tools/rag_tool.py`，2026-08-31 由 `app/services/` 迁入 `app/tools/`）——修正过时 description（价格/库存已移出知识库）、空结果与错误返回语义（供 LLM 自主判断）、结果携带来源溯源（可追溯判断依据）；与 `product_stock_lookup`（SPEC_PRODUCT_STOCK_TOOL.md）形成"动态查库 + 静态查知识库"的互补工具对
 > **技术栈**: langchain-core `@tool` + RAGRetrieverService（现有管线不动，仅 tool 适配层优化）
 > **状态**: 待实施（2026-08-28 设计定稿；description 优化已先行实施）
 > **关联文档**: [[SPEC_PRODUCT_STOCK_TOOL.md]]（商品动态数据 tool，三态协议参考）[[PROJECT_ANALYSIS.md]]（RAG 管线）
@@ -100,7 +100,7 @@
 
 ## 4. 目标设计
 
-### 4.1 优化后 Tool（`llm_backend/app/services/rag_tool.py`）
+### 4.1 优化后 Tool（`llm_backend/app/tools/rag_tool.py`）
 
 ```python
 """
@@ -110,8 +110,8 @@ RAG 检索工具（langchain @tool 薄封装）
 核心逻辑全部在 RAGRetrieverService，此处仅为薄适配层。
 
 用法（后续 agent 接入）：
-    from app.services.rag_tool import rag_retrieval
-    from app.services.product_stock_tool import product_stock_lookup
+    from app.tools.rag_tool import rag_retrieval
+    from app.tools.product_stock_tool import product_stock_lookup
     llm.bind_tools([rag_retrieval, product_stock_lookup])
 """
 
@@ -250,7 +250,8 @@ async def rag_retrieval(query: str) -> str:
 
 | 文件 | 动作 | 内容 |
 |------|------|------|
-| `llm_backend/app/services/rag_tool.py` | 修改 | description（已实施）+ 空结果/错误提示 + 来源前缀 + logger 导入 |
+| `llm_backend/app/tools/rag_tool.py` | **迁移 + 修改** | **自 `app/services/` 迁入 `app/tools/`**（2026-08-31，用户确认）+ description（已实施）+ 空结果/错误提示 + 来源前缀 + logger 导入 |
+| `llm_backend/app/tools/__init__.py` | **新增** | 空包初始化（tools 目录当前仅剩历史 pycache，无 `__init__.py`） |
 | `llm_backend/tests/test_rag_tool.py` | **新增** | pytest：mock RAGRetrieverService 验证三态返回（成功带来源/空结果建议/异常兜底） |
 
 ---
@@ -287,9 +288,10 @@ async def rag_retrieval(query: str) -> str:
 
 ## 8. 实施步骤
 
+0. **迁移 `rag_tool.py`** `app/services/` → `app/tools/`（新建 `app/tools/__init__.py`）；全项目核对旧导入 `from app.services.rag_tool` → 验证：`from app.tools.rag_tool import rag_retrieval` 通过
 1. **修改 `rag_tool.py`**（§4.1：logger 导入 + 三态返回 + 来源前缀）→ 验证：import 通过；mock 调用三态输出正确
 2. **pytest 测试**（`tests/test_rag_tool.py`）：mock `get_rag_retriever_service` 返回空/异常/正常 docs，断言三态文本
-3. **全项目检索**：`rag_retrieval` 引用点核对（确认无现存消费方需要同步返回格式）
+3. **全项目检索**：`rag_retrieval` 引用点核对（确认无现存消费方需要同步返回格式，含旧路径 `app.services.rag_tool`）
 4. **agent 绑定验证**：`llm.bind_tools([rag_retrieval, product_stock_lookup])` 不报错
 
 ---
@@ -319,6 +321,7 @@ async def rag_retrieval(query: str) -> str:
 | 6 | 入参校验（用户确认） | query 空值 → error/invalid_argument（retryable=true）返回 LLM；`_tool_error` 增加 retryable 参数（与商品 tool invalid_argument 行为一致）；空串不再直接检索 | 2026-08-31 |
 | 7 | 错误分类补 HTTP/API 异常（问题 A） | aiohttp.ClientError → api_unavailable（瞬时，可自动重试）——覆盖 Embedding API/远程调用异常（此前归 unknown 永久类，重试机会被浪费） | 2026-08-31 |
 | 8 | agent 解析歧义（问题 D） | 错误 JSON 用**前缀匹配**判断（`startswith('{"status": "error"')`）而非 try-parse——防知识库 JSON 片段误判；LLM 消费同约定 | 2026-08-31 |
+| 9 | 目录结构（用户确认） | `rag_tool.py` 与 `product_stock_tool.py` 统一放 `app/tools/` 包（项目历史工具目录，含 `__init__.py`）；`rag_retriever_service` 等检索管线仍留 `app/services/` | 2026-08-31 |
 
 ---
 
@@ -332,3 +335,4 @@ async def rag_retrieval(query: str) -> str:
 | 4 | logger 未导入导致 NameError | 实施时补 `from app.core.logger import get_logger; logger = get_logger(service="rag_tool")` |
 | 5 | 自动重试放大检索压力 | 重试仅 1 次 + 仅瞬时错误；检索管线内部已有单路降级（_safe），重试叠加可控 |
 | 6 | 空串检索行为未定义 | 入参校验拦截（query 空值返回 invalid_argument），空串不再进入检索管线 |
+| 7 | 迁移后旧导入路径失效 | 全项目检索 `from app.services.rag_tool` 确认无消费方（实施步骤 3 已覆盖，当前仅 docstring 示例）；agent 接入统一用 `app.tools.*` 新路径 |

@@ -1,7 +1,7 @@
 # 商品动态数据检索 Tool 实施规格（langchain 格式）
 
 > **用途**: 将数据库 `product_price_stock` 表（商品价格/库存动态信息）检索封装为 langchain `@tool`，供后续业务子 agent（售前/售后）通过 tool calling 检索商品动态数据；与现有 `rag_retrieval`（docx 知识库检索）互补——动态数据查库、静态知识查向量
-> **技术栈**: langchain-core `@tool`（与 `rag_tool.py` 同模式）+ SQLAlchemy async（AsyncSessionLocal）+ PostgreSQL `product_price_stock` 表（模型/导入脚本已就绪）
+> **技术栈**: langchain-core `@tool`（与 `app/tools/rag_tool.py` 同模式）+ SQLAlchemy async（AsyncSessionLocal）+ PostgreSQL `product_price_stock` 表（模型/导入脚本已就绪）
 > **状态**: 待实施（2026-08-28 设计定稿，用户确认：检索范围=仅价格/库存动态数据；输入=名称模糊 + 品类过滤）
 > **关联文档**: [[SPEC_INTENT_RECOGNITION_OPTIMIZATION.md]]（§8.3 售后 agent 方案 C：RAG tool + 信息确认骨架，本 tool 为其前置）[[CLAUDE.md]]（知识分层原则：动态信息只入 product_price_stock 表）
 
@@ -27,7 +27,7 @@
 
 ### 1.1 背景
 
-1. 知识分层落地后（CLAUDE.md）：**价格/库存为动态信息，只存 `product_price_stock` 表，禁止写入 docx**——现有 `rag_retrieval` tool（`rag_tool.py`）检索的是 docx 知识块，**已检索不到价格/库存**（docstring 仍写"含价格、库存"，过时）
+1. 知识分层落地后（CLAUDE.md）：**价格/库存为动态信息，只存 `product_price_stock` 表，禁止写入 docx**——现有 `rag_retrieval` tool（`app/tools/rag_tool.py`）检索的是 docx 知识块，**已检索不到价格/库存**（docstring 仍写"含价格、库存"，过时）
 2. 后续业务子 agent 方案（SPEC_INTENT_RECOGNITION_OPTIMIZATION §8.3）：售前 agent 需要查价格/库存回答"这款灯多少钱""有货吗"，售后 agent 信息确认后可能查订单关联商品——**都需要结构化商品数据检索能力**
 3. 项目已有 langchain tool 封装先例（`rag_tool.py` 的 `rag_retrieval`），新 tool 复用同模式，后续 `llm.bind_tools([...])` 直接可用
 
@@ -55,7 +55,7 @@
 |------|------|
 | `product_price_stock` 表 | 模型（`app/models/product_price_stock.py`）+ 导入脚本（`scripts/import_product_price_stock.py` 幂等 upsert）已就绪 |
 | **无检索 service** | 表建好后没有任何查询封装（grep 全项目 0 命中） |
-| `rag_tool.py` 过时 | docstring 声称检索"价格、库存"，实际已检不到（动态信息移出 docx） |
+| `app/tools/rag_tool.py` 过时 | docstring 声称检索"价格、库存"，实际已检不到（动态信息移出 docx） |
 | `function_tools.py` | 自研 ToolRegistry（OpenAI function calling 格式），**非 langchain tool**——后续 agent 用 langchain `bind_tools`，需 langchain 格式 |
 
 **问题**：子 agent 要回答"XX 多少钱/有货吗"时，无任何可调用的商品数据检索能力。
@@ -92,9 +92,9 @@
 
 ## 4. 目标设计
 
-### 4.1 Tool 定义（`llm_backend/app/services/product_stock_tool.py`）
+### 4.1 Tool 定义（`llm_backend/app/tools/product_stock_tool.py`）
 
-与 `rag_tool.py` 同模式：
+与 `app/tools/rag_tool.py` 同模式（两 tool 统一放 `app/tools/` 包，2026-08-31 用户确认）：
 
 ```python
 """商品动态数据检索工具（langchain @tool 薄封装）
@@ -104,7 +104,7 @@
 所有结果（成功/空/错误）均返回结构化 JSON，错误信息供 LLM 自主判断下一步。
 
 用法（后续 agent 接入）：
-    from app.services.product_stock_tool import product_stock_lookup
+    from app.tools.product_stock_tool import product_stock_lookup
     llm.bind_tools([product_stock_lookup, rag_retrieval])
 """
 import asyncio
@@ -301,8 +301,9 @@ async def product_stock_lookup(
 
 | 文件 | 动作 | 内容 |
 |------|------|------|
-| `llm_backend/app/services/product_stock_tool.py` | **新增** | `product_stock_lookup` @tool（§4.1） |
-| `llm_backend/app/services/rag_tool.py` | 修改 | **docstring 修正**：删除"含价格、库存"表述，改为"动态数据（价格/库存）请用 product_stock_lookup" |
+| `llm_backend/app/tools/product_stock_tool.py` | **新增** | `product_stock_lookup` @tool（§4.1） |
+| `llm_backend/app/tools/__init__.py` | **新增** | 空包初始化（与 SPEC_RAG_TOOL_OPTIMIZATION 共用，两 tool 迁移/新增时一并创建） |
+| `llm_backend/app/tools/rag_tool.py` | 修改 | **docstring 修正**：删除"含价格、库存"表述，改为"动态数据（价格/库存）请用 product_stock_lookup"（随迁移一并落地，见 SPEC_RAG_TOOL_OPTIMIZATION） |
 | `llm_backend/tests/test_product_stock_tool.py` | **新增** | pytest：查询逻辑（mock 或真实 DB） |
 
 ---
@@ -340,8 +341,8 @@ async def product_stock_lookup(
 
 ## 8. 实施步骤
 
-1. **新增 `product_stock_tool.py`**（§4.1）→ 验证：`uv run python -c "from app.services.product_stock_tool import product_stock_lookup; print(product_stock_lookup.name)"` 输出 `product_stock_lookup`
-2. **修正 `rag_tool.py` docstring** → 验证：无"价格、库存"误导表述
+1. **新增 `app/tools/product_stock_tool.py`**（§4.1，含 `app/tools/__init__.py`）→ 验证：`uv run python -c "from app.tools.product_stock_tool import product_stock_lookup; print(product_stock_lookup.name)"` 输出 `product_stock_lookup`
+2. **修正 `app/tools/rag_tool.py` docstring**（随 SPEC_RAG_TOOL_OPTIMIZATION 迁移一并落地）→ 验证：无"价格、库存"误导表述
 3. **pytest 测试**（`tests/test_product_stock_tool.py`）：mock 会话验证查询参数拼接（ILIKE/category/limit 钳制）+ 真实 DB 集成用例（若有 Postgres）
 4. **验证 tool calling 可用性**：`llm.bind_tools([product_stock_lookup])` 绑定不报错
 
@@ -370,6 +371,7 @@ async def product_stock_lookup(
 | 6 | 空格差异匹配（用户方案） | 参数与表内名称**两侧去空格**后连续匹配（func.replace 列 + 参数预处理），保留词序、精确度高；替代 AND 多词拆分 | 2026-08-28 |
 | 7 | 通配符转义（用户采纳） | `_normalize_keyword` 转义 `%`/`_` + `ilike(..., escape="\\")`——防注入式全表匹配（边界 #10） | 2026-08-28 |
 | 8 | 错误处理分层（DB 连接问题） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ `_classify_error` 错误分类 + retryable 标志（error 一律 false，防 LLM 盲目重试） | 2026-08-31 |
+| 9 | 目录结构（用户确认） | 两 tool 统一放 `app/tools/` 包：`product_stock_tool.py` 新建于此、`rag_tool.py` 自 `app/services/` 迁入（详见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #9）；检索管线（`rag_retriever_service` 等）不动 | 2026-08-31 |
 
 ---
 
