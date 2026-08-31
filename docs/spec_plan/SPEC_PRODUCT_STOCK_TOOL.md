@@ -57,6 +57,7 @@
 | **无检索 service** | 表建好后没有任何查询封装（grep 全项目 0 命中） |
 | `app/tools/rag_tool.py` 过时 | docstring 声称检索"价格、库存"，实际已检不到（动态信息移出 docx） |
 | `function_tools.py` | 自研 ToolRegistry（OpenAI function calling 格式），**非 langchain tool**——后续 agent 用 langchain `bind_tools`，需 langchain 格式 |
+| **参数 schema 无描述** | `@tool` 默认 `parse_docstring=False`——docstring `Args:` 段**不进 JSON schema**，模型只见参数类型不见说明；limit 范围（1~20）仅代码内钳制（见 §10 决策 #10） |
 
 **问题**：子 agent 要回答"XX 多少钱/有货吗"时，无任何可调用的商品数据检索能力。
 
@@ -112,6 +113,7 @@ import json
 from typing import Optional
 
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import InvalidPasswordError, OperationalError, ProgrammingError
 
@@ -196,7 +198,29 @@ def _error(error_type: str, retryable: bool, message: str) -> str:
     )
 
 
-@tool
+class ProductStockLookupInput(BaseModel):
+    """商品动态数据查询参数（Pydantic args_schema——描述与范围约束进 JSON schema）。
+
+    默认 @tool 的 parse_docstring=False：docstring 的 Args 段不进参数 schema，
+    模型只能看到参数类型看不到说明。args_schema 将参数描述/示例/范围显式暴露给模型。
+    """
+
+    product_name: str = Field(
+        description='商品名称关键词（模糊匹配，传简称即可，如"门锁"可命中'
+        '"京东京造 智能门锁 全自动3D人脸识别"）'
+    )
+    category: Optional[str] = Field(
+        default=None,
+        description='品类过滤（可选），品类为固定集合（如"智能门锁""智能晾衣机"）；'
+        "不传则按名称模糊全表匹配",
+    )
+    limit: int = Field(
+        default=5, ge=1, le=20,
+        description="返回条数上限（1~20）",
+    )
+
+
+@tool(args_schema=ProductStockLookupInput)
 async def product_stock_lookup(
     product_name: str,
     category: Optional[str] = None,
@@ -207,10 +231,9 @@ async def product_stock_lookup(
     当用户询问商品价格、是否有货、库存情况时使用。动态数据（价格/库存）存储在
     数据库中，商品参数/规格/售后政策等静态信息请使用 rag_retrieval。
 
-    Args:
-        product_name: 商品名称关键词（支持模糊匹配，传简称即可，如"门锁"）
-        category: 品类过滤（可选，如"智能门锁"）；不传则按名称模糊全表匹配
-        limit: 返回条数上限（默认 5，最大 20）
+    何时不要使用本工具：
+    - 询问商品参数/规格/功能特点/售后政策 → 使用 rag_retrieval（静态知识库检索）
+    - 与业务无关的闲聊 → 直接回答，无需查询
 
     Returns:
         结构化 JSON 字符串（status=ok/empty/error）：
@@ -235,6 +258,7 @@ async def product_stock_lookup(
                 f"%{kw}%", escape="\\"
             )
         )
+        .order_by(ProductPriceStock.updated_at.desc())  # 同名前多商品：最新更新时间在前（结果序确定）
         .limit(limit)
     )
     if category:
@@ -291,9 +315,10 @@ async def product_stock_lookup(
 
 - **去空格容错匹配**（用户确认方案）：参数与表内名称均压缩空格后连续匹配——`func.replace(列, ' ', '') ILIKE '%压缩后关键词%'`。"京东京造 智能门锁"（参数含空格）可命中表内"京东京造 智能门锁 全自动3D人脸识别"；**保留词序约束**（精确度高，优于 AND 多词拆分）；参数侧同时转义 `%`/`_` 通配符（防注入式全表匹配）
 - **品类过滤**：`category = '智能门锁'` 精确等于（品类名来自 TSV 固定集合）
-- **排序**：不排序（按表内 id 顺序），LLM 从结果中自行选择——MVP 简单化
+- **排序**：`updated_at DESC`——同名前多商品按更新时间倒序，结果序确定（主流检索类实践：消除结果序不确定性）；LLM 仍从结果中自行选择
 - **limit 钳制**：1~20（`int()` 转换 + 钳制，防 LLM 传非数字/超大值）
 - **库存语义**：`stock_quantity=0` 表示无货，输出中保留原始值，由 LLM 理解（"无货"）
+- **参数 schema 强化**：`@tool(args_schema=ProductStockLookupInput)`（Pydantic + `Field`）——参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema，模型可见可遵循（langchain 默认 `parse_docstring=False`，docstring Args 不进 schema）；docstring 精简（Args 段删除，信息移入 Field）；代码内钳制保留为双保险
 
 ---
 
@@ -301,7 +326,7 @@ async def product_stock_lookup(
 
 | 文件 | 动作 | 内容 |
 |------|------|------|
-| `llm_backend/app/tools/product_stock_tool.py` | **新增** | `product_stock_lookup` @tool（§4.1） |
+| `llm_backend/app/tools/product_stock_tool.py` | **新增** | `product_stock_lookup` @tool（§4.1：Pydantic args_schema + Field 参数描述/约束 + 负向 description + `updated_at DESC` 排序） |
 | `llm_backend/app/tools/__init__.py` | **新增** | 空包初始化（与 SPEC_RAG_TOOL_OPTIMIZATION 共用，两 tool 迁移/新增时一并创建） |
 | `llm_backend/app/tools/rag_tool.py` | 修改 | **docstring 修正**：删除"含价格、库存"表述，改为"动态数据（价格/库存）请用 product_stock_lookup"（随迁移一并落地，见 SPEC_RAG_TOOL_OPTIMIZATION） |
 | `llm_backend/tests/test_product_stock_tool.py` | **新增** | pytest：查询逻辑（mock 或真实 DB） |
@@ -317,7 +342,7 @@ async def product_stock_lookup(
 | 3 | 名称 + 品类组合（"门锁" + 智能门锁） | status=ok，双重过滤，结果收窄 |
 | 4 | 无匹配（"冰箱"——不在商品集） | status=empty，message 建议换关键词/转 rag_retrieval/向用户澄清 |
 | 5 | product_name 为空（LLM 参数错误） | status=error/invalid_argument，message 引导重新提取商品名重试 |
-| 6 | LLM 传 limit=100 或非数字 | 钳制为 20（int 转换 + 钳制，非数字按 5） |
+| 6 | LLM 传 limit=100 或非数字 | schema 层 `Field(ge=1, le=20)` 先行约束；代码内钳制兜底（int 转换 + 钳制，非数字按 5） |
 | 7 | 库存 0 商品 | status=ok，返回 stock_quantity=0，LLM 回答"无货" |
 | 8 | 价格范围格式（"1999-2999 元"已均值入库） | 返回单值 current_price（导入脚本已处理） |
 | 9 | DB 连接异常 | 自动重试 1 次 → 仍失败 → status=error/db_connection（retryable=false），message 告知暂不可用/转人工（**不抛异常**，错误信息给 LLM 判断） |
@@ -341,9 +366,9 @@ async def product_stock_lookup(
 
 ## 8. 实施步骤
 
-1. **新增 `app/tools/product_stock_tool.py`**（§4.1，含 `app/tools/__init__.py`）→ 验证：`uv run python -c "from app.tools.product_stock_tool import product_stock_lookup; print(product_stock_lookup.name)"` 输出 `product_stock_lookup`
+1. **新增 `app/tools/product_stock_tool.py`**（§4.1，含 `app/tools/__init__.py`）→ 验证：`uv run python -c "from app.tools.product_stock_tool import product_stock_lookup; print(product_stock_lookup.name)"` 输出 `product_stock_lookup`；`print(product_stock_lookup.args_schema.model_json_schema())` 输出含三参数 description 与 limit 范围
 2. **修正 `app/tools/rag_tool.py` docstring**（随 SPEC_RAG_TOOL_OPTIMIZATION 迁移一并落地）→ 验证：无"价格、库存"误导表述
-3. **pytest 测试**（`tests/test_product_stock_tool.py`）：mock 会话验证查询参数拼接（ILIKE/category/limit 钳制）+ 真实 DB 集成用例（若有 Postgres）
+3. **pytest 测试**（`tests/test_product_stock_tool.py`）：mock 会话验证查询参数拼接（ILIKE/category/limit 钳制/updated_at 降序）+ **schema 断言**（`model_json_schema()` 含三参数 description 与 limit 的 minimum/maximum）+ 真实 DB 集成用例（若有 Postgres）
 4. **验证 tool calling 可用性**：`llm.bind_tools([product_stock_lookup])` 绑定不报错
 
 ---
@@ -352,7 +377,8 @@ async def product_stock_lookup(
 
 | 验证项 | 方法 |
 |--------|------|
-| 查询正确性 | pytest：mock 数据验证 ILIKE/category/limit/空结果/钳制逻辑 |
+| 查询正确性 | pytest：mock 数据验证 ILIKE/category/limit/空结果/钳制逻辑/updated_at 降序排序 |
+| 参数 schema 完整性 | pytest 断言 `product_stock_lookup.args_schema.model_json_schema()`：三参数 description 存在、limit 含 minimum=1/maximum=20 |
 | 真实数据（可选） | Postgres 起库 + 导入脚本后，`product_stock_lookup.ainvoke({"product_name": "门锁"})` 返回真实记录 |
 | bind_tools 兼容 | DeepSeek/Ollama 绑定 tool 定义不报错（工具 schema 生成成功） |
 | 后续 agent 预留 | spec 记录：售前/售后 agent 方案中 `bind_tools([product_stock_lookup, rag_retrieval])` |
@@ -372,6 +398,7 @@ async def product_stock_lookup(
 | 7 | 通配符转义（用户采纳） | `_normalize_keyword` 转义 `%`/`_` + `ilike(..., escape="\\")`——防注入式全表匹配（边界 #10） | 2026-08-28 |
 | 8 | 错误处理分层（DB 连接问题） | ① 超时保护（wait_for 10s）② 瞬时错误自动重试 1 次 ③ `_classify_error` 错误分类 + retryable 标志（error 一律 false，防 LLM 盲目重试） | 2026-08-31 |
 | 9 | 目录结构（用户确认） | 两 tool 统一放 `app/tools/` 包：`product_stock_tool.py` 新建于此、`rag_tool.py` 自 `app/services/` 迁入（详见 SPEC_RAG_TOOL_OPTIMIZATION 决策 #9）；检索管线（`rag_retriever_service` 等）不动 | 2026-08-31 |
+| 10 | 参数 schema 强化（主流最佳实践对照） | `@tool(args_schema=ProductStockLookupInput)`——Pydantic `Field` 承载参数 description/示例与 limit 范围（ge=1/le=20）进 JSON schema（langchain 默认 parse_docstring=False，docstring Args 不进 schema）；docstring 精简并补"何时不使用"负向段；排序改 `updated_at DESC`（结果序确定）；schema 内容纳入 pytest 断言 | 2026-08-31 |
 
 ---
 
@@ -386,3 +413,4 @@ async def product_stock_lookup(
 | 5 | Decimal 序列化 | `float()` 转换后进 JSON（价格精度 2 位小数，float 足够） |
 | 6 | 错误信息被 LLM 忽略（继续编造价格） | message 措辞明确"未找到/查询失败"；后续 agent prompt 加约束"tool 返回 error/empty 时不得编造价格，按 message 建议执行" |
 | 7 | 自动重试放大 DB 压力 | 重试仅限 1 次 + 仅瞬时错误（timeout/connection），永久错误不重试；配置常量（DB_RETRY_TIMES）可调 |
+| 8 | `updated_at DESC` 受 NULL 影响（PostgreSQL DESC 默认 NULLS FIRST） | 导入脚本幂等 upsert 必写 `updated_at`（非空），排序稳定；若未来允许 NULL 再补 `.nullslast()` |
