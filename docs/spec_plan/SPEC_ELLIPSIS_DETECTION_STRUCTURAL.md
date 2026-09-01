@@ -32,7 +32,7 @@
 
 | 目标 | 量化指标 |
 |---|---|
-| 多轮省略主语漏检率 → 0 | 多轮 ∧ ≤15 字 ∧ 非语气词的 query 全部触发消解（不依赖任何词表） |
+| 多轮省略主语漏检率 → 0 | 多轮 ∧ ≤10 字 ∧ 非语气词的 query 全部触发消解（不依赖任何词表） |
 | 词表零维护 | 删除 `ELLIPSIS_TRIGGERS`（22 个词）及配套注释 |
 | 顺带修复首条消息空转 | 无历史时不再触发消解（现状生产代码对首条消息触发词也调 LLM，空转返回原样） |
 | 行为兼容 | `RESOLVE_ENABLED=false` 总开关语义不变；消解失败降级原消息不变 |
@@ -73,7 +73,8 @@ redis_semantic_cache._resolve_message(messages, raw, resolve_llm)
 
 ```python
 # 删除：ELLIPSIS_TRIGGERS（22 词）及 ELLIPSIS_MAX_LEN 注释中的触发词说明
-# 保留：ELLIPSIS_MAX_LEN = 15（短查询阈值沿用）
+# 调整：ELLIPSIS_MAX_LEN = 10（15 → 10；无代词省略句上界即 10 字，
+#       11~15 字多为自包含完整查询，收紧避免空转消解）
 
 def detect_pronoun(text: str, skip_filler: bool = True, has_history: bool = False) -> DetectionDecision:
     """
@@ -108,7 +109,8 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 | 需不需要充电 | ✓ | 6 | NEED_RESOLVE | 换问法 ✓ |
 | 可以充电吗 | ✓ | 5 | NEED_RESOLVE | 原触发词也覆盖（行为不变） |
 | 这款按摩椅需要充电吗 | ✓ | 11 | NEED_RESOLVE | 层1 代词命中（行为不变） |
-| 芝华仕按摩椅多少钱 | ✓ | 9 | NEED_RESOLVE | 完整短查询 → LLM 判自包含后原样返回（规则 3），多一次廉价调用，符合宁可多检测 |
+| 芝华仕按摩椅多少钱 | ✓ | 9 | NEED_RESOLVE | 完整短查询，9 ≤ 10 边界内 → LLM 判自包含后原样返回（规则 3），符合宁可多检测 |
+| 京东京造智能门锁保修多久 | ✓ | 12 | PASS_THROUGH | 完整查询 >10 不触发（收紧区间，省空转消解） |
 | 需要充电吗 | ✗（首条） | 5 | PASS_THROUGH | 无历史可补全，零成本（**修复空转**） |
 | 多少钱 | ✗（首条） | 3 | PASS_THROUGH | 同上（现状生产代码会空转消解） |
 | 好的 | ✓ | 2 | SKIP_CACHE | 层3 语气词优先（不变） |
@@ -119,7 +121,7 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 
 ### 4.1 消解率与成本
 
-- 现状：~15% 消息触发消解；改后：多轮 + 短查询全覆盖（预估 25~40%，取决于多轮短查询占比）
+- 现状：~15% 消息触发消解；改后：多轮 + ≤10 字查询全覆盖（预估 25~40%，取决于多轮短查询占比）
 - 单次消解成本：DeepSeek 调用 ~2s / 低 token（`RESOLVE_MAX_TOKENS=200`，实际输出多为短句）
 - **部分自偿**：消解越全 → 缓存键（消解后消息）越准确 → 缓存命中率上升；消解系统存在目的即缓存质量（SPEC_SEMANTIC_CACHE_RESOLVE.md）
 - **净省**：首条消息触发词不再空转消解（现状浪费项）
@@ -173,6 +175,7 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 | 是否 LLM 全量判断（每轮都消解） | **否**——成本不可控；结构判据在"零词表"与"成本收敛"间取得平衡 |
 | 历史判定来源 | `_resolve_message` 计算 `messages[:-1]` 中 user/assistant 消息是否存在（与 `_format_history` 同一过滤口径） |
 | 层 1 / 层 3 / resolver | 零改动（只动检测层） |
+| 短查询阈值 | `ELLIPSIS_MAX_LEN` 15 → **10**：无代词省略句上界即 10 字（「支持米家App连接吗」），11~15 字多为自包含完整查询（重复商品名/型号），收紧避免空转消解；**10 是"漏检≈0"前提下的最紧值**，低于 10 会漏真实省略句；落地后按消解率日志微调 |
 | 与 HyDE 交付关系 | 关联工作项，同分支实施；HyDE spec 引用本文件 |
 
 ---
