@@ -144,6 +144,11 @@ class Settings(BaseSettings):
     HYBRID_RETRIEVAL_TOP_N: int = 20                        # 向量检索候选数（混合检索候选）
     RAG_TIMEOUT_SECONDS: int = 30                           # RAG 子图超时（秒），超时降级兜底回答
 
+    # Tool calling settings（langchain tool 超时与重试，两 tool 共用：rag_retrieval / product_stock_lookup）
+    TOOL_DB_TIMEOUT_SECONDS: float = 10.0                   # 超时保护：tool 查询/检索挂死时不无限等待
+    TOOL_RETRY_TIMES: int = 1                               # 瞬时错误自动重试次数（查询/检索幂等，重试安全）
+    TOOL_RETRY_INTERVAL: float = 0.5                        # 重试间隔（秒）
+
     # LLM temperature settings
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
     ROUTER_TEMPERATURE: float = 0.0                         # 意图识别/路由温度（分类任务，低温保证确定性）

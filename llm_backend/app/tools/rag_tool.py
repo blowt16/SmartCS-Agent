@@ -19,15 +19,13 @@ from langchain_core.tools import tool
 from psycopg.errors import InvalidPassword  # psycopg3 驱动层认证异常（SQLAlchemy 不暴露）
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from app.core.config import settings
 from app.core.logger import get_logger
 from app.services.rag_retriever_service import get_rag_retriever_service
 
 logger = get_logger(service="rag_tool")
 
-# 检索超时与重试配置（与 product_stock_lookup 对齐）
-DB_TIMEOUT_SECONDS = 10.0   # 超时保护：检索挂死时 tool 调用不无限等待
-DB_RETRY_TIMES = 1          # 瞬时错误自动重试次数（检索幂等，重试安全）
-DB_RETRY_INTERVAL = 0.5     # 重试间隔（秒）
+# 超时与重试配置统一入 env（settings.TOOL_*，与 product_stock_lookup 共用）
 
 
 def _classify_error(e: Exception) -> tuple[str, bool]:
@@ -45,15 +43,16 @@ def _classify_error(e: Exception) -> tuple[str, bool]:
 
 async def _search_with_retry(query: str) -> list[dict]:
     """超时保护 + 瞬时错误自动重试（与 product_stock_lookup._query_with_retry 同模式）。"""
-    for attempt in range(DB_RETRY_TIMES + 1):
+    for attempt in range(settings.TOOL_RETRY_TIMES + 1):
         try:
             return await asyncio.wait_for(
-                get_rag_retriever_service().search(query), timeout=DB_TIMEOUT_SECONDS
+                get_rag_retriever_service().search(query),
+                timeout=settings.TOOL_DB_TIMEOUT_SECONDS,
             )
         except Exception as e:
             _, retryable = _classify_error(e)
-            if attempt < DB_RETRY_TIMES and retryable:
-                await asyncio.sleep(DB_RETRY_INTERVAL)
+            if attempt < settings.TOOL_RETRY_TIMES and retryable:
+                await asyncio.sleep(settings.TOOL_RETRY_INTERVAL)
                 continue
             raise
 

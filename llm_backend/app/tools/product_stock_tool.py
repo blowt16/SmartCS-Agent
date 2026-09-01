@@ -18,13 +18,11 @@ from psycopg.errors import InvalidPassword  # psycopg3 驱动层认证异常（S
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.product_price_stock import ProductPriceStock
 
-# 查询超时与重试配置
-DB_TIMEOUT_SECONDS = 10.0   # 超时保护：DB 挂死时 tool 调用不无限等待
-DB_RETRY_TIMES = 1          # 瞬时错误自动重试次数（SELECT 幂等，重试安全）
-DB_RETRY_INTERVAL = 0.5     # 重试间隔（秒）
+# 超时与重试配置统一入 env（settings.TOOL_*，与 rag_retrieval 共用）
 
 
 def _normalize_keyword(name: str) -> str:
@@ -54,19 +52,19 @@ async def _query_with_retry(stmt) -> list:
     """超时保护 + 瞬时错误自动重试。
 
     asyncio.wait_for 防 DB 挂死；瞬时错误（timeout/connection）自动重试
-    DB_RETRY_TIMES 次；永久错误不重试直接抛出。重试后仍失败由调用方
+    settings.TOOL_RETRY_TIMES 次；永久错误不重试直接抛出。重试后仍失败由调用方
     返回 error（retryable=false，LLM 不再盲目重试）。
     """
-    for attempt in range(DB_RETRY_TIMES + 1):
+    for attempt in range(settings.TOOL_RETRY_TIMES + 1):
         try:
             async with AsyncSessionLocal() as session:
                 return (await asyncio.wait_for(
-                    session.execute(stmt), timeout=DB_TIMEOUT_SECONDS
+                    session.execute(stmt), timeout=settings.TOOL_DB_TIMEOUT_SECONDS
                 )).scalars().all()
         except Exception as e:
             _, retryable = _classify_error(e)
-            if attempt < DB_RETRY_TIMES and retryable:
-                await asyncio.sleep(DB_RETRY_INTERVAL)
+            if attempt < settings.TOOL_RETRY_TIMES and retryable:
+                await asyncio.sleep(settings.TOOL_RETRY_INTERVAL)
                 continue
             raise
 
