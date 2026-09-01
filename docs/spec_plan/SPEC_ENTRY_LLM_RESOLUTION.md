@@ -99,8 +99,9 @@ query 进入系统（redis_semantic_cache._resolve_message）
 
 ### 3.3 成本：消解模型可配置降档
 
-- 新增配置 `RESOLVE_MODEL: str = ""`（空 = 沿用 `CHAT_SERVICE` 模型；配置后消解走指定模型——本地 Ollama 或更快档位，目标 <500ms/轮）
-- 默认不降档，上线实测延迟/质量后再调（先实测再定方案）
+- 新增配置 `RESOLVE_MODEL: str = ""`（空 = 沿用 `CHAT_SERVICE` 模型；配置后消解走指定模型——本地 Ollama 或更快档位，目标 <500ms/轮）——**统一入 `.env`**（对齐 `RESOLVE_*`/`TOOL_*` 先例：`config.py` 声明默认值兜底，实际生效值由 `.env` 配置；`.env` 已 gitignore 不入库，内联注释即文档）
+- 默认不降档（`.env` 不填即空 = 沿用现状），上线实测延迟/质量后再调（先实测再定方案）
+- `.env` 追加行：`RESOLVE_MODEL=                    # 消解专用模型（可选）；空 = 沿用 CHAT_SERVICE 模型`
 
 ### 3.4 保留不变的
 
@@ -147,7 +148,7 @@ async def _resolve_message(self, messages, raw, resolve_llm) -> Optional[str]:
 ### 4.3 `config.py`
 
 ```python
-RESOLVE_MODEL: str = ""   # 消解专用模型（可选）；空 = 沿用 CHAT_SERVICE 模型
+RESOLVE_MODEL: str = ""   # 消解专用模型（可选）；空 = 沿用 CHAT_SERVICE 模型；实际生效值由 .env 配置（env 统一入口，见 §3.3）
 ```
 
 ### 4.4 测试文件迁移

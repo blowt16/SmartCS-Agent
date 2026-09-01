@@ -161,6 +161,14 @@ HYDE_MAX_TOKENS: int = 120        # 假设文档最大输出 token（≈80-110 �
 
 复用项（不新增配置）：LLM/模型 = `AGENT_SERVICE`/`DEEPSEEK_MODEL`/`OLLAMA_AGENT_MODEL`；超时 = `TOOL_DB_TIMEOUT_SECONDS`。
 
+**env 统一入口**（对齐 `TOOL_*` 先例）：三配置声明于 `config.py`（默认值兜底），**实际生效值统一由 `.env` 配置**——`.env` 已 gitignore 不入库，`.env` 内联注释即文档（README 不逐项登记）。实施时 `.env` 追加三行：
+
+```
+HYDE_ENABLED=true          # HyDE 总开关；false → 完全退化为现状（一键回滚）
+HYDE_TEMPERATURE=0.3       # 假设文档生成温度（稳定优先）
+HYDE_MAX_TOKENS=120        # 假设文档最大输出 token
+```
+
 ## 7. 降级链（fail-open）
 
 | 环节 | 失败 | 行为 |
