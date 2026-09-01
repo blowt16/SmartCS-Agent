@@ -99,10 +99,12 @@ def get_hyde_service() -> HydeService:
   - Ollama：`ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, ...)`
   - 调用 `model.ainvoke()`（异步，不阻塞事件循环）
 - **超时**：`asyncio.wait_for(..., timeout=settings.TOOL_DB_TIMEOUT_SECONDS)`，超时 → None
-- **Prompt**：
-  - system："你是京东智能家居客服系统的知识库文档编写助手。根据用户问题，以商品知识文档条目的口吻撰写一段假设文档片段（100~200 字）。要求：1) 内容是对该问题可能答案的合理推演，覆盖问题涉及的主题（功能/参数/政策）；2) 使用商品文档常见术语；3) 仅输出文档片段本身，不要解释、不要前缀。"
+- **Prompt**（语义保真靠 prompt 约束 + 低温承担，无机械后置校验）：
+  - system："你是京东智能家居客服系统的知识库文档编写助手。根据用户问题，以商品知识文档条目的口吻撰写一段假设文档片段（50~100 字）。要求：1) 内容是对该问题可能答案的合理推演，覆盖问题涉及的主题（功能/参数/政策）；2) 使用商品文档常见术语；3) 仅输出文档片段本身，不要解释、不要前缀；4) 仅围绕用户问题中出现的实体与主题展开，禁止虚构用户未提及的商品名/品牌/具体数值；5) 必须包含用户问题中的关键词（商品名/功能词/主题词）；6) 不得改变用户意图。"
   - user：`用户问题：{query}`
-- **word 表定稿**：三个词表在实施时以"命中样例 ≥5 条/词表"为验收定稿（见 §7 测试）
+- **生成前代词残留检测**：query 含"它/这款/那款/该"等指代词 → 直接返回 None（入口消解漏网时防 LLM 瞎猜指代对象偏离语义，fail-open 语义统一）
+- **生成后校验**（仅两条，不含语义回显检查）：① 输出非空 ② 长度 ≤100 字；校验失败 → None → 调用方降级原 query
+- **word 表定稿**：三个词表在实施时以"命中样例 ≥5 条/词表"为验收定稿（见 §8 测试）
 
 ## 4. rag_tool 改造
 
@@ -154,7 +156,7 @@ async def _vector_search(self, query: str, top_k: int,
 # HyDE 查询改写（rag_tool 内，经典 HyDE：假设文档只走向量路，BM25/精排用原 query）
 HYDE_ENABLED: bool = True          # 总开关；false → 完全退化为现状（一键回滚）
 HYDE_TEMPERATURE: float = 0.3     # 假设文档生成温度（稳定优先）
-HYDE_MAX_TOKENS: int = 200        # 假设文档最大输出 token
+HYDE_MAX_TOKENS: int = 120        # 假设文档最大输出 token（≈80-110 字，含截断余量；目标 50~100 字）
 ```
 
 复用项（不新增配置）：LLM/模型 = `AGENT_SERVICE`/`DEEPSEEK_MODEL`/`OLLAMA_AGENT_MODEL`；超时 = `TOOL_DB_TIMEOUT_SECONDS`。
@@ -175,7 +177,7 @@ HYDE_MAX_TOKENS: int = 200        # 假设文档最大输出 token
 - **命中样例**：每规则 ≥5 条，断言 `should_rewrite` 全触发（覆盖 R1 子串、R1 正则模式、R2）
 - **不误触发**：「保修多久」「座深多少」「沙发参数」等精确查询，断言不触发
 - **盲区留档**：「米家智能晾衣机有价格保护吗」断言不触发（预期行为，注释说明理由）
-- **生成器**：mock LLM 客户端 → 断言返回假设文档；mock 异常/超时 → 断言返回 None（fail-open）
+- **生成器**：mock LLM 客户端 → 断言返回假设文档；mock 异常/超时/空输出/超长输出（>100 字）→ 断言返回 None（fail-open）；含代词 query（"它能充电吗"）→ 断言不调 LLM、直接 None
 
 ### 8.2 `tests/test_rag_tool.py` 扩展（mock `get_hyde_service`）
 
@@ -215,3 +217,4 @@ HYDE_MAX_TOKENS: int = 200        # 假设文档最大输出 token
 4. **语义缓存不受影响**：入口缓存 key=消解后消息，缓存命中短路不进图不调 tool；HyDE 发生在 tool 内，不涉及缓存键（无需改动）
 5. **LangGraph 路径零影响**：`search()` 新参数默认 None；实施后跑一次 graph compile + 售前查询冒烟确认
 6. **llm_factory 不参与**：HyDE 用 langchain Chat 客户端（对齐 lg_builder），**不**走 `LLMFactory.create_chat_service()`（那是 CHAT_SERVICE 聊天链路，语义不同）
+7. **无回显校验的污染面**：LLM 跑题时假设文档会带偏向量路检索——但经典 HyDE 结构有天然防护：BM25 与 Reranker 始终用原 query，污染面仅限向量路；且低温和 prompt 约束已尽量压住跑题概率
