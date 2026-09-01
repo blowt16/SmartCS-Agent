@@ -62,7 +62,7 @@ redis_semantic_cache._resolve_message(messages, raw, resolve_llm)
 ### 2.2 问题
 
 1. **词表不完备**：`ELLIPSIS_TRIGGERS = [有货, 有卖, 多少钱, 价格, 能退, 能换, 支持, 兼容, 怎么, 为什么, 还有, 再, 可以, 能不能, 包邮, 保修, 多久, 什么时候, 哪里, 怎么样]`——"需要""要""带""有没有""需不需要"等高频问法开头词均不在表内；用户换问法即漏检，补词永远追不完
-2. **无历史门控**：生产代码 `_resolve_message` 调 `detect_pronoun(raw)` **不传历史信息**——首条消息"多少钱"（无历史可补全）也触发 NEED_RESOLVE → LLM 空转一次返回原样（浪费 ~2s 与 token）
+2. **无历史门控**：生产代码 `_resolve_message` 调 `detect_pronoun(raw)` **不传历史信息**——首条消息"多少钱"或"那个按摩椅多少钱"（无历史可补全）也触发 NEED_RESOLVE → LLM 空转一次返回原样（浪费 ~2s 与 token）
 3. 触发词表与层 3 存在重叠维护负担（"可以"同时是触发词与语气词，靠顺序与长度区分，易碎）
 
 ---
@@ -78,13 +78,15 @@ redis_semantic_cache._resolve_message(messages, raw, resolve_llm)
 
 def detect_pronoun(text: str, skip_filler: bool = True, has_history: bool = False) -> DetectionDecision:
     """
-    层2 新判据：has_history ∧ len ≤ ELLIPSIS_MAX_LEN → NEED_RESOLVE
-    （省略主语 = 短查询 + 多轮语义依赖，无需词表）
+    层1/层2 对称门控：has_history=False（无历史）时两层均降级 PASS_THROUGH，
+    不空转消解；has_history=True 时：层1 代词命中 → NEED_RESOLVE，
+    否则层2 结构判据 len ≤ ELLIPSIS_MAX_LEN → NEED_RESOLVE
     """
 ```
 
-- 层 1（显性指代词）、层 3（纯语气词）**不动**
-- 层 2 判定：`if has_history and len(text) <= ELLIPSIS_MAX_LEN: return NEED_RESOLVE`
+- 层 1（显性指代词）：**加 `has_history` 门控**（无历史时命中 → 透传不空转，与层 2 对称）；代词表、子串匹配逻辑不动
+- 层 2 判定：`if has_history and len(text) <= ELLIPSIS_MAX_LEN: return NEED_RESOLVE`（替换触发词判据）
+- 层 3（纯语气词）**不动**（整句语气词 → SKIP_CACHE，优先级最高）
 - 默认 `has_history=False` → 单轮场景（含现有测试调用方式）行为不变
 
 ### 3.2 `redis_semantic_cache.py` `_resolve_message`
@@ -109,6 +111,7 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 | 需不需要充电 | ✓ | 6 | NEED_RESOLVE | 换问法 ✓ |
 | 可以充电吗 | ✓ | 5 | NEED_RESOLVE | 原触发词也覆盖（行为不变） |
 | 这款按摩椅需要充电吗 | ✓ | 11 | NEED_RESOLVE | 层1 代词命中（行为不变） |
+| 那个按摩椅多少钱 | ✗（首条） | 8 | PASS_THROUGH | 层1 代词命中但无历史 → 透传不空转（层1 对称门控**新行为**） |
 | 芝华仕按摩椅多少钱 | ✓ | 9 | NEED_RESOLVE | 完整短查询，9 ≤ 10 边界内 → LLM 判自包含后原样返回（规则 3），符合宁可多检测 |
 | 京东京造智能门锁保修多久 | ✓ | 12 | PASS_THROUGH | 完整查询 >10 不触发（收紧区间，省空转消解） |
 | 需要充电吗 | ✗（首条） | 5 | PASS_THROUGH | 无历史可补全，零成本（**修复空转**） |
@@ -144,13 +147,15 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 ### 5.1 `app/test/test_pronoun_resolve.py`（检测器用例表参数化）
 
 - 现有用例表加 `has_history` 列：`("能退吗", True, NEED_RESOLVE)`、`("还有吗", True, NEED_RESOLVE)`、`("iPhone 15多少钱", False, PASS_THROUGH)`——**单轮语义与现有断言完全一致**（默认 False）
+- 代词用例同步标注：`("它支持快充吗", True, NEED_RESOLVE)`；`("那个有货吗", False, PASS_THROUGH)`（层1 对称门控**新行为**）
 - 新增用例（多轮 + 换问法全覆盖）：
   - `("需要充电吗", True, NEED_RESOLVE)` / `("要充电吗", True, ...)` / `("带充电口吗", True, ...)` / `("需不需要充电", True, ...)`
 - 边界：`("好的", True, SKIP_CACHE)`（层3 优先）、`("多少钱", False, PASS_THROUGH)`（无历史透传）
 
 ### 5.2 `app/test/test_entry_cache.py`
 
-- `entry_flow` 复刻逻辑中 `if history and decision == NEED_RESOLVE` 已隐含历史门控，与生产对齐（补 `has_history` 传参）；S1（无历史含指代）断言不变
+- `entry_flow` 复刻逻辑补 `has_history` 传参（与生产对齐）
+- **S1（无历史含指代）断言调整**：「那个有货吗」无历史 → 决策从 NEED_RESOLVE 变为 PASS_THROUGH → 缓存 lookup 会执行（mock 返回 None 未命中）→ graph 照常；断言从"跳过 lookup"改为"lookup 执行但未命中、仍走图"
 
 ### 5.3 回归
 
@@ -176,13 +181,14 @@ decision = detect_pronoun(raw, skip_filler=settings.RESOLVE_SKIP_FILLER, has_his
 | 历史判定来源 | `_resolve_message` 计算 `messages[:-1]` 中 user/assistant 消息是否存在（与 `_format_history` 同一过滤口径） |
 | 层 1 / 层 3 / resolver | 零改动（只动检测层） |
 | 短查询阈值 | `ELLIPSIS_MAX_LEN` 15 → **10**：无代词省略句上界即 10 字（「支持米家App连接吗」），11~15 字多为自包含完整查询（重复商品名/型号），收紧避免空转消解；**10 是"漏检≈0"前提下的最紧值**，低于 10 会漏真实省略句；落地后按消解率日志微调 |
+| 层 1 历史门控 | **加**（对称化）——无历史时层 1 代词命中降级 PASS_THROUGH，首条消息代词句不再空转消解；代词表与子串匹配逻辑不动 |
 | 与 HyDE 交付关系 | 关联工作项，同分支实施；HyDE spec 引用本文件 |
 
 ---
 
 ## 8. 风险与避坑清单
 
-1. **勿动层 1 / 层 3**：显性指代词与语气词判定保持原样，本次只替换层 2 判据
+1. **改动边界**：层 1 仅加 `has_history` 门控（代词表、子串匹配不动）；层 3 零改动（整句语气词 → SKIP_CACHE 优先级最高）；层 2 替换判据
 2. **`has_history` 默认 False**：现有测试与未传参调用行为不变；`_resolve_message` 必须显式传值，否则"多轮省略漏检"问题依然存在
 3. **messages 结构**：`messages` 最后一条为当前用户消息；`messages[:-1]` 过滤 `role in ("user", "assistant")`（与 `_format_history` 口径一致，跳过 system）
 4. **存量缓存键**：消解变化只影响新写入，存量键 TTL 自然淘汰，无需清理脚本
