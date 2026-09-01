@@ -1,8 +1,0 @@
-  1. 库为空是当前最大风险：检索链路本身健康，但全量语料为空 → BM25 索引空、向量检索空、相关性评分空，所有 RAG
-  查询都会走空上下文。之前索引的数据是否被清空过、是否已重新上传，需要确认。
-  2. embedding_service.py 是遗留死代码：仍直接 SentenceTransformer(settings.EMBEDDING_MODEL) 加载本地模型，全项目无任何 import（仅 config.py 的枚举被误匹配）。与 8e21cbb 的 qwen
-  切换不同步，建议删除或改造（按你的规则，此处仅提示不动手）。
-  3. 混合检索每次全量拉库（get_all_documents 拉全部 chunk 再内存构建 BM25/向量矩阵），语料大了之后是明显性能瓶颈，且已有单例但 BM25 索引仍每次重建。
-
-接入 bge-reranker-v2-m3（检索 top-20 → 精排
-  top-5)到rag检索管线用于最后的chunk的精确筛选,并且支持gpu加速，把配置统一到env文件中进行统一配置
