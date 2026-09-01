@@ -433,6 +433,54 @@ flowchart LR
 
 （HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担；查询预处理管道与 BudgetGuard 已于 2026-08-21 移除，见 spec_plan/SPEC_REMOVE_QUERY_PREPROCESSING.md）
 
+### 4.9 langchain Tool 封装 (`app/tools/`，2026-08-31 落地)
+
+两个 langchain `@tool` 供后续业务子 agent（售前/售后）通过 `llm.bind_tools([rag_retrieval, product_stock_lookup])` 调用，形成"**动态查库 + 静态查知识库**"互补工具对（设计细节见 spec_plan/SPEC_RAG_TOOL_OPTIMIZATION.md 与 SPEC_PRODUCT_STOCK_TOOL.md）。
+
+#### 4.9.1 工具职责与三态协议
+
+| Tool | 文件 | 职责 | 数据源 |
+|------|------|------|--------|
+| `rag_retrieval` | `app/tools/rag_tool.py` | 静态知识检索（参数/规格/功能/政策），RAG 管线薄封装 | docx → pgvector（HNSW ∥ BM25 → RRF → Reranker） |
+| `product_stock_lookup` | `app/tools/product_stock_tool.py` | 动态数据查询（价格/库存） | `product_price_stock` 表（SQLAlchemy 直接查询） |
+
+**三态返回协议**（两 tool 对齐，LLM 消费用 `startswith('{"status": "error"')` 前缀匹配判断）：
+
+| 状态 | 触发 | 返回形态 |
+|------|------|---------|
+| 成功 | 命中 | rag：文档片段列表（每段带 `【来源:文件名】` 前缀）；product：`{"status":"ok","count":N,"data":[...]}` |
+| 空 | 正常无匹配 | 带可执行建议的提示（换措辞 / 转另一 tool / 向用户澄清） |
+| 错误 | 入参/异常 | 统一 JSON：`{"status":"error","error_type":...,"retryable":...,"message":...}`，不抛异常 |
+
+**错误处理分层**（两 tool 同模式，配置统一入 env `settings.TOOL_*`）：① `asyncio.wait_for` 超时保护（10s）② 瞬时错误自动重试 1 次（0.5s 间隔）③ `_classify_error` 异常分类（`db_timeout`/`db_connection`/`api_unavailable` 瞬时 vs `db_config`/`unknown` 永久）+ `retryable` 标志——tool 已自动重试过，返回的 error 一律 `retryable=false`（仅入参错误 `invalid_argument` 为 true），防 LLM 盲目重试。
+
+#### 4.9.2 product_stock_lookup 查询设计
+
+- **参数 schema**：Pydantic `ProductStockLookupInput` + `@tool(args_schema=...)`——参数描述/品类示例/limit 范围（`ge=1 le=20`）显式进 JSON schema（langchain 默认 `parse_docstring=False`，docstring Args 不进 schema）
+- **模糊匹配**：参数与表内名称两侧去空格后 ILIKE 连续匹配（`func.replace` 列 + 参数预处理），保留词序、精确度高；`%`/`_` 通配符转义 + `escape` 防注入式全表匹配
+- **limit 意图语义**：泛查询（"有哪些 XX/卖什么"）传 `limit=20` 全量清单；单商品详情默认 `limit=5`
+- **排序**：`updated_at DESC`（同名前多商品结果序确定）
+
+#### 4.9.3 LLM 编排运行流程
+
+```mermaid
+flowchart LR
+    U[用户提问] --> LLM{LLM 判断意图}
+    LLM -->|静态知识<br>参数/政策| RAG[rag_retrieval]
+    LLM -->|动态数据<br>价格/库存| PS[product_stock_lookup]
+    RAG -->|片段含商品名| LLM
+    PS -->|ok/empty/error JSON| LLM
+    LLM --> A[组装回答]
+```
+
+**单商品查询**（"京东京造智能门锁多少钱"）：rag 检索静态片段 → LLM 从片段提取商品名 → `product_stock_lookup(product_name="京东京造智能门锁")` 查价格/库存 → 静态+动态组装。
+
+**列表意图**（"你们有哪些沙发"）：`product_stock_lookup(product_name="沙发", limit=20)` 拿全量清单（名称+价格+库存）为主体，rag 静态概述补充，按 product_name 对齐组装。
+
+**降级链**（§4.4 spec 消费约定）：`ok`→直接回答；`empty`→换词重试至多 1 次 / 静态意图转 rag_retrieval / 告知未收录；`error`+retryable=true→修正参数重试；`error`+retryable=false→告知暂不可用/转人工，**禁止编造价格**（知识分层：docx 无动态数据，不得用 rag 兜底编造）。
+
+**演进方向**（未实施，见 SPEC_PRODUCT_STOCK_TOOL §12.1）：SKU 商品对齐——chunk metadata 多值挂 SKU 列表（`sku_codes`），`product_stock_lookup` 增 `sku` 精确匹配参数，实现确定性对齐。
+
 ---
 
 ## 5. 系统运行流程
