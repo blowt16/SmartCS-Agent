@@ -57,6 +57,10 @@ llm_backend/knowledge_data/
 # Scripts cache
 scripts/.cache_jddc/
 
+# 商品售后 enrich 过程数据快照（一次性会话产物，内容已并入 TSV）
+scripts/data/aftersales_new.json
+scripts/data/return_policies.json
+
 # Uploads
 uploads/.claude/
 llm_backend/uploads/
