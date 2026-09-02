@@ -1,11 +1,16 @@
 """
-指代消解器：语义缓存分级指代消解的 LLM 消解层
+多轮消息统一消解器（SPEC_ENTRY_LLM_RESOLUTION §3.2/§4.2）
 
-设计原则（SPEC_SEMANTIC_CACHE_RESOLVE.md §5）：
-    - 只做补全，不做扩展：LLM 只负责把指代/省略补全为完整独立的问题
-    - 消解失败不阻塞：超时/空结果/异常一律降级为原始消息，保证缓存主流程不中断
-    - 消解模块与 LLM 后端解耦：通过 generate(messages, temperature=, max_tokens=) 鸭子类型调用，
+一次 LLM 调用完成指代消除 + 语义补全；prompt 内自包含出口保证完整问题原样返回。
+调用方：main.py 入口（多轮消息无条件消解）与语义缓存内部 _resolve_message（现状旧两段式，
+缓存入口改造见 docs/项目问题.md #11），两处共用同一 prompt 与降级路径。
+
+设计原则：
+    - 只做补全，不做扩展：LLM 只负责把依赖上下文的成分补全为完整独立的问题
+    - 消解失败不阻塞：超时/空结果/异常一律降级为原始消息，保证主流程不中断
+    - 与 LLM 后端解耦：通过 generate(messages, temperature=, max_tokens=) 鸭子类型调用，
       DeepseekService / OllamaService 均可（二者签名一致）
+    - 三态日志：unchanged（自包含原样）/ changed（补全）/ error（降级），供 no-op 率观测
 
 用法:
     resolved = await resolve_pronouns(llm_service, messages, raw_query)
@@ -26,16 +31,16 @@ RESOLVE_MAX_CHARS_PER_MSG = 200
 # 消解 max_tokens：只需返回一个问题文本
 RESOLVE_MAX_TOKENS = 200
 
-RESOLVE_SYSTEM_PROMPT = """你是一个多轮对话的指代消解专家。
-你的任务是根据对话历史，把用户当前问题中的指代词（如"那个""它""这个"）
-和省略信息补全为完整、独立的问题。
+RESOLVE_SYSTEM_PROMPT = """你是一个多轮对话的指代消解与语义补全专家。
+你的任务是根据对话历史，把用户当前问题中依赖上下文的成分（指代词、省略的主语/宾语、不完整信息）补全为完整、独立的问题。
 
 规则：
-1. 如果当前问题包含代词（他/她/它/那个/这个/那件/这件等），用历史中的实体替换
-2. 如果当前问题是省略句（如"有货吗""多少钱""能退吗"），从历史中补全主语
-3. 如果当前问题已经完整、不依赖上下文，直接返回原问题
-4. 不要添加历史中没出现过的信息，只做补全，不做扩展
-5. 只输出消解后的完整问题文本，不要任何解释"""
+1. 如果当前问题包含代词（他/她/它/那个/这个/那件/这件/该产品等），用历史中的实体替换
+2. 如果当前问题是省略句（如"有货吗""多少钱""能退吗""需要充电吗"），从历史中补全主语
+3. 如果当前问题已完整独立（包含明确主语、不依赖上下文），直接原样返回，不要添加或修改任何信息
+4. 如果当前问题是命令式指令（如"查一下价格"），补全为完整的查询意图，不要改写成实体搜索
+5. 不要添加历史中没出现过的信息，只做补全，不做扩展
+6. 只输出消解后的完整问题文本，不要任何解释"""
 
 
 def _format_history(messages: List[Dict], max_turns: int) -> str:
@@ -99,12 +104,17 @@ async def resolve_pronouns(llm_service, messages: List[Dict], raw_query: str) ->
             timeout=settings.RESOLVE_TIMEOUT_MS / 1000,
         )
     except Exception as e:
-        logger.warning("指代消解失败（异常），降级为原始消息: {} | error: {}", raw_query, str(e))
+        logger.warning("消解(error 异常/超时)，降级为原始消息: {} | error: {}", raw_query, str(e))
         return raw_query
 
     if not resolved or not resolved.strip():
-        logger.warning("指代消解失败（返回空），降级为原始消息: {}", raw_query)
+        logger.warning("消解(error 返回空)，降级为原始消息: {}", raw_query)
         return raw_query
 
-    logger.info("指代消解: '{}' → '{}'", raw_query, resolved.strip())
-    return resolved.strip()
+    resolved_text = resolved.strip()
+    if resolved_text == raw_query.strip():
+        # unchanged：自包含问题原样返回（no-op 观测——多轮完整问题也必经一次消解调用）
+        logger.info("消解(unchanged 自包含): '{}'", raw_query)
+    else:
+        logger.info("消解(changed): '{}' → '{}'", raw_query, resolved_text)
+    return resolved_text

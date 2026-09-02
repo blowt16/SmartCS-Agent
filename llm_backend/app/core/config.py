@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     RESOLVE_LLM_TEMPERATURE: float = 0.0                   # 消解 LLM 温度（必须为 0，保证同输入同输出）
     RESOLVE_TIMEOUT_MS: int = 2000                          # 消解调用超时（毫秒）——声明性默认，实际值统一由 .env 的 RESOLVE_TIMEOUT_MS 配置（DeepSeek 单次调用约 2s，建议 ≥15000）
     RESOLVE_SKIP_FILLER: bool = True                        # 是否跳过纯语气词（不查不写，避免缓存污染）
+    RESOLVE_MODEL: str = ""                                 # 消解专用模型（可选降档，同 provider 换模型名）；空 = 沿用 CHAT_SERVICE 模型；实际生效值由 .env 配置（env 统一入口，内联注释即文档）
     
     # Embedding settings
     EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen

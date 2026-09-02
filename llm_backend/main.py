@@ -25,7 +25,7 @@ import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
-from app.services.pronoun_detector import detect_pronoun, DetectionDecision
+from app.services.pronoun_detector import _is_filler  # 语气词闸门临时借用（SPEC_ENTRY_LLM_RESOLUTION 落地后 FILLER 迁入 redis_semantic_cache，届时改 import）
 from app.services.pronoun_resolver import resolve_pronouns
 from app.services.redis_semantic_cache import RedisSemanticCache
 from langchain_core.messages import HumanMessage, AIMessage
@@ -374,10 +374,7 @@ async def langgraph_query(
         except Exception as e:
             logger.warning("Error retrieving state: {}. Starting with fresh state.", e)
 
-        # ===== 入口前置指代消解（多轮代词/省略统一在此补全）=====
-        # 含指代消息（"那个有货吗"）在进入意图模块前改写为完整问题，
-        # 因此图内不再重复消解；首条消息（无历史）无上下文依赖，直接透传
-        resolved_query = query
+        # 提取线程内历史消息（langchain 消息 → dict 列表，供消解与缓存使用）
         history_messages = []
         if state_history:
             for m in state_history.values.get("messages", []):
@@ -386,29 +383,34 @@ async def langgraph_query(
                         "role": "assistant" if isinstance(m, AIMessage) else "user",
                         "content": m.content,
                     })
-        decision = detect_pronoun(query, skip_filler=settings.RESOLVE_SKIP_FILLER)
-        if history_messages and decision == DetectionDecision.NEED_RESOLVE:
+
+        # ===== 入口统一消解（多轮 → LLM 一次完成指代消除 + 语义补全）=====
+        # SPEC_ENTRY_LLM_RESOLUTION §3.1（main 入口部分，2026-09-02 落地）：
+        # 正则判定（代词表/省略触发词）不再作为消解前置——多轮消息统一交 LLM，
+        # prompt 内自包含出口保证完整问题原样返回；保留两个免费闸门：
+        # 纯语气词（不调 LLM）与首条消息（无历史可补，直通）。
+        # 注：缓存入口 redis_semantic_cache._resolve_message 仍为旧两段式正则，
+        # 遗留问题与后续方案见 docs/项目问题.md #11
+        resolved_query = query
+        if (
+            settings.RESOLVE_ENABLED
+            and not (settings.RESOLVE_SKIP_FILLER and _is_filler(query))
+            and history_messages
+        ):
             resolved_query = await resolve_pronouns(
                 _get_resolve_llm(),
                 history_messages + [{"role": "user", "content": query}],
                 query,
             )
-            logger.info("入口指代消解: '{}' → '{}'", query, resolved_query)
-            # 消解失败降级时仍为 NEED_RESOLVE（无完整问题可作缓存 key）
-            decision = detect_pronoun(resolved_query)
 
         # ===== 语义缓存检索（消解后、进图前；命中短路，跳过整个图流程）=====
         # 缓存内容由 graphrag/chat 链路完整回答后写入（ScopeGuard 把关的范围内回答），
         # 且 key 基于消解后消息——入口查缓存天然只命中经营范围内的完整问题
         cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX, user_id=user_id)
-        cached_response = None
-        if decision == DetectionDecision.NEED_RESOLVE:
-            logger.info("含指代且无历史可消解，跳过缓存检索")
-        else:
-            cached_response = await cache.lookup(
-                history_messages + [{"role": "user", "content": resolved_query}],
-                resolve_llm=_get_resolve_llm(),
-            )
+        cached_response = await cache.lookup(
+            history_messages + [{"role": "user", "content": resolved_query}],
+            resolve_llm=_get_resolve_llm(),
+        )
         if cached_response:
             logger.info("语义缓存命中，短路返回: '{}'", resolved_query)
             response = StreamingResponse(
@@ -438,8 +440,9 @@ async def langgraph_query(
                 elif c.additional_kwargs.get("tool_calls"):
                     tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
                     logger.debug("Tool call: {}", tool_data)
-            # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存）
-            if decision != DetectionDecision.NEED_RESOLVE and complete_response:
+            # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存；
+            # 纯语气词由缓存内部 _resolve_message 判定跳过，不在此门控）
+            if complete_response:
                 updated = await cache.update(
                     history_messages + [{"role": "user", "content": resolved_query}],
                     "".join(complete_response),

@@ -1,7 +1,8 @@
-"""子图评测执行器：指代消解入口复刻 → 子图直调 → EvaluationDataset → 四指标。
+"""子图评测执行器：统一消解入口复刻 → 子图直调 → EvaluationDataset → 四指标。
 
 评测流程与真实系统一致（spec §2.3）：
-    真实系统进入 RAG 子图的 query 是"入口指代消解后"的 query（main.py:389-395），
+    真实系统进入 RAG 子图的 query 是"入口统一消解后"的 query
+    （SPEC_ENTRY_LLM_RESOLUTION §3.1，main 入口多轮无条件 LLM 消解），
     本模块 apply_entry_resolution 复刻同一入口；single-turn 合成题无历史，
     与生产单轮行为一致（不消解、原样传递）。
 """
@@ -25,22 +26,22 @@ async def apply_entry_resolution(
     question: str,
     history: Optional[List[Dict[str, str]]] = None,
 ) -> Tuple[str, bool]:
-    """复刻生产入口的指代消解（main.py:389-395），保证评测流程与真实系统一致。
+    """复刻生产入口的统一消解（SPEC_ENTRY_LLM_RESOLUTION §3.1），保证评测与真实系统一致。
 
-    生产行为：仅当「有会话历史 且 detect == NEED_RESOLVE」才消解，消解 LLM 与生产
-    同款（LLMFactory.create_chat_service，main.py:48-53）。
+    生产行为（2026-09-02 起，main.py 入口）：正则门控已删除——多轮消息
+    （有 history）无条件 LLM 消解一次（指代消除 + 语义补全 + 自包含原样出口），
+    无历史（单轮）原样直通。消解 LLM 与生产同款
+    （LLMFactory.create_chat_service，RESOLVE_MODEL 可降档）。
     MVP 单轮评测（history=None）恒原样通过——与生产对单轮问题的行为一致。
-    未来评测集含多轮指代问题时传 history 即走同款消解链路。
+    评测 QA 无语气词样本，语气词闸门（缓存语义相关）不在此复刻。
 
     Returns:
-        (进入子图的 query, 是否发生过消解)
+        (进入子图的 query, 是否发生过消解[多轮恒调用 LLM 消解，与生产一致])
     """
     from app.services.llm_factory import LLMFactory
-    from app.services.pronoun_detector import DetectionDecision, detect_pronoun
     from app.services.pronoun_resolver import resolve_pronouns
 
-    decision = detect_pronoun(question, skip_filler=settings.RESOLVE_SKIP_FILLER)
-    if not history or decision != DetectionDecision.NEED_RESOLVE:
+    if not history:
         return question, False
 
     resolved = await resolve_pronouns(
@@ -48,7 +49,7 @@ async def apply_entry_resolution(
         history + [{"role": "user", "content": question}],
         question,
     )
-    logger.info("评测指代消解: '{}' → '{}'", question, resolved)
+    logger.info("评测入口消解: '{}' → '{}'", question, resolved)
     return resolved, True
 
 

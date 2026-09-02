@@ -13,14 +13,14 @@ import asyncio
 logger = get_logger(service="deepseek")
 
 class DeepseekService:
-    def __init__(self, model: str = "deepseek-chat"):
+    def __init__(self, model: Optional[str] = None):
         logger.info("Initializing Deepseek Service")
         self.client = AsyncOpenAI(
             api_key=settings.DEEPSEEK_API_KEY,
             base_url=settings.DEEPSEEK_BASE_URL
         )
-        # 优先使用配置中的 DEEPSEEK_MODEL，其次使用传入的 model
-        self.model = settings.DEEPSEEK_MODEL or model
+        # model 显式传入（如 RESOLVE_MODEL 消解降档）时优先；否则用 DEEPSEEK_MODEL
+        self.model = model or settings.DEEPSEEK_MODEL
         self.cache = RedisSemanticCache.get_instance(prefix=settings.REDIS_CACHE_PREFIX)
 
     async def _stream_cached_response(self, response: str, delay: float = None) -> AsyncGenerator[str, None]:

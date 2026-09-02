@@ -1,6 +1,16 @@
 # 入口多轮消息 LLM 统一消解（指代消除 + 语义补全）实施规格
-> **归档状态**: ⏳ 待实施（2026-09-02 审计，依据 main 代码与 git 历史）
-> 方案 2026-09-01 定稿后仅 docs 提交（be50899/302d7fd/8b744e7）；入口仍为『正则判定→命中才 LLM』两段式（main.py L389/391、redis_semantic_cache.py L140/148），RESOLVE_SYSTEM_PROMPT 仍为旧 5 规则版，RESOLVE_MODEL 未入 config。
+> **归档状态**: 🔶 部分实施（2026-09-02，main 入口侧落地，提交见 git log）
+> **已落地清单（main 入口侧）**：
+> - main.py 入口统一消解：正则门控删除（detect_pronoun/DetectionDecision 不再引用），多轮非语气词消息无条件 LLM 消解、纯语气词/无历史直通；缓存 lookup/update 无条件调用；`_is_filler` 临时借用 pronoun_detector（缓存入口改造后迁入 redis_semantic_cache）
+> - RESOLVE_SYSTEM_PROMPT 重写为 6 规则全文（§3.2，含自包含原样返回主路径、指令类规则、省略示例"需要充电吗"）；消解日志改三态（unchanged/changed/error）供 no-op 率观测
+> - RESOLVE_MODEL 入 config（§4.3，默认空=沿用 CHAT_SERVICE）+ LLMFactory/DeepseekService model 参数化（同 provider 降档）+ .env 注释行
+> - evaluation/runner.py apply_entry_resolution 复刻新入口（无历史直通/多轮无条件消解，删除 detect 引用）
+> - test_entry_cache.py 按新入口语义重写（S1 无历史→lookup 执行未命中，20/20 通过）；test_pronoun_resolve.py 45/45 通过（缓存层未动）；全量 pytest 75/76（#8 既有失败）
+> **未落地清单（缓存入口侧，2026-09-02 决策推迟专项处理，见 docs/项目问题.md #11）**：
+> - redis_semantic_cache._resolve_message 仍为旧两段式正则（§3.1/§4.2 树未实施）→ 已消解完整句可能二次消解、无历史消息空历史补写
+> - pronoun_detector.py 未删除（缓存入口在用）；FILLER_PHRASES/_is_filler 未迁入 redis_semantic_cache
+> - test_pronoun_resolve.py 检测器用例未删、§7.1 _resolve_message 级测试未加；§7.3 FakeLLM 质量用例未落地（留待缓存入口改造时一并按 §7 执行）
+> - 历史状态行以下方"归档状态"为最新判定；§4 数据流/代码形态中缓存入口部分仍为待实施设计
 
 > **用途**: query 进入系统（入口）时，对多轮对话消息**统一走 LLM 消解**——一次调用同时完成指代消除（代词替换）与语义补全（省略主语补全），替代现状"正则检测（代词表/触发词）→ 命中才 LLM 消解"的两段式流程。纯语气词跳过缓存，无历史直通
 > **技术栈**: Python + FastAPI + DeepSeek/Ollama（复用现有消解链路，零新增依赖）
