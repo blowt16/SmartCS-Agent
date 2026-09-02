@@ -2,7 +2,7 @@
 
 三类模型分开构造，评测配置与生产链路隔离（spec §5 隔离原则）：
     - judge LLM / judge embeddings：走 RAGAS_* 独立配置（key 必填，不回退、不混用生产配置）
-    - 被测 agent LLM：与生产构造完全一致（lg_builder.create_research_plan 同构），
+    - 被测 agent LLM：与生产构造完全一致（lg_builder.get_research_graph 同构），
       评测测的就是生产链路本身
 
 注意：禁止 import llm_backend/main.py（module-level 创建 FastAPI app），
@@ -103,10 +103,12 @@ class DualInterfaceEmbeddings(OpenAIEmbeddings):
 
 
 def build_agent_llm() -> object:
-    """构造被测 agent LLM——与生产构造完全一致（lg_builder.py:416-419 同构）。
+    """构造被测 agent LLM——与生产构造完全一致（lg_builder.get_research_graph 同构）。
 
     AGENT_SERVICE=deepseek → ChatDeepSeek；否则 ChatOllama（本地）。
     被测方配置取自生产 settings（属"被测对象"而非"评测配置"，见 spec §5.2 隔离边界）。
+    生产侧已将模型实例提升为单例（跨请求复用）；评测按隔离原则自建独立实例
+    （tags 用 ragas_eval 与生产 research_plan 区分），故不直接复用 get_research_graph。
     """
     from langchain_deepseek import ChatDeepSeek
     from langchain_ollama import ChatOllama

@@ -20,6 +20,7 @@ from langchain_core.messages import BaseMessage
 from psycopg_pool import AsyncConnectionPool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from app.lg_agent.lg_states import AgentState, InputState, Router
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import create_planner_node
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.workflows.multi_agent.multi_tool import create_multi_tool_workflow
@@ -30,6 +31,7 @@ import base64
 import os
 import aiohttp
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -405,6 +407,35 @@ async def create_image_query(
         logger.error("Error processing image: {}", str(e))
         return {"messages": [AIMessage(content=f"抱歉，我无法查看这张图片，请重新上传。")]}
 
+# ==================== 售前 MultiTool 子图单例 ====================
+# 原 create_research_plan 每次请求新建 llm + compile 子图（实测固定开销 ~40ms/次：
+# llm 实例化 ~45ms、图构建 ~7ms），且每请求新建 llm 客户端导致 httpx 连接池无法跨请求复用。
+# 子图节点闭包仅捕获 llm/prompt（无请求态），CompiledStateGraph 可并发 ainvoke
+# （无 checkpointer，调用期状态独立），故提升为进程级懒加载单例；
+# settings 进程启动即固化（模块级实例），单例缓存无需失效逻辑。
+_research_graph = None
+_research_graph_lock = threading.Lock()
+
+
+def get_research_graph() -> CompiledStateGraph:
+    """懒加载售前 MultiTool 子图单例（双检锁，模式同 get_rag_retriever_service）。
+
+    模型按 settings.AGENT_SERVICE 选择，构造参数与原 create_research_plan 内完全一致
+    （temperature=LLM_TEMPERATURE、tags=["research_plan"]、thinking 关闭）。
+    首建竞态由 _research_graph_lock 收口；compile 为同步操作且仅 ~7ms，不阻塞事件循环。
+    """
+    global _research_graph
+    if _research_graph is None:
+        with _research_graph_lock:
+            if _research_graph is None:
+                if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
+                    model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
+                else:
+                    model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
+                _research_graph = create_multi_tool_workflow(llm=model)
+    return _research_graph
+
+
 async def create_research_plan(
     state: AgentState, *, config: RunnableConfig
 ) -> Dict[str, List[str] | str]:
@@ -422,16 +453,9 @@ async def create_research_plan(
     # 从 config 获取会话 ID
     conversation_id = config.get("configurable", {}).get("thread_id", None)
 
-    # 使用大模型生成查询/多跳、并行查询计划
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["research_plan"], extra_body={"thinking": {"type": "disabled"}})
-
-    # 创建多工具工作流（planner → 向量检索 → summarize → final_answer）
-    multi_tool_workflow = create_multi_tool_workflow(
-        llm=model,
-    )
+    # 售前 MultiTool 子图为进程级单例（懒加载复用，见 get_research_graph），
+    # 消除每请求 llm 实例化 + 图构建的 ~40ms 固定开销，并复用 llm 连接池
+    multi_tool_workflow = get_research_graph()
 
     # 指代消解已前置到系统入口（main.py /api/langgraph/query），
     # 进入本节点的 query 已是消解后的完整问题，直接取当前问题
