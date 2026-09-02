@@ -1,11 +1,18 @@
 # 多实体并行 RAG 检索链路重构实施规格
-> **归档状态**: 🔶 部分实施（2026-09-02 审计，依据 main 代码与 git 历史）
-> 阶段 0（单例化）/阶段 3（子图简化）已落地并被检索收敛（RAGRetrieverService，cf9e37b）吸收；阶段 1/2/4/5（entity_count 拆解、子 query 规则、HyDE 双路合并、模块级单次编译）未实施。实施前需按现状架构（planner 直连已改、query_rewriting 已删）重核。
+> **归档状态**: 🔶 部分实施（2026-09-02 二次审计，依据 main 代码与 git 历史；一次审计同日稍早，表述有误处以此行为准）
+> **已落地清单**：
+> - ✅ 阶段 0/3：customer_tools 收敛为进程级单例 `RAGRetrieverService.search`（cf9e37b，纯混合检索零 LLM 调用）；子图简化（planner 直连、删 guardrails/tool_selection/Cypher 遗留）全落地
+> - ✅ 阶段 3 Step 3 剩余项"模块级单次编译"：2026-09-02 由 29e6f73 落地（`get_research_graph` 懒加载双检锁单例，lg_builder.py:411-436，消除每请求 llm 实例化 + compile ~40ms 并复用 httpx 连接池）——至此**阶段 3 全步骤完成**
+> - ✅ 阶段 1（入口指代消解）/阶段 5（语义缓存前置）：**未按本 spec 4.1/4.6 的原代码形态实施**，但目标已由替代方案在 main 入口侧落地——多轮无条件 LLM 消解 + 入口缓存 lookup/update 无条件调用（22b0c90，见 [[SPEC_ENTRY_LLM_RESOLUTION.md]]）；语义缓存侧 redis.asyncio/分桶索引/实例池三项修复已完成（4882018，见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]]，已归档 已完成/）
+> **未实施清单**：
+> - ⏳ 阶段 2（planner 实体识别+子 query 拆解）与阶段 4（HyDE 入分支 + original_question 透传）零代码；子文档 [[SPEC_ENTITY_RECOGNITION_AND_RAG_RETRIEVAL.md]] 同为设计态，其 §5.1/§10 前提已失效（generate_hypothetical_answer 已删、planner 直连结构已收敛）
+> - ⏳ 阶段 6 收尾（§7.1 数字修订见下；本次文档同步为阶段 6 Step 2 的一部分）
+> **2026-09-02 二次审计重点（planner 节点）**：按现状代码实测（planner/models.py、node.py、kg_prompts.py、multi_tool.py、lg_builder.py:411-436、lg_states.py、customer_tools、RAGRetrieverService）——planner 提示词仍为 Cypher/北风商贸时代模板、输出模型无 entity_count 与一致性校验（空任务可穿透为空答）、拆解复用 T=0.7 研究 LLM 无确定性约束、单任务场景固定空转 1 次 LLM、检索端无子 query 增强。详见 **§2.3**（新发现落档，阶段 2/4 实施前必读）。
 
 > **用途**: 去除 Cypher 查询、纯 RAG 检索后，重构查询预处理与子图链路——入口指代消解（正则门控 + LLM）+ 实体识别与任务拆解合并为一次 LLM 调用 + 多实体并行 RAG 检索（HyDE 内置于检索工具），并配套 LLM 调用成本与响应时间优化  
 > **技术栈**: LangGraph 0.3.x + FastAPI + pgvector + Redis + DeepSeek/Ollama + qwen text-embedding-v4（向量统一走 DashScope API，无本地 SentenceTransformer 主链路）  
 > **状态**: **部分实施** —— 阶段 0（customer_tools 单例化）与阶段 3（子图简化/删除 Cypher 遗留）已落地；阶段 1（入口指代消解）/2（planner 实体识别+拆解）/4（HyDE 入内 + original_question）/5（语义缓存前置）及阶段 3 的"模块级单次编译"未实施；阶段 3 的"预处理管道缩减"已落地为**直接删除**（2026-08-21，BudgetGuard + query_rewriting 整体移除，主链路以 resolved_question 直进子图，见 [[SPEC_REMOVE_QUERY_PREPROCESSING.md]]）  
-> **关联文档**: [[PROJECT_ANALYSIS.md]] [[PLAN_GraphRAG_TO_StandardRAG.md]] [[SPEC_CONTEXT_ENGINEERING.md]] [[docs/SHOP_SAGE_ANALYSIS.md]]
+> **关联文档**: [[PROJECT_ANALYSIS.md]] [[PLAN_GraphRAG_TO_StandardRAG.md]] [[SPEC_CONTEXT_ENGINEERING.md]] [[docs/SHOP_SAGE_ANALYSIS.md]] [[SPEC_ENTRY_LLM_RESOLUTION.md]] [[SPEC_SEMANTIC_CACHE_RESOLVE.md]] [[SPEC_ENTITY_RECOGNITION_AND_RAG_RETRIEVAL.md]]
 
 ---
 
@@ -27,24 +34,26 @@
 
 ### 1.1 背景
 
-1. 已去除 Cypher 查询（Text2Cypher/预定义 Cypher 模板），知识库检索收敛为**纯 RAG**（向量检索 + 混合检索 + 相关性评分），Neo4j 不再参与查询链路
-2. 现状一次知识库查询需 **10~13 次 LLM 调用**（路由、改写、纠错、实体识别、扩展、Multi-Query+HyDE、guardrails、planner、tool_selection、相关性评分、summarize），其中多处已失去存在意义（实体识别结果仅打日志、单工具场景的 LLM 工具选择、与顶层路由重复的 guardrails）
+1. 已去除 Cypher 查询（Text2Cypher/预定义 Cypher 模板），知识库检索收敛为**纯 RAG**（向量 ∥ BM25 混合检索 + RRF 融合 + Reranker 精排，零 LLM 调用），Neo4j 不再参与查询链路
+2. 现状一次知识库查询需 **10~13 次 LLM 调用**（路由、改写、纠错、实体识别、扩展、Multi-Query+HyDE、guardrails、planner、tool_selection、相关性评分、summarize），其中多处已失去存在意义（实体识别结果仅打日志、单工具场景的 LLM 工具选择、与顶层路由重复的 guardrails）—— ⚠️ **该句按 2026-09-02 代码已过期**：预处理 5 步（2026-08-21）、guardrails/tool_selection/相关性评分（阶段 3）相继删除后，无缓存命中时整链路 LLM 调用实际为 **3~4 次**（入口消解多轮时 1 + Router 1 + planner 1 + summarize 1，见 §2.1/§7.1）
 3. 已确认的运行期问题（详见 docs/SHOP_SAGE_ANALYSIS.md P0 清单，**均已随阶段 0/3 落地修复**）：
    - `tool_selection` 无工具可选时 `Send("error_tool_selection")` 到未注册节点 —— 已随 tool_selection 组件删除
    - `tool_preference="predefined_cypher"` 快路径传空参数恒失败 —— 已随 predefined_cypher 组件删除
-   - `customer_tools` 每请求重建 ChromaDB client + SentenceTransformer + 全量拉取文档 —— 客户端已单例化（`get_vector_store()`，node.py:104-119）；**"每请求全量拉取文档（语料缓存）"仍存在**（node.py:158）
+   - `customer_tools` 每请求重建重型资源 → 已收敛为进程级单例 `RAGRetrieverService`（get_rag_retriever_service，cf9e37b）；原文"客户端已单例化（get_vector_store()，node.py:104-119）、每请求全量拉取文档仍存在（node.py:158）"**均已过期**——语料与索引现由 service 持有，node.py 仅剩查询调用（customer_tools/node.py:54-59）
 
 ### 1.2 目标
 
 | 目标 | 量化指标 |
 |---|---|
-| LLM 调用次数下降 | 单实体查询 ≤6 次；双实体对比查询 ≤9 次（其中 4 次在并行分支）；缓存命中 0 次 |
-| 响应时间下降 | 消除每请求重建模型/客户端/图编译的开销（秒级 → 毫秒级） |
+| LLM 调用次数下降 | ⚠️ **该目标已提前达成**（2026-09-02 实测现状 3~4 次/查询，见 §7.1），剩余阶段不再以"减调用"为主诉求，改为"**不因拆解/HyDE 增调用**"：单实体查询 ≤4 次；双实体对比查询 ≤7 次（planner 仍 1 次、HyDE 按分支开关计入）；缓存命中 0 次 |
+| 响应时间下降 | ✅ 已达成（29e6f73）：消除每请求重建模型/客户端/图编译的开销（原 ~40ms/次固定开销归零，llm httpx 连接池跨请求复用） |
 | 多实体对比查询质量提升 | "A 和 B 哪个好"拆为 N 个子 query 并行检索，按实体覆盖产品信息 |
 | 消灭已知运行期 bug | 上述 3 个问题随结构简化一并删除 |
 | 语义保护 | 指代消解只补全、不改义；summarize 基于用户原 query 回答 |
 
 ### 1.3 设计原则
+
+> 原则 1/2 属阶段 1（入口消解）原设计——该阶段已由 main 入口侧替代方案落地（22b0c90，无条件多轮消解），仅原则 3/4 对未实施的阶段 2/4 继续生效：
 
 1. **state.messages 只读**（沿用 SPEC_CONTEXT_ENGINEERING.md 原则二）：指代消解结果存独立字段，不替换、不修改原始消息流
 2. **宁多勿漏**：正则门控宁可误触发（代价=1 次 LLM 调用），不可漏检（代价=整条检索链路失效）
@@ -57,49 +66,88 @@
 
 ### 2.1 现状调用链（一次 graphrag-query）
 
-> ⚠️ 本节描述写于阶段 3 落地前。当前实际结构：guardrails / tool_selection / predefined_cypher / Neo4j 实体识别**均已删除**（阶段 3 完成），子图为 `planner → Send → customer_tools → summarize → final_answer`；预处理 5 步已于 2026-08-21 随 BudgetGuard/query_rewriting 删除，该描述也已过期（"指代消解在路由之后"的描述同时过期——现状已前置到系统入口）。
+> ⚠️ 本节原描述写于阶段 3 落地前（guardrails/tool_selection/predefined_cypher/Neo4j 实体识别/预处理 5 步均已删除），下述"现状链路（2026-09-02 实测）"为准。
 
 ```
-analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count）
-  → create_research_plan
-      ├─ 预处理 5 步：上下文改写(1) → 纠错(1) → 实体识别链接 Neo4j(1，结果仅打日志)
-      │              → 扩展(1) → Multi-Query+HyDE(2 并行)
-      └─ 编译子图 ainvoke
-           guardrails(1) → planner(1) → tool_selection(1/任务)
-             → predefined_cypher | customer_tools(相关性评分 1/任务)
-             → summarize(1) → final_answer
+main 入口 /api/langgraph/query（多轮无条件 LLM 消解 → 语义缓存 lookup，22b0c90）
+  → 主图 analyze_and_route_query（Router LLM，T=0，输出 logic/type/risk，无 entity_count 字段）
+      └─ type=presale → create_research_plan
+            └─ 售前 MultiTool 子图（进程级单例，get_research_graph，29e6f73）
+                 planner（LLM 拆任务，T=0.7）→ Send ×N 并行
+                   → customer_tools（零 LLM）：RAGRetrieverService.search
+                      HNSW ∥ BM25 → RRF → Reranker 精排，top_k=5（RERANKER_TOP_K）
+                 → summarize（LLM，基于 state.question=完整原问题）→ final_answer
+真实 LLM 调用（无缓存命中）：入口消解(多轮时 1) + Router 1 + planner 1 + summarize 1 = 3~4 次/查询
 ```
 
 ### 2.2 问题清单（本方案要解决的）
 
-| # | 问题 | 处置 |
+| # | 问题 | 处置（✅=已落地；⏳=未实施，2026-09-02 核） |
 |---|---|---|
-| 1 | 指代消解在**路由之后**（`create_research_plan` 内），路由器看到未消解 query | 前置到入口（路由 LLM 之前） |
-| 2 | 指代消解无门控，每轮必调 LLM（首条消息除外） | 正则门控 + 短 query 启发式 |
-| 3 | 实体识别结果（实体 ID/类型）仅打日志，不进入下游 | 改造为 planner 拆解的依据（实体名 → 子 query） |
-| 4 | 实体识别、planner、tool_selection 三次 LLM 调用职责重叠 | 合并为 planner 一次调用（识别+拆解）；tool_selection 删除（单工具直连） |
-| 5 | guardrails 与顶层路由（ScopeGuard + Router）重复判定经营范围 | 删除，保留顶层守卫 |
-| 6 | HyDE 在预处理阶段针对整句做一次，拆解后各子 query 无法利用 | 移入 customer_tools 内部，每个子 query 独立 HyDE |
-| 7 | summarize 使用预处理后的 question，对比意图可能被稀释 | 透传 original_question（指代消解后的完整原问题） |
-| 8 | customer_tools 每请求重建重型资源，并行分支下放大 | 模块级单例（阶段 0 前置） |
-| 9 | 语义缓存服务 `/api/langgraph/query` 主链路 | 前置到入口（指代消解后、路由前） |
+| 1 | 指代消解在**路由之后**（`create_research_plan` 内），路由器看到未消解 query | ✅ 已前置到系统入口 main 侧（22b0c90）；实现形态见 [[SPEC_ENTRY_LLM_RESOLUTION.md]] |
+| 2 | 指代消解无门控，每轮必调 LLM（首条消息除外） | ✅ 原"正则门控"思路已被替代：多轮非语气词消息**无条件 LLM 消解**、纯语气词/无历史直通（22b0c90） |
+| 3 | 实体识别结果（实体 ID/类型）仅打日志，不进入下游 | ⏳ planner 拆解仍无实体依据（§2.3 P1），待阶段 2 |
+| 4 | 实体识别、planner、tool_selection 三次 LLM 调用职责重叠 | ✅ tool_selection 已删、planner 直连（阶段 3）；⏳ 实体识别入 planner（阶段 2） |
+| 5 | guardrails 与顶层路由（ScopeGuard + Router）重复判定经营范围 | ✅ 已删除，保留顶层守卫 |
+| 6 | HyDE 在预处理阶段针对整句做一次，拆解后各子 query 无法利用 | ⏳ 阶段 4 未实施；检索端无 HyDE（§2.3 P5） |
+| 7 | summarize 使用预处理后的 question，对比意图可能被稀释 | ✅ 预处理已整体删除，summarize 输入 state.question=完整原 query（lg_builder.py:462-469 → summarize/node.py:50-56），"稀释"源已不存在；⏳ original_question 字段透传（阶段 4）仍有审计价值但不急 |
+| 8 | customer_tools 每请求重建重型资源，并行分支下放大 | ✅ 已收敛为 `RAGRetrieverService` 进程级单例（cf9e37b，纯检索零 LLM 调用） |
+| 9 | 语义缓存服务 `/api/langgraph/query` 主链路 | ✅ 入口 lookup/update 无条件调用（22b0c90）；缓存侧三项修复已完成（4882018，[[SPEC_SEMANTIC_CACHE_RESOLVE.md]] 已归档） |
+| 10 | planner 拆解提示词为 Cypher/北风商贸时代模板，无实体识别/意图继承规则（§2.3 P1） | ⏳ 阶段 2 核心；2026-09-02 实测发现 |
+| 11 | PlannerOutput 无 entity_count、节点无一致性校验，空/重复任务可穿透成空答（§2.3 P2） | ⏳ 阶段 2 核心；2026-09-02 实测发现 |
+| 12 | planner 复用 T=0.7 研究 LLM，拆解决策无确定性约束（§2.3 P3） | ⏳ 阶段 2 配套；2026-09-02 实测发现 |
+| 13 | 单任务场景 planner 固定空转 1 次 LLM；Router schema 已无 entity_count 可复用（§2.3 P4） | ⏳ 待评估：方案 B 需先扩展 Router（lg_states.py:7-22），见 §8 #1 |
+| 14 | 检索端无子 query HyDE/实体约束，实体 top-5 覆盖无保证（§2.3 P5） | ⏳ 阶段 4；2026-09-02 实测发现 |
+
+### 2.3 planner 节点实测问题（2026-09-02 审计落档）
+
+> 本节按 2026-09-02 main 代码逐一核实（planner/models.py、node.py、planner/prompts.py、kg_prompts.py、multi_tool.py、edges.py、customer_tools/node.py、lg_builder.py:411-436、config.py），是"阶段 2/4 为什么还没实施、实施前必须先处理什么"的答案。P1-P5 与 §2.2 #10-14 一一对应。
+
+**P1 · 拆解提示词与纯 RAG 商品检索场景错配（Cypher 时代残留）**
+- `PLANNER_SYSTEM_PROMPT`（kg_prompts.py:8-38）规则仅"拆为独立子任务"，示例全部为 Neo4j 时代的库表式拆分（"北风商贸有哪些饮料类产品？价格是多少？"→ 拆产品/价格两问；"订单10248…"、"供应商 Exotic Liquids…"），**无任何商品实体识别、意图继承、实体名回填约束**；human 模板另叠一份重复规则（planner/prompts.py:14-21）。
+- 当前下游是**商品知识 docx 的全库向量混合检索**（`RAGRetrieverService.search`，HNSW∥BM25→RRF→Reranker，top_k=5），不是表查询——旧示例对"X 和 Y 哪个更好"类 query 完全无指导：LLM 可任意选择"整句单任务（另一实体证据可能被 top-5 截断）"或"按属性拆（任务粒度失控、summarize 结果膨胀）"。
+- 目标：阶段 2 按 §4.2 重写（实体名识别 + 逐实体子 query + 意图继承规则），先落地提示词再谈 schema。
+
+**P2 · 输出模型无拆解约束、节点校验薄弱（空任务可穿透成空答）**
+- `PlannerOutput` = 直接复用 `tasks: List[Task]`（planner/models.py:8-12），无 entity_count、无实体级子 query 模型；节点回退仅覆盖**空列表**一种情形（node.py:49-57），**不校验** task.question 空串 / 任务数异常 / 重复任务。
+- 穿透链：空串 task → edges.py:13-22 `Send("customer_tools", task.question="")` → customer_tools/node.py:55-56 记 errors"未提供查询文本"返回空记录 → summarize/node.py:58-59 "No data to summarize." → **整链路空回答**（是失败而非降级；§5 总表也未覆盖此场景）。with_structured_output 不保证非空（schema 无 min_length/pattern 约束）。
+- `Task.parent_task` 为必填且由 LLM 逐任务生成（每任务重复一遍父问题原文，可被改写），下游仅 edges.py:18 传入即弃，无业务消费（customer_tools 只用 task；final_answer 只记 task/records）——schema 应去掉或由节点注入。
+- 目标：阶段 2 落 §4.2 校验回退（数量一致 + 非空 + 去重 → 不满足整体回退单分支），§5 补"空任务"一行。
+
+**P3 · 拆解决策无确定性约束（T=0.7 共享实例）**
+- planner 复用子图单例注入的 research LLM（multi_tool.py:50 ← lg_builder.py:432-434：`ChatDeepSeek(..., temperature=settings.LLM_TEMPERATURE)`），`LLM_TEMPERATURE=0.7`（config.py:154）；而路由/消解均为 0（`RESOLVE_LLM_TEMPERATURE` config.py:78、`ROUTER_TEMPERATURE` config.py:155）。同 query 不同轮次的任务数/任务边界随采样漂移 → 检索覆盖、日志可比性、缓存（若将来拆解入 key）都不稳定。违反本文档设计原则 4（temperature=0 双保险）。
+- 目标：阶段 2 为 planner 设专用低温实例或沿用 `create_planner_node` 构造参数补 temperature 传入（实施时定）。
+
+**P4 · 单任务场景固定空转 1 次 LLM（Router 无字段可借）**
+- 每次 presale 查询必经 planner 一次 LLM（multi_tool.py:68 START→planner），而单实体/事实查询（主流量）恒拆 1 任务=原 query → 该次调用信息增益趋零（还需 ~1 次模型往返延迟）。旧文"Router 已输出 entity_count（lg_states.py:17）"已失效：2026-08-27 路由重构后 Router = logic/type/risk（lg_states.py:7-22），无任何可复用的实体/拆解字段。
+- 可选出路（实施阶段 2 时一并评估，勿过度设计）：方案 B 扩展 Router schema 带实体字段（拆解并入路由，见 §8 #1）；或简单 query 规则直通（字符数+连词判断，牺牲召回换延迟）。若选规则直通需先实测误拆率（对比句拆单的代价=质量回归）。
+
+**P5 · 检索端无子 query 增强，实体 top-5 覆盖无保证**
+- customer_tools/node.py:54-59 直接 `retriever.search(task)`（内部 top_k=5，RAGRetrieverService），无 HyDE、无实体约束、无按子 query 独立检索合并。即使阶段 2 拆出双实体任务，检索端也不能保证两实体的商品文档都进各自 top-5（文档库含政策/品类块，混合 query 可能整体偏向一方）。阶段 2 与 4（HyDE 入分支 + 合并去重）需**组合**实施才闭环——单做其一对比质量提升有限。
 
 ---
 
 ## 3. 目标架构总览
 
+> 📌 架构图对照现实（2026-09-02）：入口指代/缓存段已按 22b0c90 **落地在 main.py 入口**（无条件多轮消解 + lookup 命中短路，无正则门控），不在 analyze_and_route_query 内；路由类型名已重构为 `presale/aftersale/complaint/general/image/clarify`（lg_states.py:10-17），presale → create_research_plan；子图（planner→Send→customer_tools→summarize→final）结构已全部落地。图内仍标"门控/次数要求"的行均为原始目标态，以 §2.1 实测链路与 §7.1 为口径。
+
 ```
-入口（/api/langgraph/query）
-  → analyze_and_route_query 节点内部：
-      ScopeGuard 关键词预检
-      → 指代门控：正则命中 或 (query≤8字 且 有历史) ?
-          ├─ 是 → LLM 指代消解（最近3轮，temperature=0，结构化输出）→ resolved_question 存入 state.question
-          └─ 否 → resolved_question = 原文
-      → 语义缓存 lookup（key=resolved_question，user 维度）
-          ├─ 命中 → 直接返回缓存答案（跳过路由与后续全部节点）
-          └─ 未命中 → 路由 LLM（输出 Router）
-              ├─ general-query / additional-query / image-query → 原路径不变
-              └─ graphrag-query → create_research_plan
+入口（/api/langgraph/query，main.py）
+  → 多轮无条件 LLM 消解（22b0c90）→ 语义缓存 lookup
+      命中 → 直接返回缓存答案（跳过主图全部节点）
+  → 未命中 → 主图 analyze_and_route_query（ScopeGuard 预检 → 路由 LLM，输出 Router）
+      ├─ general / aftersale / complaint / image / clarify → 各自分支
+      └─ presale → create_research_plan
+            └─ 子图 ainvoke（进程级单例编译，29e6f73）
+                 START → planner（实体识别+拆解，一次 LLM 调用）
+                           ├─ entity_count ≥ 2 且校验通过
+                           │    → Send("customer_tools") × N 并行
+                           │        每分支内部：HyDE(可选,开关) → 向量/混合检索
+                           │                  → 合并去重 → 相关性评分(批量)
+                           │        各分支 records 经 searches 累加器合并
+                           └─ 否则 → 单分支 Send（整句检索）
+                 → summarize（基于 original_question + 全部 records）
+                 → final_answer → END
                     └─ 编译子图 ainvoke（一次编译，模块级复用）
                          START → planner（实体识别+拆解，一次 LLM 调用）
                                    ├─ entity_count ≥ 2 且校验通过
@@ -113,7 +161,7 @@ analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count
   → SSE 流式输出
 ```
 
-**关键结构变化**：删除 guardrails、tool_selection、predefined_cypher 三个节点；planner 直连 customer_tools；保留 map-reduce `Send` 并行结构与 `searches` 累加器（现状状态字段名为 `searches`，`state.py:62`；早期设计稿写作 `cyphers`）。**本段描述的子图结构已落地**（multi_tool.py:68-78），剩余未实施项见阶段 3 备注。
+**关键结构变化**：删除 guardrails、tool_selection、predefined_cypher 三个节点；planner 直连 customer_tools；保留 map-reduce `Send` 并行结构与 `searches` 累加器（现状状态字段名为 `searches`，`state.py:62`；早期设计稿写作 `cyphers`）。**本节子图结构已全部落地**（multi_tool.py:62-78，2026-09-02 二修：阶段 3 备注中遗留的"模块级单次编译"也已由 29e6f73 完成）；目标架构中剩余未落地部分为 4.1 节内的入口门控代码形态（已被替代方案覆盖）、planner 实体拆解（阶段 2）与 HyDE/original_question（阶段 4）——图中"相关性评分(批量)/cyphers/HyDE"字样为阶段 4 目标态，现状 customer_tools 分支为纯 `RAGRetrieverService.search`（见 §2.1 实测链路）。
 
 ---
 
@@ -121,9 +169,11 @@ analyze_and_route_query（路由 LLM，输出 Router 含 complexity/entity_count
 
 ### 4.1 入口指代消解（正则门控 + LLM）
 
-**位置**：`analyze_and_route_query` 节点内部，ScopeGuard 预检之后、路由 LLM 调用之前（`lg_builder.py:76-81` 之后）。
+> ⚠️ 2026-09-02：本节代码形态（analyze_and_route_query 内正则门控）**未实施且不再计划实施**——目标已由 main 入口侧替代方案落地（22b0c90：多轮非语气词消息无条件 LLM 消解 + 纯语气词/无历史直通 + 入口缓存 lookup/update，见 [[SPEC_ENTRY_LLM_RESOLUTION.md]]）。本节保留作设计追溯与回退参照，实施请引用该 spec。
 
-**门控函数**（原规划新增于 `components/query_rewriting/node.py` ⚠️ 该文件已于 2026-08-21 随查询预处理管道删除；入口指代消解现状由 `app/services/pronoun_detector.py` + `pronoun_resolver.py` 实现，见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]]，如后续实施请另立文件）：
+**位置**（原设计）：`analyze_and_route_query` 节点内部，ScopeGuard 预检之后、路由 LLM 调用之前（`lg_builder.py:76-81` 之后，现 `lg_builder.py:64-70`）。
+
+**门控函数**（原规划新增于 `components/query_rewriting/node.py` ⚠️ 该文件已于 2026-08-21 随查询预处理管道删除；消解现状由 `app/services/pronoun_resolver.py` + `redis_semantic_cache._resolve_message` 实现，见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]] 与 [[SPEC_ENTRY_LLM_RESOLUTION.md]]）：
 
 ```python
 # 指代/指示词 + 高频省略追问模式（宁多勿漏，词表按日志调优）
@@ -240,6 +290,8 @@ def map_reduce_planner_to_tool_selection(state: OverallState) -> List[Send]:
     ]
 ```
 
+> 落地实录：实际函数名改为 `map_reduce_planner_to_customer_tools`（edges.py:10-22），Send payload 含 `task/question/parent_task` 三键（customer_tools 只消费 task，见 §2.3 P2）。
+
 **`lg_builder.py` create_research_plan 清理**：
 - 删除：`tool_preference` 三分支（:444-452）、`tool_schemas` 导入与定义（:464-466）、`cypher_dict` 导入（:468）、`scope_description`（:471-481）、`get_neo4j_graph()`（:456-461）、实体识别调用（:522-532）
 - 预处理管道缩减：主链路只保留已前置的指代消解；纠错/扩展/Multi-Query 的保留方案见 §8 待确认 #2（✅ 已落地为**直接删除**，2026-08-21：输入子图的 `question` = resolved_question，见 [[SPEC_REMOVE_QUERY_PREPROCESSING.md]]）
@@ -329,7 +381,9 @@ input_state = {
 
 ### 4.6 语义缓存前置（指代消解后、路由前）
 
-**顺序**（analyze_and_route_query 节点内）：
+> ✅ 2026-09-02：本节约束全部达成——lookup/update 在消解后无条件调用且先于主图路由（22b0c90，main.py:409-452），user 维度按实例分桶（`get_instance(user_id)`）；三项前提修复见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]]（已完成，4882018）。下方代码顺序保留为原设计对照。
+
+**顺序**（原设计：analyze_and_route_query 节点内；实际落地：main.py 入口）：
 
 ```
 ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user 维度)
@@ -350,6 +404,8 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 ## 5. 回退与异常处理总表
 
+> 解读提示（2026-09-02）：位置列 4.1/4.6 的两行指代/缓存场景**现状已由 main 入口侧替代实现**（22b0c90 各自的失败回退在 resolve_pronouns/lookup 的 try/except 内），按 4.1/4.6 节顶部注解读；4.2/4.4 行为阶段 2/4 落地目标，其中"planner 任务含空 question"行为现状实测缺口（§2.3 P2）。
+
 | 场景 | 回退行为 | 位置 |
 |---|---|---|
 | 指代门控误触发（query 完整无需改写） | LLM 按"完整则原样返回"规则输出原 query，无副作用 | 4.1 |
@@ -357,6 +413,7 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 | 实体识别 count ≤ 1 | 单分支整句检索 | 4.2 |
 | 拆解校验失败（数量不匹配 / sub_query 为空） | 整体回退单分支整句检索 | 4.2 |
 | planner 输出为空 | 单任务=原问题（现状兜底逻辑保留） | 4.2 |
+| planner 任务含空 question / 重复任务 | ⚠️ 现状**无此校验**：空任务穿透 → Send 空 query → 该分支空记录 → summarize 空答（§2.3 P2，2026-09-02 实测缺口）；阶段 2 落地后整体回退单分支 | 4.2 |
 | HyDE 生成失败 | 跳过 HyDE，仅用子 query 检索 | 4.4 |
 | 混合检索失败 | 仅用向量检索结果（现状 try/except 保留） | 4.4 |
 | 相关性评分失败 | 返回全部检索结果（现状兜底保留） | 4.4 |
@@ -378,9 +435,11 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 - [x] **Step 2**: 验证：连续两次请求日志中 `VectorStoreQuery.__init__` 只出现一次；`uv run python -c "from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools.node import get_vector_store; a=get_vector_store(); b=get_vector_store(); assert a is b"`
 - [x] **Step 3**: 提交 `[fix] customer_tools 向量库客户端单例化，消除每请求重建 ChromaDB/Embedding 开销`
 
-### 阶段 1：入口指代消解
+### 阶段 1：入口指代消解 ✅ 已落地（main 入口侧替代方案，2026-09-02 二修）
 
-**Files**: `llm_backend/app/core/config.py`、`.../components/query_rewriting/node.py`（⚠️ 已删除 2026-08-21）、`llm_backend/app/lg_agent/lg_builder.py`
+> ⚠️ 本阶段目标已由 [[SPEC_ENTRY_LLM_RESOLUTION.md]] 落地（22b0c90）：main.py `/api/langgraph/query` 多轮非语气词消息**无条件 LLM 消解**（`resolve_pronouns` + `RESOLVE_SYSTEM_PROMPT` 6 规则），纯语气词/无历史直通；缓存 lookup/update 无条件调用。**下列原步骤（analyze_and_route_query 内正则门控代码形态）全部不适用**，保留为历史设计供追溯，不再按此执行。
+
+**Files**（原设计）: `llm_backend/app/core/config.py`、`.../components/query_rewriting/node.py`（⚠️ 已删除 2026-08-21）、`llm_backend/app/lg_agent/lg_builder.py`
 
 - [ ] **Step 1**: config 新增 `REWRITE_TEMPERATURE: float = 0.0`、`REWRITE_MAX_TURNS: int = 3`
 - [ ] **Step 2**: `query_rewriting/node.py`（⚠️ 已删除 2026-08-21）新增 `REFERENCE_PATTERN` 与 `need_reference_resolution()`（代码见 §4.1）；`_format_chat_history` 增加 `max_turns` 参数（默认 3，调用处传 `settings.REWRITE_MAX_TURNS`）
@@ -391,7 +450,14 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
   - 短句"多少钱"且有历史 → 触发改写；首轮"多少钱"（无历史）→ 不触发
 - [ ] **Step 5**: 提交 `[feat] 入口指代消解：正则门控 + 3 轮历史 + temperature=0，路由前完成改写`
 
-### 阶段 2：planner 改造（实体识别 + 拆解一次调用）
+### 阶段 2：planner 改造（实体识别 + 拆解一次调用）⏳ 未实施（本 spec 剩余核心）
+
+> 前置必读：**§2.3 P1-P5（2026-09-02 实测）**。落地方案要点相对 §4.2 的增补：
+> - P1：`PLANNER_SYSTEM_PROMPT` 中 Cypher/北风商贸示例全部替换为商品文档 RAG 场景示例（含双实体对比、单实体事实）
+> - P2：`parent_task` 移出 LLM schema（由节点注入原 query，见 §4.2 校验代码已体现）；校验规则补"task 去重"
+> - P3：planner 拆解温度与 router 一致收敛为 0（§4.2 提示词规则 + 校验回退已够，温度落地方式实施时定）
+> - P4：评估"拆解并入 Router（方案 B，§8 #1）"或"规则直通"，决定前先实测简单句误拆率
+> - 与阶段 4 组合实施才闭环（P5），拆解先行落地后须在 §7.2#2/#3 回归对比质量
 
 **Files**: `.../components/planner/models.py`、`.../components/planner/node.py`、`kg_sub_graph/prompts/kg_prompts.py`
 
@@ -404,37 +470,41 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
   - 构造拆解失败（临时改低 temperature 或用模糊问题观察）→ 回退单分支
 - [ ] **Step 5**: 提交 `[feat] planner 合并实体识别与任务拆解为一次调用，含一致性校验与单分支回退`
 
-### 阶段 3：子图简化 + lg_builder 清理 + 删 Cypher 遗留 ◐ 大部分已落地
+### 阶段 3：子图简化 + lg_builder 清理 + 删 Cypher 遗留 ✅ 已全部落地（2026-09-02 二修）
 
 **Files**: `.../workflows/multi_agent/multi_tool.py`、`.../workflows/multi_agent/edges.py`、`llm_backend/app/lg_agent/lg_builder.py`；删除清单见 §4.3
 
-- [x] **Step 1**: `multi_tool.py` 删 guardrails / predefined_cypher / tool_selection 节点与对应边，START 直连 planner；签名简化为 `create_multi_tool_workflow(llm)`（multi_tool.py:68-78）
+- [x] **Step 1**: `multi_tool.py` 删 guardrails / predefined_cypher / tool_selection 节点与对应边，START 直连 planner；签名简化为 `create_multi_tool_workflow(llm)`（multi_tool.py:32-80）
 - [x] **Step 2**: `edges.py` 的 `map_reduce_planner_to_tool_selection` 改 Send 到 `"customer_tools"`（edges.py:10-22）
-- [◐] **Step 3**: `lg_builder.py` create_research_plan 清理：删 tool_preference 三分支、tool_schemas、cypher_dict、scope_description、neo4j 连接、实体识别调用 **已完成**；`input_state` 增加 `original_question`（见 §4.5）与**子图改为模块级单次编译**（lg_builder.py:416-418 目前仍每请求 compile）**未实施**
+- [x] **Step 3**: `lg_builder.py` create_research_plan 清理全部完成：tool_preference 三分支、tool_schemas、cypher_dict、scope_description、neo4j 连接、实体识别调用已删；**子图模块级单次编译已于 2026-09-02 由 29e6f73 落地**——`get_research_graph()` 懒加载单例（lg_builder.py:411-436，双检锁），子图 ainvoke 每请求零重建（实测消除 ~40ms/次并复用 llm httpx 连接池）；`input_state` 增加 `original_question`（见 §4.5）**未实施，归入阶段 4**
 - [x] **Step 4**: 删除 §4.3 文件清单（组件目录已删除）
 - [x] **Step 5**: 验证：`uv run python -c "import llm_backend.app.lg_agent.lg_builder"` 无导入错误；端到端查询走通；日志无 guardrails/tool_selection/predefined_cypher 记录；`error_tool_selection` 未注册 bug 随代码删除
-- [x] **Step 6**: 提交 `[feat] 子图简化：去 guardrails/tool_selection/predefined_cypher，planner 直连 RAG 检索节点` + `[fix] 删除 Cypher 遗留组件与死代码`
+- [x] **Step 6**: 提交 `[feat] 子图简化：去 guardrails/tool_selection/predefined_cypher，planner 直连 RAG 检索节点` + `[fix] 删除 Cypher 遗留组件与死代码` + `[feat] 售前 MultiTool 子图进程级单例化…（29e6f73）`
 
-> **后续实施注意**：Step 3 剩余两项（`original_question` 透传属阶段 4、模块级单次编译）实施前请先核对现状代码；§2.1 现状链路图已标注过期。
+> **后续实施注意**：Step 3 唯一剩余项 `original_question` 透传属阶段 4，与 HyDE 一并实施；§2.1 现状链路图已更新为实测形态（见上）。
 
-### 阶段 4：HyDE 移入 customer_tools + 原 query 透传
+### 阶段 4：HyDE 移入 customer_tools + 原 query 透传 ⏳ 未实施
+
+> 与阶段 2 组合实施（§2.3 P5：单做实体拆解不保证 top-5 逐实体覆盖，需子 query 增强/合并去重闭环）。实施前核对：§4.4 中"get_vector_store 单例化"代码为阶段 0 历史设计——检索现已收敛于 `RAGRetrieverService.search`（零 LLM），HyDE 实现形态建议为 customer_tools 分支内对每个任务 query 先 HyDE 增强再调 `search`，或下沉 service（实施时定）。
 
 **Files**: `.../components/customer_tools/node.py`、`.../components/state.py`、`.../components/summarize/node.py`、`llm_backend/app/core/config.py`
 
 - [ ] **Step 1**: config 新增 `HYDE_ENABLED: bool = True`
 - [ ] **Step 2**: `create_vector_search_query_node(llm)` 改造（代码见 §4.4）：接收 llm、HyDE 开关、假想答案独立检索合并去重
-- [ ] **Step 3**: `state.py` InputState 增加 `original_question: str`；`summarize/node.py` 改用 `state.get("original_question", state.get("question"))`
+- [ ] **Step 3**: `state.py` InputState 增加 `original_question: str`；`summarize/node.py` 改用 `state.get("original_question", state.get("question"))`（现状 question=完整原 query，见 §2.2 #7 处置）
 - [ ] **Step 4**: 验证：双实体对比查询 → 每个分支日志出现独立 HyDE 生成记录；summarize 回答以对比形式呈现两个产品；关闭 `HYDE_ENABLED` 后分支内无 HyDE 日志
 - [ ] **Step 5**: 提交 `[feat] HyDE 移入 RAG 工具分支内（开关控制、独立检索合并），summarize 基于用户原 query`
 
-### 阶段 5：语义缓存前置
+### 阶段 5：语义缓存前置 ✅ 已落地（另两 spec 替代实施，2026-09-02 二修）
 
-**Files**: `llm_backend/app/services/redis_semantic_cache.py`、`llm_backend/app/lg_agent/lg_builder.py`
+> 本阶段目标已全部由替代实施完成，**无需再按本节步骤执行**：Step 1 三项修复于 4882018 落地（redis.asyncio / 用户分桶 ZSET 索引替代全量 keys 扫描 / `_auto_cleanup` 移出构造器改 `start_cleanup()` + 实例池，见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]] ✅ 已完成）；Step 2 的"消解后查缓存"落在 **main.py 入口**（22b0c90：lookup/update 无条件调用，先于主图路由），而非本节的 analyze_and_route_query 内部——位置更早，语义等价且更优（命中直接短路主图）。以下步骤保留为历史设计。
 
-- [ ] **Step 1**: 修复三项已知问题（§4.6）：`redis.asyncio` 客户端、user 维度索引替代全量 `keys()` 扫描、`_auto_cleanup` 移出构造器改 lifespan 初始化
-- [ ] **Step 2**: `analyze_and_route_query` 内指代消解后插入缓存 lookup，命中直返（代码见 §4.6）；回答生成后回写缓存（挂 on_complete 或节点返回值处）
-- [ ] **Step 3**: 验证：同一问题连续两次提问 → 第二次日志出现缓存命中且**无路由/检索/summarize 日志**；指代追问"那个有货吗"（前轮问过同款）→ 消解后命中同一缓存 key
-- [ ] **Step 4**: 提交 `[feat] 语义缓存前置到主链路（指代消解后查缓存）+ 修复同步客户端/全量扫描/任务泄漏`
+**Files**（原设计）: `llm_backend/app/services/redis_semantic_cache.py`、`llm_backend/app/lg_agent/lg_builder.py`
+
+- [x] **Step 1**: 修复三项已知问题（§4.6）：`redis.asyncio` 客户端、user 维度索引替代全量 `keys()` 扫描、`_auto_cleanup` 移出构造器改 lifespan 初始化（4882018）
+- [x] **Step 2**: 缓存 lookup/update 无条件调用，位置 = main.py 入口（22b0c90；本 spec 原设计 analyze_and_route_query 内插入未采用）
+- [◐] **Step 3**: 验证部分完成：test_entry_cache.py 20/20 覆盖入口缓存语义（无历史→lookup 执行未命中）；端到端 SSE 命中场景待 §7.2#8 回归
+- [x] **Step 4**: 提交由 4882018（缓存侧）+ 22b0c90（入口侧）在其各自 spec 名下完成
 
 ### 阶段 6：收尾验证与文档
 
@@ -448,15 +518,15 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 ### 7.1 LLM 调用次数对比（日志统计法）
 
-现状每个节点均有 `logger.info` 打点，按日志行统计各类场景调用次数：
+> ⚠️ 2026-09-02 实测更新：原"现状（约）10~13 次"基于已删除的预处理/guardrails/grader 链路，**全部过期**。现状（无缓存命中）：入口消解（多轮时才 1 次，首轮无历史不计）+ Router 1 + planner 1 + summarize 1 = **3~4 次**；检索（RAGRetrieverService）、合并、final_answer 均零 LLM。下表为改造前后的实际基线，阶段 2 落地后 planner 仍 1 次（不增调用）、阶段 4 按 `HYDE_ENABLED` 开关在并行分支计入。
 
-| 场景 | 现状（约） | 目标 | 验收标准 |
+| 场景 | 现状（2026-09-02 实测） | 阶段 2/4 后目标 | 验收标准 |
 |---|---|---|---|
-| 单实体简单查询（"扫地机器人X1多少钱"） | 10 | ≤6 | 路由+改写(按需)+planner+grader+summarize |
-| 双实体对比（"A和B哪个好"） | 13 | ≤9（4 次在并行分支） | planner 1 次输出 entity_count≥2 且 2 个并行分支 |
-| 指代追问（第二轮"那个有货吗"） | 10+ | ≤7 | 门控触发改写后正常走通 |
-| 完整问题首轮 | 10 | ≤5（无改写） | 正则未命中，跳过改写 |
-| 缓存命中（重复提问） | 10+ | 0 | 仅缓存日志，无路由/检索/summarize 日志 |
+| 单实体简单查询首轮（"扫地机器人X1多少钱"） | 3（Router+planner+summarize） | ≤3（P4 规则直通若落地可 ≤2） | 日志计数 3；单分支检索 |
+| 双实体对比（"A和B哪个好"） | 3（拆 N 分支不增 LLM，检索零调用） | ≤5（阶段 4 HyDE 每分支 +1，2 分支共 +2） | planner 输出 entity_count≥2 且 N 个并行分支日志 `检索节点返回…` ×N |
+| 指代追问（第二轮"那个有货吗"） | 4（入口消解 1 + Router+planner+summarize） | ≤4 | 入口消解日志一次后正常走通 |
+| 完整问题首轮（多轮对话内） | 4（无条件消解 1 + 主链路 3） | ≤4 | 消解规则判"完整原样返回"不增分支 |
+| 缓存命中（重复提问） | 0（main.py 入口短路） | 0 | 仅入口缓存日志，无路由/检索/summarize 日志 |
 
 ### 7.2 功能场景清单（人工回归）
 
@@ -464,8 +534,8 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 2. 双实体对比查询 → 回答含两个产品各自信息并以对比形式呈现
 3. 三实体查询 → 拆 3 个并行分支（验证不硬编码 2）
 4. 指代追问（那个/它/多少钱）→ 消解后检索命中
-5. 省略句短追问（"有货吗"）且有历史 → 门控启发式触发消解
-6. 超范围问题（"有衣服吗"）→ ScopeGuard/路由降级 general-query，不进 RAG 链路
+5. 省略句短追问（"有货吗"）且有历史 → 入口无条件消解触发（22b0c90 语义，非门控启发式）
+6. 超范围问题（"有衣服吗"）→ ScopeGuard/路由降级 general 分支（respond_to_general_query），不进 RAG 链路
 7. 拆解异常（构造场景）→ 回退单分支，无报错
 8. 重复提问 → 缓存命中，响应显著变快
 9. 检索全空 → 兜底回答，无异常中断
@@ -482,7 +552,7 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 | # | 事项 | 建议 | 影响 |
 |---|---|---|---|
-| 1 | 顶层 Router 已输出 `entity_count`（`lg_states.py:17`），planner 再次识别实体是否冗余 | 方案 A（本规格）：planner 独立一次调用（已敲定）；方案 B：Router schema 扩展输出实体名+子 query，planner 变纯函数，再省 1 次调用 | B 可作后续优化，需改 Router schema 与路由提示词 |
+| 1 | ⚠️ 2026-09-02 前提失效更新：Router 已于 2026-08-27 重构为 logic/type/risk（lg_states.py:7-22），**entity_count/complexity 字段不存在**——planner 独立识别无冗余之争，而是"planner 的拆解信息从哪来" | 方案 A（本规格）：planner 独立一次调用（维持现状次数，见 §2.3 P4）；方案 B：扩展 Router schema 输出实体名+子 query，planner 变纯函数再省 1 次——**但 Router 决策（presale）与拆解共用一次 LLM 会加重路由 prompt，需先实测** | 阶段 2 前置评估项（§2.3 P4），B 需改 Router schema 与路由提示词 |
 | 2 | 纠错/扩展/Multi-Query 是否保留 | 默认跳过；复杂查询（`complexity > 0.7`）时纠错+扩展合并为 1 次调用（复用 `correct_and_expand`） | ✅ 已决议：2026-08-21 随 BudgetGuard 一并删除（correct_and_expand 无调用者，见 [[SPEC_REMOVE_QUERY_PREPROCESSING.md]]） |
 | 3 | 轻量模型分层（LIGHT 档：改写/grader/HyDE 用便宜快模型） | Settings 加第四路 `ServiceType`，改写与 grader 先切 | 成本/延迟再降，需 provider 支持 |
 | 4 | summarize 流式化（子图 ainvoke → astream） | 放最后做，体验项 | 首 token 延迟从"全链路完成"降为"检索完成" |
@@ -493,16 +563,17 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 ## 9. 风险与避坑清单
 
-1. **state.messages 只读**：消解结果绝不可写回消息流（破坏 checkpointer 恢复与审计），必须走独立状态字段（`state.question`）
-2. **temperature=0 不等于语义保真**：语义保护靠提示词三条规则 + "完整则原样返回"，实施时保留现有 `CONTEXT_REWRITE_SYSTEM_PROMPT` 规则不弱化
-3. **正则宁多勿漏**：误触发代价 1 次 LLM 调用，漏检代价整链路失效；词表上线后按日志统计漏检样本迭代
-4. **单例化线程安全**：`get_vector_store()` 懒加载在并发首请求下可能双初始化，用锁或 lifespan 预热；语料刷新需失效机制（待确认 #6）
+1. **state.messages 只读**：消解结果绝不可写回消息流（破坏 checkpointer 恢复与审计），必须走独立状态字段（`state.question`）——main 入口侧消解后以 resolved 文本构造新消息（22b0c90 形态），raw 原文不保留于图内消息，该取舍在 [[SPEC_ENTRY_LLM_RESOLUTION.md]] 内定案
+2. **temperature=0 不等于语义保真**：语义保护靠提示词规则 + "完整则原样返回"（现状消解走 `RESOLVE_SYSTEM_PROMPT` 6 规则 + `RESOLVE_LLM_TEMPERATURE=0`，config.py:78），阶段 2 planner 提示词按 §4.2 落地时同样不弱化"只识别明确实体"
+3. **正则宁多勿漏** ⚠️ 已过时：正则门控已废，替换为多轮无条件消解（22b0c90）；本条仅在阶段 2 评估"规则直通跳过 planner"（§2.3 P4）时重新适用（宁多勿漏→宁不直通）
+4. **单例化线程安全** ✅：双检锁模式已在 `get_rag_retriever_service`（cf9e37b）/`get_research_graph`（29e6f73）落地，首建竞态已收口；**语料增量刷新失效机制仍未定义**（待确认 #6，service 持有语料单例）
 5. **删 guardrails 的前提**：顶层 ScopeGuard + Router 降级路径必须可靠（超范围 → general-query），回归场景清单 #6
-6. **planner 回退宁可少拆**：数量不一致/空子 query 一律单分支，不允许半拆半整
-7. **并行分支的重资源**：单例化必须先于并行改造（阶段 0 前置），否则 N 分支放大模型加载
-8. **缓存语义正确性**：key 必须用消解后 query + user 维度；缓存答案需含"命中时间/来源"标记便于排查陈旧缓存
+6. **planner 回退宁可少拆**：数量不一致/空子 query 一律单分支，不允许半拆半整——**现状尚无该校验**（§2.3 P2/§5 新行），阶段 2 落地项
+7. **并行分支的重资源** ✅：检索已收敛为 service 单例（零 LLM 零模型加载），N 分支并行仅放大 pgvector/BM25 查询与 reranker 线程占用（reranker 走 `asyncio.to_thread`），无模型加载放大
+8. **缓存语义正确性**：key 必须用消解后 query + user 维度（现状：入口消解后 lookup + 每用户实例分桶，main.py:409-417）；缓存答案需含"命中时间/来源"标记便于排查陈旧缓存
 9. **删除文件前全局检索引用**：删除 §4.3 清单前 grep 全项目确认无残留 import（避免复现 `error_tool_selection` 式未注册引用）
 10. **每阶段独立提交**：严格按阶段提交，禁止跨阶段合并提交；每阶段验证通过再进入下一阶段
+11. **空任务穿透**（2026-09-02 新增，§2.3 P2）：阶段 2 节点校验（非空/数量一致/去重）落地前，不得依赖"结构化输出必然非空"
 
 ---
 
@@ -510,17 +581,19 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 
 | 文件 | 变更 | 阶段 |
 |---|---|---|
-| `app/core/config.py` | +`REWRITE_TEMPERATURE`/`REWRITE_MAX_TURNS`/`HYDE_ENABLED` | 1/4 |
-| `app/lg_agent/lg_builder.py` | 入口门控+消解、缓存前置、create_research_plan 清理、input_state 加 original_question | 1/3/5 |
-| `app/lg_agent/lg_states.py` | 不变（question 字段复用） | — |
-| `components/query_rewriting/node.py` | +门控函数、`max_turns` 参数化（⚠️ 文件已随预处理管道删除 2026-08-21） | 1 |
-| `components/planner/models.py` | `EntitySubQuery`/`PlannerOutput` 重写 | 2 |
-| `components/planner/node.py` | 校验与回退逻辑 | 2 |
-| `kg_sub_graph/prompts/kg_prompts.py` | `PLANNER_SYSTEM_PROMPT` 重写 | 2 |
-| `workflows/multi_agent/multi_tool.py` | 删 3 节点、直连、签名简化 | 3 |
-| `workflows/multi_agent/edges.py` | Send 目标改 customer_tools | 3 |
-| `components/customer_tools/node.py` | 单例化 + HyDE 入内 | 0/4 |
-| `components/state.py` | InputState +`original_question` | 4 |
-| `components/summarize/node.py` | 用 original_question | 4 |
-| `app/services/redis_semantic_cache.py` | 三项修复 | 5 |
-| §4.3 删除清单 | 删除 Cypher/guardrails/tool_selection 遗留 | 3 |
+| `app/core/config.py` | 阶段 1 实际落地为 +`RESOLVE_LLM_TEMPERATURE`/`RESOLVE_MODEL`（22b0c90，原 `REWRITE_*` 设计未用）；阶段 4 +`HYDE_ENABLED` 待实施 | 1✅/4⏳ |
+| `main.py`（入口，替代原 lg_builder 内实现） | 多轮无条件 LLM 消解 + 缓存 lookup/update（22b0c90） | 1✅/5✅ |
+| `app/lg_agent/lg_builder.py` | create_research_plan 清理（阶段3✅ 29e6f73 子图单例）；input_state 加 original_question 待实施 | 3✅/4⏳ |
+| `app/lg_agent/lg_states.py` | 2026-08-27 路由重构：Router=logic/type/risk（无 entity_count） | — |
+| `app/services/pronoun_resolver.py` / `pronoun_detector.py` | 入口消解实现载体（22b0c90）；缓存内 `_resolve_message` 旧正则待专项处理（docs/项目问题.md #11） | 1✅ |
+| `components/query_rewriting/node.py` | +门控函数、`max_turns` 参数化（⚠️ 文件已随预处理管道删除 2026-08-21；本 spec 阶段 1 不再按此形态实施） | 1 |
+| `components/planner/models.py` | `EntitySubQuery`/`PlannerOutput` 重写（现状仍为 `tasks: List[Task]` 无 entity_count，§2.3 P2） | 2⏳ |
+| `components/planner/node.py` | 校验与回退逻辑（现状仅空列表回退） | 2⏳ |
+| `kg_sub_graph/prompts/kg_prompts.py` | `PLANNER_SYSTEM_PROMPT` 重写（现状仍为北风商贸 Cypher 时代模板，§2.3 P1） | 2⏳ |
+| `workflows/multi_agent/multi_tool.py` | 删 3 节点、直连、签名简化 ✅（multi_tool.py:32-80） | 3✅ |
+| `workflows/multi_agent/edges.py` | Send 目标改 customer_tools ✅ | 3✅ |
+| `components/customer_tools/node.py` | 单例化以 `RAGRetrieverService` 收敛落地 ✅（cf9e37b）；HyDE 入内 ⏳ | 0✅/4⏳ |
+| `components/state.py` | InputState +`original_question` | 4⏳ |
+| `components/summarize/node.py` | 用 original_question（现状用 question=完整原 query） | 4⏳ |
+| `app/services/redis_semantic_cache.py` | 三项修复 ✅（4882018，见 [[SPEC_SEMANTIC_CACHE_RESOLVE.md]] 已完成） | 5✅ |
+| §4.3 删除清单 | 删除 Cypher/guardrails/tool_selection 遗留 ✅ | 3✅ |
