@@ -238,54 +238,26 @@ SmartCS-Agent 的可执行程序只有一个：`llm_backend/` 下的 FastAPI 应
 ```mermaid
 flowchart TB
     subgraph Client["客户端"]
-        FE["Vue3 前端（frontend/dist 静态托管）"]
+        FE["浏览器 / 前端页面"]
     end
-
-    subgraph In["① 入口与 HTTP 网关（§4.1）"]
-        API["FastAPI app<br/>main.py：中间件 + 全部端点"]
+    subgraph Backend["后端服务（单一 FastAPI 进程）"]
+        API["HTTP 入口：接口网关<br/>（所有请求先经过日志 / 跨域中间件）"]
+        PREP["入口预处理：<br/>① 指代消解：多轮省略句先补全为完整问题<br/>② 语义缓存：相似问题命中就直接返回"]
+        ROUTER["意图识别与路由：<br/>一次同时判断 场景类型 + 风险等级<br/>再按结果分发到业务模块"]
+        BIZ["业务执行：<br/>售前检索导购 / 闲聊 / 风险拦截<br/>澄清 / 图片分析 / 售后·投诉占位"]
+        API --> PREP --> ROUTER --> BIZ
     end
-
-    subgraph Pre["② 前置处理（§4.2）"]
-        PREP["入口指代消解（规则门控→LLM 补全）<br/>+ 语义缓存检索（命中短路不进图）"]
+    subgraph Out["输出出口"]
+        SSE["流式返回：逐字推送回答<br/>对话同步存入会话库"]
     end
-
-    subgraph Graph["③ LangGraph 主图（§4.3）"]
-        ROUTER["analyze_and_route_query<br/>场景+风险双维意图识别<br/>ScopeGuard 预检 + 路由决策"]
+    subgraph Store["数据存储"]
+        PG[("PostgreSQL 数据库<br/>知识向量 / 商品价格库存 / 会话消息 / 图状态")]
+        REDIS[("Redis 缓存<br/>语义缓存 / 对话摘要")]
     end
-
-    subgraph Biz["④ 业务执行模块（§4.4/§4.5）"]
-        PRESALE["售前导购：MultiTool 子图 + ragTool 检索（§4.4）"]
-        NODES["业务应答节点：general / 风险拦截 / 转人工<br/>售后与投诉占位 / 澄清 / 图片（§4.5）"]
-    end
-
-    subgraph Out["⑤ LLM 服务与流式出口（§4.8）"]
-        SSE["SSE 流式输出 + 语义缓存回写<br/>+ 前端会话落库"]
-    end
-
-    subgraph Sup["贯穿支撑"]
-        MEM["三层记忆管理（§4.6）"]
-        GUARD["安全护栏 ScopeGuard/TimeoutGuard（§4.7）"]
-    end
-
-    subgraph Store["存储"]
-        PG[("PostgreSQL 16 + pgvector/pg_jieba<br/>document_chunks / product_price_stock<br/>conversations / messages / 检查点")]
-        REDIS[("Redis 7<br/>语义缓存 vec/resp/meta+ZSET<br/>记忆摘要 memory:summary:*")]
-    end
-
-    FE -->|"POST /api/langgraph/query (multipart, SSE 响应)"| API
-    API --> PREP
-    PREP --> ROUTER
-    ROUTER --> PRESALE & NODES
-    MEM -.被识别/业务节点调用.-> ROUTER
-    MEM -.被业务节点调用.-> NODES
-    GUARD -.路由节点内.-> ROUTER
-    PRESALE --> Out
-    NODES --> Out
-    Out --> FE
-    PRESALE --> PG
-    PRESALE --> REDIS
-    API --> PG
-    API --> REDIS
+    BIZ --> SSE --> FE
+    PREP -.查缓存.-> REDIS
+    ROUTER -.读摘要.-> REDIS
+    BIZ --> PG
 ```
 
 **模块清单**（与下文章节一一对应；"运行流程"列即该模块的运行流程图位置）：
@@ -310,26 +282,21 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph Startup["启动流程"]
-        S1["python run.py<br/>（工作目录切到 llm_backend/）"] --> S2["Windows 补丁：uvicorn 事件循环<br/>Proactor → Selector（psycopg 异步兼容）"]
-        S2 --> S3["uvicorn main:app<br/>host=0.0.0.0 port=8000 reload"]
-        S3 --> S4["lifespan 启动 → init_checkpointer()"]
-        S4 --> S5["AsyncConnectionPool 打开<br/>conninfo=POSTGRES_DSN（min1/max10）"]
-        S5 --> S6["AsyncPostgresSaver.setup()<br/>（建检查点表）"]
-        S6 --> S7["builder.compile(checkpointer)<br/>结果挂到 _LazyGraph 全局延迟代理"]
-        S7 --> S8["挂静态前端 frontend/dist → '/'"]
+    subgraph Startup["启动过程"]
+        S1["启动脚本 run.py<br/>（切到后端目录 + Windows 事件循环兼容补丁）"]
+        S2["拉起服务 uvicorn main:app，端口 8000"]
+        S3["初始化：连接数据库检查点 → 建检查点表<br/>→ 编译整个智能体主图"]
+        S4["挂载前端静态页面（frontend/dist）"]
+        S1 --> S2 --> S3 --> S4
     end
-
-    subgraph Request["请求分发"]
-        R1["HTTP 请求"] --> R2["LoggingMiddleware<br/>request_id（contextvar）+ 计时<br/>响应头 X-Request-ID"]
-        R2 --> R3["CORSMiddleware allow_origins=*"]
-        R3 --> R4{"端点路由"}
-        R4 -->|"POST /api/langgraph/query"| R5["→ §4.2 前置处理（对话主链路）"]
-        R4 -->|"POST /api/register /api/token<br/>GET /api/users/me"| R6["→ 认证路由（api/auth.py，§4.9.1）"]
-        R4 -->|"POST /api/upload<br/>GET/DELETE /api/documents*"| R7["→ 知识索引入口（§4.9.2）"]
-        R4 -->|"/api/conversations* 系列"| R8["→ 会话 CRUD（§4.9.1）"]
-        R4 -->|"POST /api/upload/image"| R9["闲置端点（前端直传 langgraph/query 的 image 字段）"]
-        R4 -->|"GET /（其余路径）"| R10["前端静态文件（未构建 dist 则 404）"]
+    subgraph Request["一次请求的处理与分发"]
+        R1["HTTP 请求进入"] --> R2["日志中间件：记录请求号与耗时<br/>响应带回请求号；跨域放行"]
+        R2 --> R3{"按地址分发"}
+        R3 -->|"对话提问 /api/langgraph/query"| R4["对话主链路：预处理 → 智能体 → 流式回答"]
+        R3 -->|"登录注册 /api/register、/api/token"| R5["账号认证（JWT 签发与校验）"]
+        R3 -->|"知识上传 /api/upload"| R6["文档解析 → 切块 → 向量入库"]
+        R3 -->|"会话管理 /api/conversations…"| R7["会话列表 / 消息 / 删除改名"]
+        R3 -->|"其余路径"| R8["前端静态资源"]
     end
 ```
 
@@ -349,67 +316,58 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    Q["用户消息到达 POST /api/langgraph/query"] --> TH{"aget_state(thread_id)<br/>有会话历史?"}
-    TH -->|"有（多轮）"| HIST["取检查点 messages<br/>→ history_messages"]
-    TH -->|"无（首条）"| HISTN["history_messages = []"]
-    HIST --> DET["detect_pronoun(query)<br/>规则三层判定（毫秒级）"]
-    HISTN --> DET
-    DET -->|"NEED_RESOLVE 含指代/省略"| NEED{"有历史可参考?"}
-    NEED -->|"是"| RES["LLM 消解 resolve_pronouns<br/>history+query 一次补全<br/>temp=0，超时(ms)/空→降级原句"]
-    NEED -->|"否（首条即代词句）"| SKIP["跳过缓存检索<br/>（无完整问题可作 key）"]
-    RES --> RECHECK["消解后重新 detect_pronoun"]
-    RECHECK -->|"仍 NEED_RESOLVE（消解失败降级）"| SKIP
-    RECHECK -->|"已完整"| LOOK
-    DET -->|"PASS_THROUGH / SKIP_CACHE"| LOOK
-    SKIP --> GRAPH["进入主图意图识别（§4.3）"]
-    LOOK["cache.lookup(完整消息)<br/>① embedding ② 遍历 ZSET 索引算余弦"] -->|"≥ 阈值命中"| HIT["_stream_cached 模拟流式<br/>逐 4 字符/50ms 推 SSE<br/>X-Conversation-ID 响应头"]
-    LOOK -->|"未命中"| GRAPH
-    GRAPH -->|"图完整运行后"| WB{"非空回答 且<br/>非 NEED_RESOLVE?"}
-    WB -->|"是"| UP["cache.update（lookup/update 同源消解）"]
-    HIT --> SSE["SSE 出口（§4.8）"]
-    UP --> SSE
+    A["收到用户消息"] --> B{"有历史对话?<br/>（按会话号查主图状态）"}
+    B -->|"有"| C1["取出最近几轮上下文"]
+    B -->|"无（首条消息）"| C2
+    C1 --> C2{"规则预检：<br/>语气词？含指代 / 省略?"}
+    C2 -->|"含指代且有历史可参考"| D["大模型依据历史把问题补全为完整句<br/>（补全失败则退回原句）"]
+    C2 -->|"完整问题或纯语气词"| D2["原句直接用<br/>（纯语气词在缓存内部会被识别并自动跳过）"]
+    D --> E
+    D2 --> E["查语义缓存：<br/>把问题向量化后与缓存比对相似度"]
+    E -->|"命中"| HIT["直接返回缓存中的最佳回答<br/>（模拟逐字推送，不进智能体）"]
+    E -->|"未命中"| G["进入智能体主图执行（见 §4.3）"]
+    G --> G2["主图流式产出完整回答"]
+    G2 --> WB{"回答非空且可作缓存键?"}
+    WB -->|"是"| UP["把回答写入语义缓存<br/>（下次相似问题直接命中）"]
+    WB -->|"否"| OUT
+    HIT --> OUT["SSE 流式返回给前端"]
+    UP --> OUT
 ```
 
 **子图①：指代检测三层判定**（`pronoun_detector.detect_pronoun`，纯字符串规则、无 LLM）：
 
 ```mermaid
 flowchart TD
-    A["输入用户消息"] --> B{"纯语气词?<br/>（好的/谢谢/知道了…）"}
-    B -->|"是"| C["SKIP_CACHE：不查不写缓存<br/>（RESOLVE_SKIP_FILLER 门控）"]
-    B -->|"否"| N["“有那些”→“有哪些”归一<br/>（疑问词误写，防误判远指）"]
-    N --> P{"命中指代词?<br/>这个/那个/它/该产品/上述…"}
-    P -->|"是"| R["NEED_RESOLVE"]
-    P -->|"否"| E{"短句（≤15 字）且以省略触发词开头?<br/>有货/多少钱/能退/怎么…"}
-    E -->|"是"| R
-    E -->|"否"| T["PASS_THROUGH：完整问题透传<br/>（~80% 消息零额外开销）"]
+    A["用户消息"] --> B{"第三层：整句是纯语气词?<br/>（好的 / 知道了 / 谢谢…）"}
+    B -->|"是"| C["跳过缓存：不查也不写<br/>（避免污染缓存）"]
+    B -->|"否"| P["归一常见笔误：有那些 → 有哪些"]
+    P --> Q{"第一层：含指代词?<br/>（这个 / 那个 / 它 / 该产品…）"}
+    Q -->|"是"| R["需要大模型补全"]
+    Q -->|"否"| S{"第二层：短句且以省略触发词开头?<br/>（有货 / 多少钱 / 能退…）"}
+    S -->|"是"| R
+    S -->|"否"| T["完整问题：原样使用<br/>（多数消息走这里，零开销）"]
 ```
 
 **子图②：语义缓存读写与索引维护**（`redis_semantic_cache.py`，key 均基于**消解后**消息 MD5）：
 
 ```mermaid
 flowchart LR
-    subgraph Keys["缓存条目（按用户隔离 prefix= cache:{user_id}）"]
-        V["vec:{md5} 向量 JSON"]
-        R["resp:{md5} 回复文本"]
-        M["meta:{md5} 访问元数据"]
-        Z["index：ZSET<br/>member=hash_id, score=last_access"]
+    subgraph Keys["一个缓存条目（按用户隔离存放）"]
+        V["向量 vec：<br/>存问题向量，供相似度比较"]
+        R["回答 resp：<br/>命中时直接返回的文本"]
+        M["访问记录 meta：<br/>命中次数 / 最近访问时间"]
+        Z["索引 index：<br/>登记有哪些条目 + 最近访问时间<br/>（代替全库扫描，支撑淘汰）"]
     end
-    subgraph Lookup["lookup 路径"]
-        L1["消解后消息"] --> L2["qwen text-embedding-v4<br/>向量化"]
-        L2 --> L3{"索引为空?"}
-        L3 -->|"是"| L4["scan_iter 重建一次"]
-        L3 -->|"否"| L5["遍历 index 全部 hash<br/>逐条 numpy 余弦比较"]
-        L4 --> L5
-        L5 --> L6{"最大余弦 ≥ 阈值?<br/>（REDIS_CACHE_THRESHOLD）"}
-        L6 -->|"是"| L7["读 resp + 更新 meta/索引 score<br/>返回缓存文本"]
-        L6 -->|"否"| L8["未命中"]
+    subgraph ReadWrite["查找与写入"]
+        L1["完整问题（已消解）"] --> L2["向量化（qwen text-embedding-v4）"]
+        L2 --> L3["与缓存中各条向量逐一算余弦相似度"]
+        L3 --> L4{"最高相似度达标?"}
+        L4 -->|"是"| L5["返回该条回答，并刷新访问时间"]
+        L4 -->|"否"| L6["未命中 → 进主图生成"]
+        U1["回答生成完 → 按完整问题算键名<br/>写入向量 / 回答 / 元数据并登记索引<br/>（带过期时间，自动清理）"]
     end
-    subgraph Update["update 路径（同源）"]
-        U1["消解后消息 → md5 → 写 vec/resp/meta<br/>ZADD index（score=now）"]
-        U2["TTL = REDIS_CACHE_EXPIRE"]
-    end
-    subgraph Clean["清理任务（实例池幂等启动）"]
-        C1["每 REDIS_CACHE_CLEANUP_INTERVAL 检查<br/>条目 > MAX_SIZE → 按 last_access 升序删最旧"]
+    subgraph Cleanup["后台自动清理"]
+        C1["定时检查条目总数，超限时<br/>按最近访问时间淘汰最久未用的"]
     end
 ```
 
@@ -429,25 +387,29 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph Compile["构建期（模块加载）"]
-        B1["StateGraph(AgentState, input=InputState)"]
-        B2["add_node × 9：<br/>analyze_and_route_query / respond_to_general_query<br/>risk_intercept / transfer_human<br/>create_research_plan / create_image_query<br/>aftersale_placeholder / complaint_placeholder / clarify_node"]
-        B1 --> B2
+    subgraph Compile["构建期（服务启动时一次完成）"]
+        C1["定义消息状态<br/>（含路由结论字段）"]
+        C2["注册 9 个处理节点<br/>（识别 / 闲聊 / 风险拦截 / 转人工 / 售前<br/>图片 / 澄清 / 售后占位 / 投诉占位）"]
+        C3["编译主图并接入检查点存储<br/>（每个节点执行后自动落库）"]
+        C1 --> C2 --> C3
     end
-    subgraph Serve["请求期"]
-        E["graph.astream(InputState(messages=消解后query),<br/>stream_mode=messages, thread_config)"]
-        E --> A["analyze_and_route_query<br/>（ScopeGuard → MemoryManager → LLM 双维识别）"]
-        A --> R{"route_query 条件路由"}
-        R -->|"risk=violation"| N1["risk_intercept（静态）"]
-        R -->|"risk=high_risk"| N2["transfer_human（静态）"]
-        R -->|"image_path 存在"| N3["create_image_query"]
-        R -->|"type=clarify"| N4["clarify_node（LLM+模板兜底）"]
-        R -->|"type=general"| N5["respond_to_general_query（LLM）"]
-        R -->|"type=presale"| N6["create_research_plan → 售前子图（§4.4）"]
-        R -->|"type=aftersale"| N7["aftersale_placeholder（静态）"]
-        R -->|"type=complaint"| N8["complaint_placeholder（静态）"]
-        R -->|"未知 type"| N9["raise ValueError（理论不可达）"]
-        N1 --> CKPT["节点返回 → PostgresSaver 自动落检查点<br/>→ 下一轮 aget_state 恢复上下文"]
+    subgraph Serve["请求期（每轮对话执行一次）"]
+        E["主图按节点逐步执行<br/>（逐字流式输出模式）"] --> A["意图识别节点：<br/>① 经营范围预检 ② 历史摘要压缩<br/>③ 单次识别 场景 + 风险"]
+        A --> R{"路由决策<br/>（风险拦截最优先）"}
+        R -->|"违规"| N1["风险拦截：直接拒绝 + 合规引导"]
+        R -->|"高风险"| N2["转人工：无法在线直接处理"]
+        R -->|"售前"| N3["售前导购：检索知识库回答（§4.4）"]
+        R -->|"闲聊"| N4["闲聊回答<br/>（超经营范围也走这里拒绝）"]
+        R -->|"带图 / 图片"| N5["图片分析（视觉模型识别）"]
+        R -->|"意图不明"| N6["澄清询问（亲～ 风格，一次一问）"]
+        R -->|"售后 / 投诉"| N7["占位话术（服务升级中 / 安抚）"]
+        N1 --> CKPT["回答返回主图 → 检查点自动保存本轮"]
+        N2 --> CKPT
+        N3 --> CKPT
+        N4 --> CKPT
+        N5 --> CKPT
+        N6 --> CKPT
+        N7 --> CKPT
     end
 ```
 
@@ -455,36 +417,32 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>取 state.messages 最后一条"] --> B["ScopeGuard.check<br/>关键词+正则超范围预检（§4.7）"]
-    B -->|"超范围"| BX["直接返回 Router(general, none,<br/>logic=超经营范围原因)<br/>——走 general 节点拒绝话术，零 LLM"]
-    B -->|"通过"| C["选模型：AGENT_SERVICE<br/>DeepSeek / Ollama<br/>ROUTER_TEMPERATURE=0 + 禁用 thinking"]
-    C --> D["MemoryManager.manage 压缩历史<br/>（含最近完整轮 + 摘要，§4.6）"]
-    D --> E["[system ROUTER_SYSTEM_PROMPT] + 管理后消息"]
-    E --> F["model.with_structured_output(Router)"]
-    F -->|"成功"| G["Router{logic, type, risk}"]
-    F -->|"校验失败/异常"| FALL["降级 Router(general, none,<br/>logic=结构化输出失败降级)，不抛异常"]
-    G --> OUT["返回 {router: ...}"]
-    FALL --> OUT
+    A["进入识别节点"] --> B["经营范围预检：<br/>关键词 + 句式匹配，零延迟不调模型"]
+    B -->|"明显超范围<br/>（卖服装 / 荐股票等）"| C["直接拦截：标记为闲聊 + 超范围原因<br/>→ 由闲聊节点输出拒绝话术"]
+    B -->|"通过预检"| D["组装消息：<br/>历史摘要 + 意图识别系统提示词"]
+    D --> E["大模型低温（温度=0）一次性输出：<br/>场景类型 + 风险等级 + 分类理由"]
+    E -->|"输出非法或失败"| F["降级为 闲聊 / 无风险<br/>（保证不中断报错）"]
+    E -->|"成功"| G["得到路由结论 → 交给路由决策"]
+    F --> G
 ```
 
 **子图②：路由决策流程**（`route_query`，risk 优先于场景；`image_path` 存在时图片优先于 type）：
 
 ```mermaid
 flowchart TD
-    A["route_query(state)"] --> R1{"risk == violation ?"}
-    R1 -->|"是"| K1["risk_intercept"]
-    R1 -->|"否"| R2{"risk == high_risk ?"}
-    R2 -->|"是"| K2["transfer_human"]
-    R2 -->|"否"| R3{"config 含 image_path ?"}
-    R3 -->|"是"| K3["create_image_query"]
-    R3 -->|"否"| R4{"router.type"}
-    R4 -->|"clarify"| K4["clarify_node"]
-    R4 -->|"general"| K5["respond_to_general_query"]
-    R4 -->|"presale"| K6["create_research_plan"]
-    R4 -->|"aftersale"| K7["aftersale_placeholder"]
-    R4 -->|"complaint"| K8["complaint_placeholder"]
-    R4 -->|"image"| K3
-    R4 -->|"其他"| K9["ValueError"]
+    A["识别结果到手"] --> R1{"风险 = 违规?"}
+    R1 -->|"是"| N1["风险拦截：明确拒绝 + 合规引导"]
+    R1 -->|"否"| R2{"风险 = 高风险?"}
+    R2 -->|"是"| N2["转人工：需专员核实处理"]
+    R2 -->|"否"| R3{"本条消息带了图片?"}
+    R3 -->|"是"| N3["图片分析节点"]
+    R3 -->|"否"| R4{"看场景类型"}
+    R4 -->|"售前"| N4["售前导购：知识检索子图"]
+    R4 -->|"闲聊 / 超范围"| N5["闲聊回答"]
+    R4 -->|"图片"| N3
+    R4 -->|"意图不明"| N6["澄清询问"]
+    R4 -->|"售后 / 投诉"| N7["占位话术"]
+    R4 -->|"未知类型"| N8["报错（理论不可达）"]
 ```
 
 **Router 输出结构与路由表**（`lg_states.py`）：
@@ -507,28 +465,24 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["路由 type=presale → 进入 create_research_plan"] --> B["模型选择 AGENT_SERVICE<br/>temperature=LLM_TEMPERATURE<br/>tags=['research_plan']（供出口过滤）"]
-    B --> C["create_multi_tool_workflow(llm)<br/>每请求编译一次子图（无跨请求复用）"]
-    C --> D["question = 末条消息<br/>（入口已前置消解，此处直接取用）"]
-    D --> E["input_state = {question, data:[], history:[]}"]
-    E --> F["TimeoutGuard(30s).wrap(<br/>multi_tool_workflow.ainvoke(input,<br/>config={'__pregel_checkpointer': None})）"]
-    F -->|"正常返回"| G["answer → AIMessage 返回主图<br/>→ SSE 出口（§4.8）"]
-    F -->|"asyncio.wait_for 超时"| H["降级话术：<br/>「抱歉，系统处理超时，请稍后再试。」"]
-    G --> END2["（子图结果不入检查点：规避 Send 序列化 Bug；<br/>会话记忆由主图检查点承担）"]
-    H --> END2
+    A["路由 = 售前，进入售前节点"] --> B["准备：新建检索子图实例<br/>（子图内部 = 分解 → 检索 → 汇总 → 收尾）"]
+    B --> C["取出当前问题<br/>（入口已把省略与指代补全）"]
+    C --> D["运行检索子图<br/>（整体套 30 秒超时保护）"]
+    D -->|"按时完成"| E["把子图回答包装成消息返回主图<br/>→ 流式输出给用户"]
+    D -->|"超时"| F["降级话术：<br/>“抱歉，系统处理超时，请稍后再试”"]
+    E --> G["（子图内部不写入主图检查点：<br/>避免并行任务与持久化冲突；<br/>会话记忆仍由主图保存）"]
+    F --> G
 ```
 
 #### 4.4.2 子图①：Multi-Tool 工作流运行流程
 
 ```mermaid
 flowchart TD
-    START["START"] --> P["Planner 节点<br/>PLANNER_SYSTEM_PROMPT + llm.with_structured_output(PlannerOutput)"]
-    P -->|"输出 tasks: Task[]（分解失败→回退单任务=原问题）"| MAP["map_reduce_planner_to_customer_tools<br/>返回 List[Send]"]
-    MAP -->|"Send × N 并行"| VS["customer_tools 节点 ×N<br/>（vector_search_query）<br/>每个子任务一次检索"]
-    VS --> SZ["summarize 节点<br/>prompt(电商客服风格) \| llm \| StrOutputParser<br/>以全部 records 为事实生成客服话术"]
-    SZ -->|"summary"| FA["final_answer 节点（纯透传，无 LLM）<br/>answer=summary，构造 history_record"]
-    FA -->|"answer"| OUT["END（OutputState: answer/question/…）"]
-
+    START["子图启动"] --> P["任务分解 Planner：<br/>大模型把问题拆成若干独立子问题<br/>（拆不开就保留原问题为单个任务）"]
+    P --> VS["并行检索：每个子问题同时执行<br/>一次知识库混合检索（高亮节点）"]
+    VS --> SZ["结果汇总 Summarize：<br/>大模型把所有检索事实<br/>整理成客服口吻的完整回答"]
+    SZ --> FA["收尾 FinalAnswer：<br/>包装回答，不再调用大模型"]
+    FA --> OUT["返回完整回答"]
     style VS fill:#fff3cd
 ```
 
@@ -551,18 +505,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["LLM/调用方 ainvoke rag_retrieval(query)"] --> B{"入参校验<br/>query 空/纯空白?"}
-    B -->|"是"| E1["返回 error：invalid_argument<br/>retryable=true（修正参数后可重试）<br/>并提示生成检索问题或转澄清"]
-    B -->|"否"| C["_search_with_retry(query.strip())"]
-    C --> D{"asyncio.wait_for 超时保护<br/>TOOL_DB_TIMEOUT_SECONDS=10s"}
-    D -->|"瞬时错误<br/>(db_timeout/db_connection/api_unavailable)"| R1{"自动重试 ≤ TOOL_RETRY_TIMES<br/>间隔 0.5s"}
-    R1 -->|"重试仍失败"| E2["返回 error（分类类型）<br/>retryable=false<br/>提示暂不可用/转人工，禁编造"]
-    D -->|"永久错误(db_config/unknown)"| E2
-    R1 -->|"重试成功"| OK
-    D -->|"成功"| OK["docs = RAGRetrieverService.search(query)<br/>（混合检索管线，见子图④）"]
-    OK --> EMPTY{"docs 为空?"}
-    EMPTY -->|"是"| E3["返回空结果提示<br/>+ 可执行建议（换措辞/转 stock/澄清）"]
-    EMPTY -->|"否"| OUT["拼接：每段【来源:文件名】前缀 + 正文<br/>以换行分隔返回（LLM 直接消费）"]
+    A["智能体调用 rag_retrieval<br/>（检索商品静态知识：参数 / 功能 / 政策）"] --> B{"问题为空?"}
+    B -->|"是"| E1["返回错误：请先给出要检索的问题<br/>（可提示向用户澄清）"]
+    B -->|"否"| C["执行知识库检索<br/>（超时保护 10 秒；<br/>数据库 / 网络抖动自动重试一次）"]
+    C -->|"检索失败"| E2["返回统一错误：知识库暂不可用<br/>提示用户稍后再试或转人工，禁止编造"]
+    C -->|"无匹配结果"| E3["返回空结果 + 建议：<br/>换措辞重试 / 价格库存改用动态工具 /<br/>如实告知未收录"]
+    C -->|"检索到内容"| OK["返回相关文档片段<br/>（每段标注【来源:文件名】，供引用）"]
 ```
 
 #### 4.4.5 子图④：ragTool 核心——RAGRetrieverService 混合检索管线运行流程
@@ -571,18 +519,17 @@ flowchart TD
 
 ```mermaid
 flowchart TB
-    Q["search(query)<br/>retrieval_top_n=HYBRID_RETRIEVAL_TOP_N(20)<br/>top_k=RERANKER_TOP_K(5)/兜底 5"] --> P1["① asyncio.gather 两路并行<br/>（每路 _safe 包装：单路失败降级为空，不阻塞融合）"]
-    P1 --> V["向量路 _vector_search：<br/>embed([query]) qwen text-embedding-v4<br/>→ 全零向量则跳过该路<br/>→ DocumentChunk.embedding<br/>cosine_distance ORDER BY + LIMIT 20<br/>（触发 HNSW ANN）"]
-    P1 --> B["BM25 路 bm25.search：<br/>pg_jieba 双配置分词并集 OR 语义<br/>（精确模式 ∪ 单字兜底）→ content_tsv @@ tsq<br/>走 GIN 倒排 → ts_rank_cd 排序<br/>LIMIT BM25_TOP_K(20)"]
-    V --> F["② RRF 融合 rrf_fuse<br/>按 chunk_id 去重<br/>score=Σ1/(60+rank)<br/>取 RRF_TOP_K(20)"]
-    B --> F
-    F --> E{"RERANKER_ENABLED<br/>且融合结果非空?"}
-    E -->|"是"| RE["③ RerankerService.rerank<br/>asyncio.to_thread 线程池（防阻塞事件循环）<br/>CrossEncoder bge-reranker-v2-m3<br/>cuda + fp16 / cpu 自动<br/>max_length 512, batch 8<br/>对 top-20 打相关分 → top-5"]
-    E -->|"否"| D1["直接用 fused[:top_k]"]
-    RE -->|"模型加载/评分失败返回 None"| D1
-    RE -->|"成功"| OUT2["返回 top-5 docs<br/>（id/text/source/chunk_id/…<br/>+rrf_score[/rerank_score]）"]
+    Q["收到检索问题"] --> P["双通道并行检索<br/>（两条路独立，单条失败不阻塞）"]
+    P --> V["语义通道：向量检索<br/>问题先向量化，再到向量库找<br/>最相近的 20 段（近似最近邻）"]
+    P --> K["关键词通道：全文检索<br/>中文分词后在倒排索引里匹配<br/>按相关度取 20 段（BM25 打分）"]
+    V --> F["排名融合：把两路排名按公式合并<br/>（只比名次不比分数），去重取前 20 段"]
+    K --> F
+    F --> R{"精排是否开启?"}
+    R -->|"是"| RE["相关性精排：交叉编码器逐段打分<br/>重排后只留最相关的 5 段"]
+    R -->|"否 / 精排加载失败"| D1["直接取融合结果的前 5 段"]
+    RE -->|"评分异常"| D1
+    RE -->|"正常"| OUT2["输出最终相关片段<br/>（给汇总节点或工具使用）"]
     D1 --> OUT2
-    OUT2 --> CONSUMER["消费方：<br/>vector_search_query 节点（生产）<br/>/ rag_retrieval @tool（待接入）"]
 ```
 
 **关键参数与降级设计**：
@@ -611,59 +558,51 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A["进入 respond_to_general_query"] --> B["模型：AGENT_SERVICE<br/>LLM_TEMPERATURE=0.7<br/>tags=['general_query']"]
-    B --> C["system = GENERAL_QUERY_SYSTEM_PROMPT.format(<br/>logic=router.logic)<br/>——超范围时注入 logic 触发拒绝话术"]
-    C --> D["MemoryManager.manage 历史压缩（§4.6）"]
-    D --> E["LLM 生成闲聊回复"]
-    E --> F["{messages: [AIMessage]} → SSE"]
+    A["进入闲聊节点"] --> B["系统提示词注入分类理由<br/>（若来自超范围拦截，则要求用拒绝话术）"]
+    B --> C["历史压缩：远处摘要 + 最近几轮原文<br/>（模型按全局配置自动选择）"]
+    C --> D["大模型生成客服风格回复"]
+    D --> E["返回消息 → 流式输出"]
 ```
 
 **clarify 节点运行流程**（电商"亲～"风格，一次只问一个）：
 
 ```mermaid
 flowchart TD
-    A["进入 clarify_node"] --> B["system = CLARIFY_SYSTEM_PROMPT.format(logic)<br/>结合用户原话 + router logic 困惑点"]
-    B --> C["MemoryManager 历史管理"]
-    C --> D["LLM 生成澄清问题"]
-    D -->|"内容非空"| OK["{messages: [AIMessage]}"]
-    D -->|"空/异常/超时"| FB["静态模板兜底<br/>CLARIFY_FALLBACK_REPLY"]
-    OK --> SSE["→ SSE"]
-    FB --> SSE
+    A["进入澄清节点<br/>（用户意图不明确）"] --> B["结合分类理由与用户原话<br/>组装提示词（亲～ 风格，一次只问一个）"]
+    B --> C["大模型生成针对性提问"]
+    C -->|"正常"| D["返回澄清问题"]
+    C -->|"为空 / 异常"| E["兜底模板：<br/>“亲～请问您想咨询商品、售后还是其他呢？”"]
+    D --> F["流式输出"]
+    E --> F
 ```
 
 **image 节点运行流程**（PIL 压缩 → Qwen-VL → 客服 LLM 二次生成）：
 
 ```mermaid
 flowchart TD
-    A["进入 create_image_query"] --> B{"image_path 存在?"}
-    B -->|"否"| AP["返回道歉文案"]
-    B -->|"是"| C{"VISION_API_KEY/BASE_URL/MODEL 完整?"}
-    C -->|"否"| AP
-    C -->|"是"| D["PIL 打开 → LANCZOS 等比缩至最长边 ≤1024<br/>→ JPEG quality=85 → base64"]
-    D --> E["aiohttp POST {VISION_BASE_URL}/chat/completions<br/>VISION_MODEL（qwen-vl 系），max_tokens=VISION_MAX_TOKENS"]
-    E -->|"非 200/异常"| AP
-    E -->|"200"| F["image_description → GET_IMAGE_SYSTEM_PROMPT.format()"]
-    F --> G["AGENT_SERVICE LLM 结合图片描述 + 历史生成客服回复"]
-    AP --> OUT2["{messages:[AIMessage]} → SSE"]
-    G --> OUT2
+    A["进入图片分析节点"] --> B{"图片存在 且 视觉模型配置齐全?"}
+    B -->|"否"| E1["返回道歉：<br/>无法查看图片，请重新上传"]
+    B -->|"是"| C["压缩图片并转码<br/>（最长边 1024，JPEG 质量 85）"]
+    C --> D["视觉大模型识别图片内容<br/>（返回图片描述）"]
+    D -->|"接口失败"| E1
+    D -->|"成功"| F["图片描述交给客服大模型<br/>结合用户问题生成回复"]
+    E1 --> G["返回消息 → 流式输出"]
+    F --> G
 ```
 
 **静态话术节点组运行流程**（risk_intercept / transfer_human / aftersale_placeholder / complaint_placeholder，共用模式）：
 
 ```mermaid
 flowchart TD
-    E1["risk=violation"] --> N1["risk_intercept"]
-    E2["risk=high_risk"] --> N2["transfer_human"]
-    E3["type=aftersale"] --> N3["aftersale_placeholder"]
-    E4["type=complaint"] --> N4["complaint_placeholder"]
-    N1 --> T1["静态话术常量<br/>RISK_INTERCEPT_REPLY"]
-    N2 --> T2["静态话术常量<br/>TRANSFER_HUMAN_REPLY"]
-    N3 --> T3["AFTERSALE_PLACEHOLDER_REPLY<br/>（服务升级中提示）"]
-    N4 --> T4["COMPLAINT_PLACEHOLDER_REPLY<br/>（安抚话术）"]
-    T1 --> M["{messages: [AIMessage(content=话术)]}<br/>不走 LLM、无外部调用 → SSE"]
-    T2 --> M
-    T3 --> M
-    T4 --> M
+    E1["违规咨询<br/>（解除限速 / 改装电池等）"] --> M1["风险拦截：明确拒绝 + 合规引导"]
+    E2["高风险操作 / 投诉升级"] --> M2["转人工：线上无法处理，专人跟进"]
+    E3["售后问题"] --> M3["售后占位：服务升级中，<br/>可先看退换货政策"]
+    E4["投诉情绪"] --> M4["投诉安抚占位：<br/>登记反馈，专员跟进"]
+    M1 --> O["直接返回静态话术<br/>（不走大模型，零延迟）"]
+    M2 --> O
+    M3 --> O
+    M4 --> O
+    O --> OUT["流式输出"]
 ```
 
 ### 4.6 记忆管理模块（三层压缩 + Redis 增量缓存）
@@ -674,26 +613,15 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["manage(messages, system_prompt, conversation_id)"] --> B["按 (Human, AI) 配成轮次<br/>跳过 System，容忍不规则"]
-    B --> C{"Redis 有会话摘要?<br/>memory:summary:{conversation_id}"}
-    C -->|"命中"| D["还原 high/medium 摘要<br/>记录 compressed_turns 起点"]
-    C -->|"未命中"| E["摘要为空，起点 0"]
-    D --> F["分层：recent = 最近 5 轮<br/>older = 其余"]
-    E --> F
-    F --> G{"older 非空 且 有新增轮次?"}
-    G -->|"是（增量压缩）"| H1{"older 前段（medium_start 之前）"}
-    H1 -->|"有"| HI["compress_high：高层摘要 ≤100 字<br/>+ 关键实体（携带上次摘要续压）"]
-    H1 -->|"无"| MI
-    G -->|"否（无 older / 无新增）"| SKIP2["跳过压缩<br/>（摘要直接用 Redis 缓存结果）"]
-    HI --> MI["compress_medium：<br/>最近 10 轮（6~15）压缩为 ≤200 字<br/>+ 关键实体/用户意图"]
-    SKIP2 --> S
-    MI --> S["拼摘要文本：[历史摘要]+[关键实体]<br/>[近期摘要]+[相关实体]"]
-    S --> T["Token 预算检查<br/>history_summary > 800 → 按句子裁剪<br/>recent > 2000 → 从最老倒序裁到预算内"]
-    T --> O["输出：[SystemMessage(摘要)] + 最近完整消息"]
-    O --> W{"conversation_id 且 older 非空?"}
-    W -->|"是"| SV["save_summary 写 Redis<br/>compressed_turns=len(older) TTL 24h"]
-    W -->|"否"| RT["返回消息列表给节点"]
-    SV --> RT
+    A["输入完整对话历史"] --> B["按一问一答配对成轮次"]
+    B --> C["分层：最近 5 轮保留原文<br/>更早的轮次进入压缩"]
+    C --> D{"压缩摘要是否已有缓存?"}
+    D -->|"有缓存"| E["只补压新增的轮次（增量压缩）"]
+    D -->|"无缓存"| F["全量压缩：<br/>远期 → 高层摘要（≤100 字 + 关键实体）<br/>中段 → 中层摘要（≤200 字）"]
+    E --> G["压缩结果存 Redis（按会话，24 小时）"]
+    F --> G
+    G --> H["预算控制：总字数超限时<br/>优先裁剪最旧的内容"]
+    H --> I["组装：摘要（作为系统消息）<br/>+ 最近完整对话 → 交给大模型"]
 ```
 
 **分层与预算（代码实测值）**：
@@ -718,14 +646,22 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["用户问题"] --> B{"命中超范围关键词?<br/>服装/食品/医药/汽车房产/金融/违禁…"}
-    B -->|"是"| X["拒绝：Router(general,<br/>logic=超出经营范围(关键词))"]
-    B -->|"否"| C{"命中超范围正则?<br/>(买|推荐).(衣服…)<br/>(有|卖).(车|房|股票…)"}
-    C -->|"是"| Y["拒绝同上"]
-    C -->|"否"（不确定）"| Z["放行 → LLM risk 维度精确判断"]
+    A["用户问题"] --> B{"命中超经营范围关键词或句式?<br/>（服装食品医药 / 车房金融 / 违禁品…）"}
+    B -->|"是"| C["直接拦截：交由闲聊节点输出<br/>“不在经营范围”的拒绝话术<br/>（全程不调用大模型）"]
+    B -->|"否 / 不确定"| D["放行：由路由大模型的<br/>风险维度做精确判断"]
 ```
 
-**TimeoutGuard 运行流程**：`wrap(coro, fallback)` → `asyncio.wait_for` 计时 → 超时记日志（含 conversation_id）返回 fallback；未超时原样返回。设计依据：`docs/spec_plan/已完成/SPEC_REMOVE_QUERY_PREPROCESSING.md`（查询预处理管道与 BudgetGuard 已随子图简化移除，事实性保障由 Reranker + 生成 LLM 承担）。
+**TimeoutGuard 运行流程**：
+
+```mermaid
+flowchart TD
+    A["调用方：售前检索子图执行"] --> B["启动 30 秒计时"]
+    B --> C{"子图是否按时返回?"}
+    C -->|"是"| D["原样取回检索结果"]
+    C -->|"否（超时）"| E["中止等待并记日志<br/>→ 返回降级话术给用户"]
+```
+
+实现：`wrap()` 内用 `asyncio.wait_for` 计时，超时记录日志（含会话号）后返回降级话术；未超时原样返回。设计依据：`docs/spec_plan/已完成/SPEC_REMOVE_QUERY_PREPROCESSING.md`（查询预处理管道与 BudgetGuard 已随子图简化移除，事实性保障由 Reranker + 生成 LLM 承担）。
 
 ### 4.8 LLM 服务与流式出口模块
 
@@ -744,18 +680,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["graph.astream(stream_mode='messages')"] --> B["逐 (chunk, metadata) 处理"]
-    B --> F1{"chunk.content 非空<br/>且 tags 不含 research_plan<br/>且无 tool_calls?"}
-    F1 -->|"是"| P["SSE 推送 data: {JSON content}"]
-    F1 -->|"tool_calls"| L["仅 debug 日志（子图规划中间件）"]
-    F1 -->|"research_plan 标记"| DROP["丢弃（子图 planner/summarize 中间 token）"]
-    P --> N{"流结束"}
-    N -->|"是"| C1{"决策非 NEED_RESOLVE<br/>且 complete_response 非空?"}
-    C1 -->|"是"| WB["cache.update 回写语义缓存<br/>（key=消解后消息，与 lookup 同源）"]
-    C1 -->|"否（空回答/含指代）"| RET
-    N --> HDR["响应头 X-Conversation-ID = thread_id"]
-    WB --> RET["SSE 全量返回（前端 §4.9.4）"]
-    HDR --> RET
+    A["主图流式执行"] --> B["产出逐条内容"]
+    B --> C{"这条内容能展示给用户?"}
+    C -->|"能"| D["SSE 逐字推给前端<br/>（前端边收边渲染）"]
+    C -->|"不能：工具调用 / 规划草稿等内部过程"| E["过滤丢弃"]
+    D --> F{"流结束 且 回答完整?"}
+    E --> F
+    F -->|"是"| G["回答写入语义缓存<br/>前端同时把本轮问答存入会话库"]
+    F -->|"否"| H["不写缓存"]
+    G --> I["本次对话结束"]
+    H --> I
 ```
 
 **缓存命中时的出口**（不进图）：`_stream_cached` 每 4 字符/50ms 模拟流式，前端体验与真流式一致。
@@ -777,21 +711,15 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["POST /api/upload 或 ingest_knowledge.py 目录遍历"] --> B{"扩展名白名单 txt/md/pdf/docx<br/>且 ≤ MAX_FILE_SIZE_MB=30<br/>且非空?"}
-    B -->|"否"| E1["HTTP 400（unsupported/too_large/empty_file）<br/>不落任何 DB 记录"]
-    B -->|"是"| C["MD5 查重（(user_id, md5) 快路径）"]
-    C -->|"已存在"| E2["status=duplicate（幂等跳过）"]
-    C -->|"新文件"| D["解析分派："]
-    D -->|"txt/md"| P1["parse_text_file（utf-8→gbk→…编码降级）"]
-    D -->|"docx"| P2["parse_docx：段落+表格按文档序<br/>章节栈规则 → Segment(text, chapter)"]
-    D -->|"pdf"| P3["MinerU 云端 v4：提交→轮询(3s/≤300s)<br/>→ 下载 markdown → parse_md 按 # 标题切章节"]
-    P1 --> CL["清洗 clean_text（TEXT_CLEAN_ENABLED）<br/>控制字符/页码/目录行；不删裸数字行"]
-    P2 --> CL
-    P3 --> CL
-    CL --> S["RecursiveCharacterTextSplitter<br/>chunk 500 / overlap 50<br/>中文句读分隔符；<5 字符短块过滤"]
-    S --> EM["embed_in_batches（≤10 条/批）<br/>qwen text-embedding-v4<br/>批失败指数退避重试（[1,2,4]s ×3）<br/>全零 = 失败"]
-    EM --> DB["单事务写 documents + chunks<br/>chunk_id={user_id}_{md5}_{index:04d}"]
-    DB --> RDY["检索侧自动就绪：<br/>content_tsv 生成列（jiebacfg 分词，INSERT 自动维护）<br/>+ 预建 HNSW / GIN / 唯一索引（init_db.py 幂等建，不再 drop_all）"]
+    A["收到知识文件<br/>（页面手动上传 / 脚本批量入库）"] --> B{"格式与大小合规?<br/>（txt / md / pdf / docx，≤30MB）"}
+    B -->|"否"| E1["拒绝并提示原因（不入库）"]
+    B -->|"是"| C{"文件是否重复?<br/>（按内容指纹判断）"}
+    C -->|"重复"| E2["跳过（重复执行安全）"]
+    C -->|"新文件"| D["解析成文本并保留章节信息：<br/>docx/txt → 本地解析；pdf → 云端版面还原"]
+    D --> CL["清洗噪音后切块<br/>（每块约 500 字，相邻重叠 50 字）"]
+    CL --> EM["分批向量化（每批 ≤10 块，<br/>失败自动重试）"]
+    EM --> DB["一次性入库：文档记录 + 向量 + 块号"]
+    DB --> RDY["检索侧自动可用：<br/>全文索引由数据库生成列自动维护，<br/>向量与倒排索引在初始化时建好"]
 ```
 
 #### 4.9.3 商品动态数据模块（product_price_stock + product_stock_lookup）
@@ -802,15 +730,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["ainvoke(product_name, category?, limit=5)"] --> B{"product_name 空?"}
-    B -->|"是"| E1["error invalid_argument retryable=true<br/>提示提取商品名/向用户澄清"]
-    B -->|"否"| C["参数预处理：去全部空格<br/>+ 转义 %/_（防注入式全表匹配）<br/>limit 钳制 1~20"]
-    C --> D["SQLAlchemy 查询：<br/>func.replace(name,' ','') ILIKE '%kw%' ESCAPE<br/>+ category 过滤 + updated_at DESC + limit"]
-    D --> G{"wait_for(10s) + 瞬时错误自动重试<br/>(db_timeout/db_connection)"}
-    G -->|"重试仍失败"| E2["error（分类）retryable=false<br/>提示暂不可用，禁编造价格"]
-    D -->|"永久错误(db_config/unknown)"| E2
-    G -->|"成功且 0 行"| E3["empty：未找到 + 建议<br/>（换词/静态信息转 rag_retrieval/澄清）"]
-    G -->|"成功且有行"| OK["ok JSON：{status, count, data:<br/>[{product_name, category,<br/>current_price, stock_quantity, updated_at}]}"]
+    A["智能体调用 product_stock_lookup<br/>（查询商品实时价格 / 库存）"] --> B{"商品名称为空?"}
+    B -->|"是"| E1["返回错误：请提供商品名称<br/>（可向用户追问）"]
+    B -->|"否"| C["整理关键词：去掉空格、转义特殊符号<br/>（避免一次匹配出全部商品）"]
+    C --> D["模糊查询价格库存表：<br/>名称包含匹配，可加品类过滤与条数限制<br/>（带超时保护与自动重试）"]
+    D -->|"查询失败"| E2["返回统一错误：暂时查不了价格<br/>提示勿编造数字"]
+    D -->|"无匹配商品"| E3["返回空 + 建议：换关键词 /<br/>静态参数改用知识库检索 / 向用户确认"]
+    D -->|"找到商品"| OK["返回清单：名称、品类、现价、库存量"]
 ```
 
 **意图语义**：泛查询（"有哪些 XX/卖什么"）`limit=20` 全量清单，单商品详情默认 5——LLM 编排层按查询意图取值（设计约定，随 Agent 接入生效）。
@@ -823,16 +749,16 @@ Vue3 SFC 工程（`frontend/`，dev 由 vite 代理 `/api` → `:8000`；生产�
 
 ```mermaid
 flowchart TD
-    A["sendMessage(content, image)"] --> B["无会话则先建 DB 会话<br/>（conversations 表 int id）"]
-    B --> C["POST /api/langgraph/query（multipart）<br/>conversation_id = 上次 X-Conversation-ID<br/>（首轮为空 → 后端生成 uuid thread）"]
-    C --> D["读响应头 X-Conversation-ID<br/>→ 存入 langgraphConversationId 复用"]
-    D --> E["fetch body reader 解析 SSE data: 行"]
-    E --> F{"parsed.interruption?"}
-    F -->|"是"| F1["保留 conversation_id，提示等待确认（预留分支）"]
-    F -->|"否"| G["字符串/数组/文本片段 → 追加 aiContent<br/>（Vue 响应式替换）"]
-    G --> H{"流结束"}
-    H -->|"是"| I["POST /api/conversations/save-messages<br/>（DB 会话落库本轮 user+assistant）"]
+    A["用户点发送（可带图片）"] --> B["还没有会话则先建一个会话"]
+    B --> C["发请求：问题 + 图片 + 会话号<br/>（会话号沿用上一次返回的）"]
+    C --> D["记下响应头里的新会话号<br/>（后续提问复用，保住多轮记忆）"]
+    D --> E["读流式响应，边收边渲染气泡"]
+    E --> F{"遇到中断标记?"}
+    F -->|"是"| F1["提示等待人工确认（预留能力）"]
+    F -->|"否"| G{"流结束?"}
     F1 --> E
+    G -->|"是"| H["把本轮一问一答存入会话库"]
+    H --> I["完成，等待下一条提问"]
 ```
 
 **双会话标识**：DB `conversations.id`（列表/历史/落库）与 LangGraph `thread_id`（图状态检查点）分离，由前端桥接。图片随消息以 `image` 字段直传 langgraph/query（`/api/upload/image` 端点闲置）。调用端点矩阵见 §4.1 分发图（auth/conversations/documents/upload 全套已接入）。
@@ -1419,4 +1345,3 @@ SmartCS-Agent 是一个**技术深度优秀、工程完整性良好但生产就�
 > **分析工具**: Claude Code
 > **分析范围**: 全项目 Python 服务，配置化管理，3 Docker 服务
 > **核心模块覆盖率**: 100%
-
