@@ -106,7 +106,7 @@ main 入口 /api/langgraph/query（多轮无条件 LLM 消解 → 语义缓存 l
 **P1 · 拆解提示词与纯 RAG 商品检索场景错配（Cypher 时代残留）**
 - `PLANNER_SYSTEM_PROMPT`（kg_prompts.py:8-38）规则仅"拆为独立子任务"，示例全部为 Neo4j 时代的库表式拆分（"北风商贸有哪些饮料类产品？价格是多少？"→ 拆产品/价格两问；"订单10248…"、"供应商 Exotic Liquids…"），**无任何商品实体识别、意图继承、实体名回填约束**；human 模板另叠一份重复规则（planner/prompts.py:14-21）。
 - 当前下游是**商品知识 docx 的全库向量混合检索**（`RAGRetrieverService.search`，HNSW∥BM25→RRF→Reranker，top_k=5），不是表查询——旧示例对"X 和 Y 哪个更好"类 query 完全无指导：LLM 可任意选择"整句单任务（另一实体证据可能被 top-5 截断）"或"按属性拆（任务粒度失控、summarize 结果膨胀）"。
-- 目标：阶段 2 按 §4.2 重写（实体名识别 + 逐实体子 query + 意图继承规则），先落地提示词再谈 schema。
+- 目标：阶段 2 按 §4.2 重写——替换用**完整 prompt 全文（2026-09-03 v2，5 示例）**已在 §4.2 落档：子问单元拆解模型（多实体对比拆、列表+详情并列拆两类动机；同实体属性细节/零实体/单意图不拆）、单任务强制=原 query、禁止空列表、MAX_TASKS=3，schema 与节点校验同步更新（数量锚废除）。
 
 **P2 · 输出模型无拆解约束、节点校验薄弱（空任务可穿透成空答）**
 - `PlannerOutput` = 直接复用 `tasks: List[Task]`（planner/models.py:8-12），无 entity_count、无实体级子 query 模型；节点回退仅覆盖**空列表**一种情形（node.py:49-57），**不校验** task.question 空串 / 任务数异常 / 重复任务。
@@ -208,52 +208,142 @@ if need_reference_resolution(resolved_question, len(state.messages) - 1):
 
 ### 4.2 实体识别 + 任务拆解合并（planner 改造，一次 LLM 调用）
 
+> **2026-09-03 v2 修订（用户评审后）**：拆分触发从"实体数"推广为**子问单元模型**——同时覆盖两类拆分动机：**多实体**（证据文档互斥，混合 query 的 top-5 会偏向一方）与**列表型+详情型子问并列**（如"有哪些…？价格/参数…？"命中的文档块不是同一批）；单实体的多个**属性细节子问（功能+噪音+续航）一律合并不拆**（命中的是同几篇商品文档，拆开只增分支与 summarize 输入膨胀）。`entity_count` 降级为决策辅助与日志字段，**不再作数量一致性校验锚**（列表型拆解下 tasks 数可 > entity_count）。
+
 **结构化输出 schema**（替换 `components/planner/models.py` 的 `PlannerOutput`）：
 
 ```python
 class EntitySubQuery(BaseModel):
-    name: str        # 实体名，如 "扫地机器人X1"
-    sub_query: str   # 继承原意图的子 query，如 "扫地机器人X1的优缺点和适用场景是什么？"
+    name: str = ""     # 主题词：实体名/清单范围（日志与观测用，可空）
+    sub_query: str     # 可直接独立检索的子问文本（自含主题词，禁止指代）
 
 class PlannerOutput(BaseModel):
-    entity_count: int = Field(description="识别出的产品/类别实体数量")
+    entity_count: int = Field(default=0, ge=0, description="识别到的商品/品类实体数（决策辅助与日志，不作数量校验锚）")
     tasks: List[EntitySubQuery] = Field(
         default_factory=list,
-        description="entity_count>=2 时每个实体一项；entity_count<=1 时为空或仅一项",
+        description="1..3 条；无法拆分时恰 1 条且=原 query 逐字复制；拆分时每条为可独立检索的子问",
     )
 ```
 
-**提示词规则**（重写 `kg_sub_graph/prompts/kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT`）：
+**提示词规则**（重写 `kg_sub_graph/prompts/kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT`；2026-09-03 v2）：
 
-1. 识别 query 中的产品/类别实体（Product/Category 类型），输出 `entity_count`；无实体则为 0
-2. `entity_count >= 2` 时，为**每个实体**生成一个独立子 query：
-   - 必须包含实体全名，无指代、无省略
-   - **必须继承原 query 的意图维度**：对比/哪个好 → 优缺点、参数、适用场景；价格 → 售价、优惠；选购 → 适合人群、口碑
-   - 子 query 之间独立、不重叠、不依赖其他任务结果
-   - 不硬编码 2 个：实体数 N 拆 N 个
-3. `entity_count <= 1` 时：`tasks` 为空或仅一项（`sub_query` 可空），表示单分支整句检索
-4. 只识别明确实体，不过度推断；Unknown 类型不计入 entity_count
+1. 拆分动机只有两种，其余一律不拆：
+   - **多实体（≥2）**：为每个实体生成 1 个独立子任务，任务数 = 实体数，每任务继承原 query 对该实体的全部意图
+   - **列表型 + 详情型并列**（"有哪些/几款/推荐"与"价格/参数"同句）：拆 2——列表 1 条，详情按实体归并 1 条
+2. 不拆场景（单任务 = 原 query 逐字）：单实体的多个属性细节问、零实体条件/推荐句、单一意图问；**同实体属性细节禁止拆**
+3. 通用约束：任务文本自含检索主题词（实体全名/品类/清单范围），禁止指代（它/它们/这款/哪个）；任务间不重复、不相互依赖；**任务数上限 3**；拿不准宁可合并为 1 个整句
+4. 输出 `entity_count`（0/1/N，只识别明确提到的商品/品类名，泛指词不算实体名）
+5. **任何情况下禁止返回空任务列表**（`[]`/null 均为违规输出）——宁可返回 1 条整句任务，不可遗漏实体
 
-**节点校验与回退**（改 `components/planner/node.py:42-71`）：
+**替换用完整 prompt 全文（阶段 2 Step 2 产物，2026-09-03 v2，示例精简为 5 条覆盖常见拆分/不拆场景）**：
 
-```python
-planner_output = await planner_chain.ainvoke({"question": state.get("question", "")})
+```text
+# —— 整体替换 PLANNER_SYSTEM_PROMPT（kg_prompts.py）——
+你是一个电商平台智能客服系统中的任务规划组件（商品知识问答场景）。
+你的职责：判断用户问题是否需要拆成多个【可独立检索】的子任务，并输出任务列表。
+entity_count = 问题中明确提到的商品/品类实体数量（0/1/N）；"哪款/有没有/推荐几个"等泛指不构成实体。
 
-if (
-    planner_output.entity_count >= 2
-    and len(planner_output.tasks) == planner_output.entity_count
-    and all(t.sub_query.strip() for t in planner_output.tasks)
-):
-    task_list = [
-        Task(question=t.sub_query, parent_task=state.get("question", ""))
-        for t in planner_output.tasks
-    ]
-else:
-    # 回退：单分支整句检索
-    task_list = [Task(question=state.get("question", ""), parent_task=state.get("question", ""))]
+拆分判断（按顺序执行）：
+1. 若问题中提到多个商品/品类实体：
+   为每个实体生成 1 个独立子任务，任务数量 = 实体数量；
+   每个子任务必须包含实体全名，禁止指代（它/它们/这款/那个）；
+   每个子任务继承原问题对该实体的全部意图维度：
+     对比/哪个更好 → 优缺点、规格参数、适用场景；
+     价格/优惠     → 售价、促销活动；
+     选购/推荐     → 适合人群、口碑评价。
+2. 否则，若问题把【列表型子问】（有哪些/几款/推荐）与【详情型子问】（价格/参数/功能）明确并列：
+   拆为 2 个子任务——列表问 1 条，详情问按实体归并 1 条。
+3. 其余情况一律不拆：
+   任务列表只含 1 个任务，文本 = 用户原问题【逐字复制】，不得改写、删减或补充。
+   包括：同一商品的多个属性细节问（功能+噪音+续航，必须合并）、零实体条件/推荐句、单一意图问。
+
+所有任务通用要求：
+- 任务文本必须自含检索主题词（实体全名/品类/清单范围），每条都能脱离原问题独立检索
+- 任务之间内容不得重复、不得相互依赖
+- 任务数量上限 3；拿不准是否该拆时，宁可合并为 1 个整句任务
+- 任何情况下不得返回空任务列表（[] 或 null 均为违规输出）
+
+示例：
+- 问题：扫地机器人X1支持自动集尘吗？
+  entity_count：1
+  任务：["扫地机器人X1支持自动集尘吗？"]
+  # 单一意图问 → 不拆，原句
+
+- 问题：扫地机器人X1和扫地机器人X2哪个性价比高？它们分别多少钱？
+  entity_count：2
+  任务：["扫地机器人X1的优缺点、性价比和售价是多少？",
+        "扫地机器人X2的优缺点、性价比和售价是多少？"]
+  # 多实体 → 每实体 1 条，继承对比+价格意图；"它们分别多少钱"的指代被实体名替换
+
+- 问题：有哪些适合小户型的扫地机器人？分别多少钱？
+  entity_count：1（"扫地机器人"为品类实体）
+  任务：["有哪些适合小户型的扫地机器人？",
+        "适合小户型的扫地机器人各自的售价是多少？"]
+  # 列表型 + 详情型并列 → 拆 2；此时任务数 > entity_count 是合法的
+
+- 问题：扫地机器人X1能扫拖一体吗？噪音大吗？续航多久？
+  entity_count：1
+  任务：["扫地机器人X1能扫拖一体吗？噪音大吗？续航多久？"]
+  # 同一商品的属性细节问 → 合并为 1 条原句，不拆
+
+- 问题：有没有千元内能自动回充的扫地机器人？
+  entity_count：0
+  任务：["有没有千元内能自动回充的扫地机器人？"]
+  # 零实体条件句 → 不拆，原句
+
+# —— human 模板（planner/prompts.py）缩减为仅占位，删除其中重复规则——
+问题: {question}
 ```
 
-**校验规则**：实体数 ≥2 但任务数与实体数不一致、或任一 `sub_query` 为空 → 整体回退单分支（宁可少拆，不可错拆）。
+**节点校验与回退**（改 `components/planner/node.py`；**2026-09-03 v2**——校验依据从"数量锚"改为"任务内容自洽 + 上限"：单任务/空/异常一律强制回填原 query，planner 调用异常并入同一回退出口）：
+
+```python
+# planner/node.py 节点核心（v2 形态）
+MAX_TASKS = 3                                   # 拆解上限：超过一律回退（宁可少拆）
+
+def _fallback(question: str) -> List[Task]:
+    """所有回退的唯一出口：单分支整句检索（question 恒为原 query 原文，不经 LLM）"""
+    return [Task(question=question, parent_task=question)]
+
+async def planner(state: InputState) -> Dict[str, Any]:
+    question = state.get("question", "")
+    try:
+        planner_output = await planner_chain.ainvoke({"question": question})
+        entity_count = planner_output.entity_count
+    except Exception as e:                      # L0：调用/结构化输出异常 → 整句
+        logger.error("planner 调用失败，回退单分支整句: {}", e)
+        entity_count, planner_output = -1, None
+
+    # 信任拆解的条件：2<=任务数<=MAX_TASKS、sub_query 均非空、互不重复。
+    # 不做 len==entity_count 硬校验——列表型拆解（entity_count=1 拆 2）合法；
+    # 单任务/空列表/空串/重复/超上限/LLM 异常 → 一律回填原 query（不采用 LLM 单任务文本）
+    if (
+        planner_output is not None
+        and 2 <= len(planner_output.tasks) <= MAX_TASKS
+        and all(t.sub_query.strip() for t in planner_output.tasks)
+        and len({t.sub_query.strip() for t in planner_output.tasks}) == len(planner_output.tasks)
+    ):
+        task_list = [
+            Task(question=t.sub_query, parent_task=question)
+            for t in planner_output.tasks
+        ]
+        logger.info("planner_decision: split={} (entity_count={})", len(task_list), entity_count)
+    else:
+        task_list = _fallback(question)
+        reason = "llm_error" if planner_output is None else f"tasks={len(planner_output.tasks)}"
+        logger.info("planner_decision: fallback (reason={})", reason)
+
+    logger.info("Total Sub Task: {}", len(task_list))
+    for i, task in enumerate(task_list):
+        logger.info("Sub Task[{}]: {}", i + 1, task.question)
+    return {"tasks": task_list}
+```
+
+**校验规则**：
+- 单任务语义 = "子问单元 ≤1"（原"entity_count<=1"判定废除：entity_count=1 的列表+详情并列句可合法拆 2）
+- LLM 返回单任务（无论内容是否=原 query）→ 一律经 `_fallback` 回填原文，防改写
+- 空列表 / 空串 sub_query / 任务重复 / 任务数 > MAX_TASKS / LLM 调用异常 → 同一回退出口（宁可少拆，不可错拆）
+- 拆解质量（该拆没拆、拆得离谱）不再有数量锚可校验，保障 = prompt 示例 + 上限约束 + 三态日志观测（`split(N)/fallback(llm_error)/fallback(tasks=k)`，回退率统计依据，§2.3 P3/P4）
 
 ### 4.3 子图结构简化（删 3 节点 + 直连）
 
@@ -453,21 +543,23 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 ### 阶段 2：planner 改造（实体识别 + 拆解一次调用）⏳ 未实施（本 spec 剩余核心）
 
 > 前置必读：**§2.3 P1-P5（2026-09-02 实测）**。落地方案要点相对 §4.2 的增补：
-> - P1：`PLANNER_SYSTEM_PROMPT` 中 Cypher/北风商贸示例全部替换为商品文档 RAG 场景示例（含双实体对比、单实体事实）
-> - P2：`parent_task` 移出 LLM schema（由节点注入原 query，见 §4.2 校验代码已体现）；校验规则补"task 去重"
+> - P1：`PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 v2 全文（2026-09-03，5 条示例覆盖：多实体对比拆、列表+详情并列拆、同实体多属性合并、单意图不拆、零实体不拆）
+> - P2：`parent_task` 移出 LLM schema（由节点注入原 query，见 §4.2 校验代码已体现）；校验规则补"task 去重 + 上限 MAX_TASKS=3"
 > - P3：planner 拆解温度与 router 一致收敛为 0（§4.2 提示词规则 + 校验回退已够，温度落地方式实施时定）
 > - P4：评估"拆解并入 Router（方案 B，§8 #1）"或"规则直通"，决定前先实测简单句误拆率
-> - 与阶段 4 组合实施才闭环（P5），拆解先行落地后须在 §7.2#2/#3 回归对比质量
+> - 与阶段 4 组合实施才闭环（P5，多路证据需合并去重），拆解先行落地后须在 §7.2#2/#3 回归对比质量
 
-**Files**: `.../components/planner/models.py`、`.../components/planner/node.py`、`kg_sub_graph/prompts/kg_prompts.py`
+**Files**: `.../components/planner/models.py`、`.../components/planner/node.py`、`.../components/planner/prompts.py`、`kg_sub_graph/prompts/kg_prompts.py`
 
-- [ ] **Step 1**: `models.py` 新增 `EntitySubQuery`，重写 `PlannerOutput`（schema 见 §4.2）
-- [ ] **Step 2**: `kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 按 §4.2 四条规则重写（含双实体对比示例："扫地机器人A和B哪个更好" → 2 个子 query 各含"优缺点和适用场景"）
-- [ ] **Step 3**: `planner/node.py` 校验与回退逻辑（代码见 §4.2）
-- [ ] **Step 4**: 验证：
-  - "扫地机器人A和B哪个更好" → 日志 `Total Sub Task: 2`，两任务并行
-  - "扫地机器人X1多少钱" → `Total Sub Task: 1`，单分支
-  - 构造拆解失败（临时改低 temperature 或用模糊问题观察）→ 回退单分支
+- [ ] **Step 1**: `models.py` 新增 `EntitySubQuery`（name 可空主题词）、重写 `PlannerOutput`（schema 见 §4.2 v2：entity_count `ge=0` 默认 0 作辅助日志、tasks 描述 1..3）
+- [ ] **Step 2**: 按 §4.2「替换用完整 prompt 全文（2026-09-03 v2，5 示例）」重写：`PLANNER_SYSTEM_PROMPT`（kg_prompts.py）整体替换 + human 模板（planner/prompts.py）缩减为仅 `问题: {question}`（删除其中与 system 重复的 4 条规则）
+- [ ] **Step 3**: `planner/node.py` 校验与回退逻辑（v2 代码见 §4.2：try/except 统一回退出口 + 单任务强制回填原 query + 非空/去重/MAX_TASKS=3 + 三态日志；**无数量锚校验**）
+- [ ] **Step 4**: 验证（断言均为 v2 日志口径 `reason=tasks=k`）：
+  - "扫地机器人X1和扫地机器人X2哪个性价比高？它们分别多少钱？"（多实体）→ `split=2`，两条 Sub Task 各含实体全名与价格意图，无"它们"指代
+  - "有哪些适合小户型的扫地机器人？分别多少钱？"（列表+详情并列，entity_count=1）→ `split=2`（合法：任务数 > entity_count）
+  - "扫地机器人X1能扫拖一体吗？噪音大吗？续航多久？"（同实体多属性）→ `fallback (reason=tasks=1)`，任务文本 = 原 query 原文
+  - "有没有千元内能自动回充的扫地机器人？"（零实体）→ `fallback (reason=tasks=1)`，任务 = 原 query 原文（非 LLM 改写）
+  - mock 抛异常 → `fallback (reason=llm_error)`，无异常上抛；mock 返回空列表 / 含空串 / 任务重复 / 4 条以上 → 均 fallback 单分支=原 query
 - [ ] **Step 5**: 提交 `[feat] planner 合并实体识别与任务拆解为一次调用，含一致性校验与单分支回退`
 
 ### 阶段 3：子图简化 + lg_builder 清理 + 删 Cypher 遗留 ✅ 已全部落地（2026-09-02 二修）
@@ -587,9 +679,10 @@ ScopeGuard → 指代门控/消解 → 缓存 lookup(key=resolved_question, user
 | `app/lg_agent/lg_states.py` | 2026-08-27 路由重构：Router=logic/type/risk（无 entity_count） | — |
 | `app/services/pronoun_resolver.py` / `pronoun_detector.py` | 入口消解实现载体（22b0c90）；缓存内 `_resolve_message` 旧正则待专项处理（docs/项目问题.md #11） | 1✅ |
 | `components/query_rewriting/node.py` | +门控函数、`max_turns` 参数化（⚠️ 文件已随预处理管道删除 2026-08-21；本 spec 阶段 1 不再按此形态实施） | 1 |
-| `components/planner/models.py` | `EntitySubQuery`/`PlannerOutput` 重写（现状仍为 `tasks: List[Task]` 无 entity_count，§2.3 P2） | 2⏳ |
-| `components/planner/node.py` | 校验与回退逻辑（现状仅空列表回退） | 2⏳ |
-| `kg_sub_graph/prompts/kg_prompts.py` | `PLANNER_SYSTEM_PROMPT` 重写（现状仍为北风商贸 Cypher 时代模板，§2.3 P1） | 2⏳ |
+| `components/planner/models.py` | `EntitySubQuery`（name 可空主题词）/`PlannerOutput` 重写：entity_count `ge=0` 默认 0（辅助日志、非校验锚）、tasks 描述 1..3（现状仍为 `tasks: List[Task]`，§2.3 P2） | 2⏳ |
+| `components/planner/node.py` | v2 校验：try/except 统一回退出口 + 单任务强制回填原 query + 非空/去重/MAX_TASKS=3 + 三态日志，无数量锚（现状仅空列表回退） | 2⏳ |
+| `components/planner/prompts.py` | human 模板缩减为仅 `问题: {question}`（删除与 system 重复的 4 条规则） | 2⏳ |
+| `kg_sub_graph/prompts/kg_prompts.py` | `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 v2 全文（5 示例；现状仍为北风商贸 Cypher 时代模板，§2.3 P1） | 2⏳ |
 | `workflows/multi_agent/multi_tool.py` | 删 3 节点、直连、签名简化 ✅（multi_tool.py:32-80） | 3✅ |
 | `workflows/multi_agent/edges.py` | Send 目标改 customer_tools ✅ | 3✅ |
 | `components/customer_tools/node.py` | 单例化以 `RAGRetrieverService` 收敛落地 ✅（cf9e37b）；HyDE 入内 ⏳ | 0✅/4⏳ |
