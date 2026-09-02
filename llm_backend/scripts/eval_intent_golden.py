@@ -1,4 +1,4 @@
-"""意图识别 golden set 评测: 42 条（单轮 37 + 多轮 5）跑真实 Router，输出二维准确率。
+"""意图识别 golden set 评测: 46 条（单轮 41 + 多轮 5）跑真实 Router，输出二维准确率。
 
 用法: python -m scripts.eval_intent_golden
 
@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage, AIMessage  # noqa: E402
 
 logger = get_logger(service="eval_intent_golden")
 
-# ===== golden set：单轮 37 条 =====
+# ===== golden set：单轮 41 条 =====
 SINGLE_TURN = [
     # --- 售前 presale × 8 ---
     ("你们有智能门锁吗", {"type": "presale", "risk": "none"}),
