@@ -42,3 +42,14 @@ scripts/data/jd_smart_furniture.tsv（商品静态信息源）
 
 - 商品动态信息表 `product_price_stock`：product_name（唯一键，与 TSV 商品名称完全一致）、category、current_price（Numeric，范围价取均值）、stock_quantity（Integer，0=无货）、updated_at
 - 导入脚本按 product_name 幂等 upsert，可重复执行
+
+## 6. spec/plan 文档生命周期管理
+
+所有 spec/plan 文档（`docs/spec_plan/`）在**完成实施后必须立即更新并归档**，禁止遗留状态不实的文档。
+
+执行步骤（任务完成前必做）：
+1. **更新状态**：在对应 spec/plan 文档标题下新增/更新"归档状态"行——格式：状态（✅ 已完成 / ⏳ 待实施 / 🔶 部分实施，注明日期与落地证据：实施提交 hash、关键文件路径、测试结果）
+2. **归档移动**：已完成的 `git mv` 至 `docs/spec_plan/已完成/`；未实施/部分实施的保留在 `docs/spec_plan/未完成/`
+3. **文档内历史状态行保留原文**（属历史记录），以"归档状态"行为最新判定；发现过期状态行（如仍写"待实施"但已落地）在归档状态行中注明，不改写历史
+4. **引用同步**：修正仓库内对该文档的导航引用（如 PROJECT_ANALYSIS / SHOP_SAGE_ANALYSIS 中的 `docs/spec_plan/...` 路径）——spec 文档内部 git 命令示例等历史记录不改
+5. 同一 plan 含多个未落地模块时按实际情况标注"部分实施 + 已落地/未落地清单"，未落地部分保留在 `未完成/`
