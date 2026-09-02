@@ -359,7 +359,7 @@ stateDiagram-v2
 | `type=complaint` | 投诉安抚占位节点（返回安抚占位话术） |
 | `type=clarify` | 澄清节点（意图不明，电商统一风格针对性询问，LLM 生成 + 模板兜底） |
 
-> 结构化输出校验失败时降级为 general/none（不抛异常）。追问逻辑（原 additional-query）已下沉到后续业务 Agent（售前/售后 Agent prompt 内置"信息不足先追问"），本阶段删除独立追问节点。设计依据见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md`。
+> 结构化输出校验失败时降级为 general/none（不抛异常）。追问逻辑（原 additional-query）已下沉到后续业务 Agent（售前/售后 Agent prompt 内置"信息不足先追问"），本阶段删除独立追问节点。设计依据见 `docs/spec_plan/已完成/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md`。
 
 ### 4.5 Multi-Tool 工作流 (`workflows/multi_agent/multi_tool.py`)
 
@@ -434,11 +434,11 @@ flowchart LR
 | **ScopeGuard** | 路由前 | 关键词预检，零延迟拦截非经营范围问题 |
 | **TimeoutGuard** | 工作流执行 | 30 秒超时返回降级回答 |
 
-（HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担；查询预处理管道与 BudgetGuard 已于 2026-08-21 移除，见 spec_plan/SPEC_REMOVE_QUERY_PREPROCESSING.md）
+（HallucinationGuard 已随子图 guardrails 简化移除，事实性保障由 Reranker 精排 + 生成 LLM 承担；查询预处理管道与 BudgetGuard 已于 2026-08-21 移除，见 docs/spec_plan/已完成/SPEC_REMOVE_QUERY_PREPROCESSING.md）
 
 ### 4.9 langchain Tool 封装 (`app/tools/`，2026-08-31 落地)
 
-两个 langchain `@tool` 供后续业务子 agent（售前/售后）通过 `llm.bind_tools([rag_retrieval, product_stock_lookup])` 调用，形成"**动态查库 + 静态查知识库**"互补工具对（设计细节见 spec_plan/SPEC_RAG_TOOL_OPTIMIZATION.md 与 SPEC_PRODUCT_STOCK_TOOL.md）。
+两个 langchain `@tool` 供后续业务子 agent（售前/售后）通过 `llm.bind_tools([rag_retrieval, product_stock_lookup])` 调用，形成"**动态查库 + 静态查知识库**"互补工具对（设计细节见 docs/spec_plan/已完成/SPEC_RAG_TOOL_OPTIMIZATION.md 与 SPEC_PRODUCT_STOCK_TOOL.md）。
 
 #### 4.9.1 工具职责与三态协议
 
@@ -647,7 +647,7 @@ flowchart TD
 
 ### 5.8 意图澄清运行流程
 
-节点 `clarify_node`（type=clarify，意图不明）：以电商统一风格（"亲～"）结合用户原话与 router logic 针对性询问真实意图；生成失败/超时降级静态模板。澄清后用户回答 → 下一轮正常重新识别（含澄清问答的消息流自然流转）。触发边界：语义无法归类才澄清（无主题词/无上文指代/碎片语气词）；明确但缺细节（议价/损坏）不澄清；risk 优先于 clarify。设计依据 `docs/spec_plan/SPEC_INTENT_CLARIFY.md`。
+节点 `clarify_node`（type=clarify，意图不明）：以电商统一风格（"亲～"）结合用户原话与 router logic 针对性询问真实意图；生成失败/超时降级静态模板。澄清后用户回答 → 下一轮正常重新识别（含澄清问答的消息流自然流转）。触发边界：语义无法归类才澄清（无主题词/无上文指代/碎片语气词）；明确但缺细节（议价/损坏）不澄清；risk 优先于 clarify。设计依据 `docs/spec_plan/已完成/SPEC_INTENT_CLARIFY.md`。
 
 ```mermaid
 flowchart TD
@@ -745,7 +745,7 @@ class Router(TypedDict):
 - 售后子场景（退货/物流/订单）不由识别层判断——判断需订单/历史上下文，下沉到售后 Agent 工作流骨架第一步（简化设计 2026-08-27）
 - 售后/投诉安抚占位节点接口与 RAG 子图同构，业务 Agent（售前/售后/安抚）就位后仅改路由目的地
 - 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（46 条，含意图澄清/意图模糊/多意图/超范围/图片风险/多轮上下文）二维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
-- 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
+- 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/已完成/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
 
 ### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
 

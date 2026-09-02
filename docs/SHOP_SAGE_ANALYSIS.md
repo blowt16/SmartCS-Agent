@@ -264,7 +264,7 @@ JWT → app_graph.astream_events(v2) → intent_router（LLM 四分类，白名�
 5. Dockerfile 启动即 `init_db` drop_all（`scripts/init_db.py:24-27`）→ **重启即清库**，改为仅建缺失表/交给迁移。
 
 ### P1 — 工程闭环补课（按 ShopSage 模式，逐项对应亮点编号）
-1. **状态持久化**：MemorySaver → AsyncRedisSaver（对应 ShopSage 会话持久化模式；本项目 spec_plan/SPEC_CONTEXT_ENGINEERING.md 已有规划，落地即可）。
+1. **状态持久化**：MemorySaver → AsyncRedisSaver（对应 ShopSage 会话持久化模式；本项目 docs/spec_plan/未完成/SPEC_CONTEXT_ENGINEERING.md 已有规划，落地即可）。
 2. **多租户安全**：JWT 强制注入 user_id + thread_id 前缀 + 数据层作用域（亮点 D1）——最高性价比的安全改造。
 3. **数据库迁移**：引入 Alembic 异步 env（照抄 E1/E2，MySQL 改 psycopg 协议），废除 drop_all。
 4. **异步任务队列**：Celery 接管 `/api/upload` 索引与耗时操作（C1/C2/C3），LLM 调用配 time_limit。

@@ -1,4 +1,6 @@
 # 语义缓存分级指代消解 详细实施规格
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> 语义缓存分级指代消解落地：4882018（redis_semantic_cache.py lookup/update 同源 _resolve_message + pronoun_detector/resolver），RESOLVE_* 五配置在案（config.py L76-80）。
 
 > **用途**: 解决多轮对话中指代/省略导致语义缓存命中率塌陷的问题  
 > **技术栈**: Redis + Embedding 向量 + LLM 指代消解 + 规则引擎  

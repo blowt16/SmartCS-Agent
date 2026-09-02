@@ -1,4 +1,6 @@
 # GraphRAG → 标准 RAG 改造实施计划
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> GraphRAG→标准 RAG 迁移全部落地：5e8a109 迁 ChromaDB、cf9e37b 收敛 pgvector HNSW；graphrag/neo4j 源码零残留，头部自述已标注三处系统性偏差（pgvector 替 ChromaDB / text-embedding-v4 替 bge-m3 / uv 替 requirements.txt）。
 
 > **状态**: ✅ **已完成归档**（2026-08 前全部落地）。与计划的三处系统性偏差，后续改造已按实际方案演进：
 > 1. **向量库**：计划选 ChromaDB，实际落地 **pgvector**（PostgreSQL 16 + pgvector 扩展，`document_chunks` 表）

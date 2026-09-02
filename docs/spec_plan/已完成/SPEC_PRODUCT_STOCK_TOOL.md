@@ -1,4 +1,6 @@
 # 商品动态数据检索 Tool 实施规格（langchain 格式）
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> product_stock_lookup 落地：app/tools/product_stock_tool.py（ab4dddb）+ product_price_stock 模型/导入脚本/测试齐备；§12 SKU 对齐为自述演进方向（2026-08-31 记录，未进 MVP，正确未实施）。
 
 > **用途**: 将数据库 `product_price_stock` 表（商品价格/库存动态信息）检索封装为 langchain `@tool`，供后续业务子 agent（售前/售后）通过 tool calling 检索商品动态数据；与现有 `rag_retrieval`（docx 知识库检索）互补——动态数据查库、静态知识查向量
 > **技术栈**: langchain-core `@tool`（与 `app/tools/rag_tool.py` 同模式）+ SQLAlchemy async（AsyncSessionLocal）+ PostgreSQL `product_price_stock` 表（模型/导入脚本已就绪）

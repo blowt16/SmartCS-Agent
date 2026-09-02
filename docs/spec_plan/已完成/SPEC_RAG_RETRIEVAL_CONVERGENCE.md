@@ -1,4 +1,6 @@
 # RAG 检索收敛实施规格：pgvector HNSW 单路径 + pg_jieba 数据库内 BM25 + Reranker 精排 + Tool 化封装
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> 检索收敛落地：cf9e37b（pgvector HNSW + pg_jieba 库内 BM25 + Reranker 精排 + Tool 化），§5.6 已追加 tools 迁入注记（2026-08-31）。
 
 > **用途**: 消除混合检索链路的"全量拉库 + 内存重建"性能瓶颈，并补齐精排与工具化——①向量检索收敛为 pgvector HNSW 单路径（移除内存暴力检索）；②BM25 从应用内存（jieba + rank_bm25）迁移至数据库内（pg_jieba + ts_rank_cd + GIN 倒排索引）；③检索后接入 bge-reranker-v2-m3 精排（top-20 → top-5，替代 LLM 相关性评分，支持 GPU 加速）；④全部检索/精排参数统一由 .env 全局配置；⑤RAG 检索封装为 langchain @tool 供 agent 使用  
 > **技术栈**: pgvector/pgvector:pg16（自定义镜像）+ pg_jieba（cppjieba）+ PostgreSQL 16.14 + LangGraph 0.3.x + qwen text-embedding-v4（DashScope API）+ sentence-transformers 5.7.0 CrossEncoder（BAAI/bge-reranker-v2-m3）+ torch CUDA（RTX 3060）  

@@ -1,4 +1,6 @@
 # BM25 检索查询语义修复实施规格（plainto_tsquery AND → token OR + ts_rank_cd 排名）
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> OR 语义修复落地：34285db（jiebacfg∪jiebamp 双分词并集 + ts_rank_cd），bm25_sql_retriever.py 与 spec §4.2 目标 SQL 一致；其余 3 用例（含拆散品牌词召回）PASS。头部旧『待实施』状态行过期。已知 test_bm25_recalls_docs_with_partial_terms 失败为共享 DB 语料膨胀的测试脆弱性（主干既有，2026-09-02 实测 main 同失败），与本次实施无关。
 
 > **用途**: 修复 BM25 SQL 检索"多词自然问题恒 0 命中"缺陷——`plainto_tsquery('jiebacfg', query)` 将查询词全部 AND 连接，在平均 42 字符的微块语料上任意多词问题（如"小米全自动智能门锁Pro的详细参数配置"8 词 AND）几乎必然无 chunk 全词命中。改为 DB 内同配置分词 → token 过滤 → `to_tsquery` OR 连接 → `ts_rank_cd` 排名，文档部分命中即得分（贴近原 rank_bm25 BM25Okapi 的求和打分行为）
 > **技术栈**: pg_jieba 1.1.1（jiebacfg 精确模式）+ PostgreSQL 16 + SQLAlchemy 2.x async + pytest-asyncio + IndexingService（测试语料注入）

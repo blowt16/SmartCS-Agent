@@ -1,4 +1,6 @@
 # SPEC_FRONTEND_VUE3_REFACTOR：前端 Vue3 标准工程重构 + 移除旧链路
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> Vue3+Vite 重构落地：f8d370e/94caeb4（frontend/，依赖与 §3.2 锁定版一致），旧 chat.html/llm_backend/static 已删。头部『待审核（草稿）』状态行过期。
 
 - 状态：待审核（草稿）
 - 分支建议：`refactor/frontend-vue3`（从 `refactor/anaphora-resolution` 派生）

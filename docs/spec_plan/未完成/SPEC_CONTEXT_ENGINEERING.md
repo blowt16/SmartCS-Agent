@@ -1,4 +1,6 @@
 # LangGraph 客服 Agent Context 工程完整实施规格
+> **归档状态**: ⏳ 待实施（2026-09-02 审计，依据 main 代码与 git 历史）
+> 仅前置条件落地：PostgresSaver Checkpointer（lg_builder.py L491-494）。目标设计（Token 阈值触发压缩 / state.summary 独立字段 / last_compressed_index 增量 / keep_last_n）在代码零痕迹——memory/ 组件仍为轮次驱动旧实现（dced945 初始时代）。
 
 > **用途**: 多轮 RAG-Agent 智能客服，解决长会话 Token 膨胀、上下文溢出、工具消息累积、服务重启会话恢复、对话归档  
 > **技术栈**: LangGraph + PostgresSaver（已落地）+ PostgreSQL 业务库（现状）；本文方案原选型 RedisSaver + SQLite 业务库，**Checkpointer 选型已被 PostgresSaver 替代**（见 §3 更新）  

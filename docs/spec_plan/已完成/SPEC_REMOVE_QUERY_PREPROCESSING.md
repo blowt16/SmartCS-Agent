@@ -1,4 +1,6 @@
 # 移除查询预处理管道实施规格（BudgetGuard + 纠错/扩展/Multi-Query+HyDE）
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> 查询预处理管道移除：0bbb3ff；BudgetGuard/纠错/扩展/Multi-Query/HyDE 源码零残留（query_rewriting/ 目录仅 __pycache__ 孤儿），子图直接使用入口消解后问题。
 
 > **用途**: 完全移除 graphrag-query 知识库查询模块（`create_research_plan` 节点）内的查询预处理管道——BudgetGuard 预算控制门控下的 ① 查询纠错（correct_query）② 查询扩展（expand_query）③ Multi-Query + HyDE（rewrite_query）三步 LLM 调用，子图输入直接使用入口指代消解后的问题（resolved_question，未经管道增强），其余功能（ScopeGuard / TimeoutGuard / 多工具子图）不受影响
 > **技术栈**: LangGraph 0.3.x + FastAPI + DeepSeek/Ollama

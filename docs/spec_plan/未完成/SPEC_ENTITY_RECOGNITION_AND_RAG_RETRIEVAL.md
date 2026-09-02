@@ -1,4 +1,6 @@
 # 实体识别与并行 RAG 检索流程设计规格
+> **归档状态**: ⏳ 未实施（2026-09-02 审计，依据 main 代码与 git 历史）
+> 为 SPEC_ENTITY_PARALLEL_RAG 的核心机制展开子文档（同日 bfb63aa/60590f3 设计），机制零代码；§5.1/§10 部分前提已失效（generate_hypothetical_answer 随 query_rewriting 删除、planner 直连结构已收敛）。实施前需重核。
 
 > **用途**: 深入设计纯 RAG 链路的两个核心机制——**实体识别**（LLM 实现，与任务拆解合并为一次调用）与**多实体并行 RAG 检索流程**（子 query → HyDE → 向量/混合检索 → 合并去重 → 相关性评分 → 汇总回答），含数据模型、提示词规则、回退策略、验证方案与未来演进路线  
 > **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector + Redis + DeepSeek/Ollama + qwen text-embedding-v4（向量统一走 DashScope API；SentenceTransformer 仅 LOCAL 分支预留）  

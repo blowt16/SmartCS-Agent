@@ -1,4 +1,6 @@
 # 分块策略修订规格（全文直接切分 + 块首章节定位）
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> 全文统一递归切分落地：7778c32（310→31 块，块归属=块首字符所在段），indexing_service.py spans/full_text 实现与 §8.2-a 自述一致；已知偏差 metadata start_index（spec 风险表已预述）。
 
 > **用途**: 解决商品知识文档（docx）分块碎片化问题——当前"逐 Segment 独立切分"在章节粒度≈段落粒度的文档上完全失效，产出 72% 的 <50 字碎片块。方案：解析后用 `\n\n` 连接全文 → RecursiveCharacterTextSplitter(500/50) **一次性全文切分** → 每块按起始字符位置定位所属段获取章节归属（spec §4"块内首个非空字符所在章节"）。实测三方案对比后选定（合并缓冲改判，见 §10）
 > **技术栈**: LangChain RecursiveCharacterTextSplitter 0.3.11 + FastAPI + pgvector

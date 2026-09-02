@@ -1,4 +1,6 @@
 # RAG 检索 Tool 优化实施规格
+> **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
+> rag_tool 三态改造落地：ab4dddb 迁入 app/tools/rag_tool.py（ok/empty/error 三态 + 错误分类 + 来源溯源），a092170 超时/重试入 env；旧 services/rag_tool.py 已删。
 
 > **用途**: 优化 `rag_retrieval` tool（`llm_backend/app/tools/rag_tool.py`，2026-08-31 由 `app/services/` 迁入 `app/tools/`）——修正过时 description（价格/库存已移出知识库）、空结果与错误返回语义（供 LLM 自主判断）、结果携带来源溯源（可追溯判断依据）；与 `product_stock_lookup`（SPEC_PRODUCT_STOCK_TOOL.md）形成"动态查库 + 静态查知识库"的互补工具对
 > **技术栈**: langchain-core `@tool` + RAGRetrieverService（现有管线不动，仅 tool 适配层优化）

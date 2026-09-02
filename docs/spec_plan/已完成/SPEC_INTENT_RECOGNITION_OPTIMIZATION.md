@@ -1,4 +1,6 @@
 # 意图识别模块优化实施规格（MVP）
+> **归档状态**: ✅ 主目标已完成（演进方向章节未实施）（2026-09-02 审计，依据 main 代码与 git 历史）
+> 三维合并路由落地：6d9de98 + f669dea（golden 42）+ 7f30db8/e1494bb（clarify，46 条全过）；§8.3 多意图 intent_list / 任务分配器 / 子 agent 协同为演进方向设计，代码无痕迹（AgentState 仍单 type）。
 
 > **用途**: 将现有 4 类技术路由（general/additional/graphrag/image）重构为**场景驱动路由**——单次合并输出「场景意图 + 风险意图」，为后续业务子 agent（售前/售后/投诉安抚）预留路由接口；参考福客AI（FreeCall AI）项目分析报告 §9 意图识别方案（场景/来源/风险三维度）与 §16.3 对我们的项目启示
 > **技术栈**: LangGraph 0.3.25（主图 StateGraph）+ DeepSeek/Ollama（ROUTER_TEMPERATURE=0 低温结构化输出）+ PostgreSQL（PostgresSaver 会话检查点）

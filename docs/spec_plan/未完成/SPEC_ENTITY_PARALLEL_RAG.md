@@ -1,4 +1,6 @@
 # 多实体并行 RAG 检索链路重构实施规格
+> **归档状态**: 🔶 部分实施（2026-09-02 审计，依据 main 代码与 git 历史）
+> 阶段 0（单例化）/阶段 3（子图简化）已落地并被检索收敛（RAGRetrieverService，cf9e37b）吸收；阶段 1/2/4/5（entity_count 拆解、子 query 规则、HyDE 双路合并、模块级单次编译）未实施。实施前需按现状架构（planner 直连已改、query_rewriting 已删）重核。
 
 > **用途**: 去除 Cypher 查询、纯 RAG 检索后，重构查询预处理与子图链路——入口指代消解（正则门控 + LLM）+ 实体识别与任务拆解合并为一次 LLM 调用 + 多实体并行 RAG 检索（HyDE 内置于检索工具），并配套 LLM 调用成本与响应时间优化  
 > **技术栈**: LangGraph 0.3.x + FastAPI + pgvector + Redis + DeepSeek/Ollama + qwen text-embedding-v4（向量统一走 DashScope API，无本地 SentenceTransformer 主链路）  
