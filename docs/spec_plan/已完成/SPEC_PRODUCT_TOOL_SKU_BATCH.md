@@ -1,10 +1,10 @@
 # product_stock_lookup 多 sku 批量检索优化实施规格
-> **归档状态**: ⏳ 待实施（2026-09-06 起草）——在方案 A（sku-only 辅助通道）之上扩展**批量入参**：rag 命中多码候选时一次精确检索全部映射商品，与节点链路 `fetch_by_skus` 的批量语义对齐
+> **归档状态**: ✅ 已完成（2026-09-06 归档 `已完成/`）——落地证据：tool 双参(sku/skus 合并去重)+单条 WHERE IN 保序+部分命中 ok/全缺失 empty+上限 20+归一去重（提交见下）；验收全过：mock 82 passed（含批量 A1~A5/schema A7/单码回归，单码 SQL 形态从 `=` 变单元素 `IN` 语义等价）、DB 冒烟 B1~B5（2 码保序/部分命中/全缺列码/单码与批量单元素一致/与节点 fetch_by_skus 同键同数据）；节点链路与方案 A 纪律零改动
 
 > **用途**: 方案 A 后 tool 契约为单码单查。真实场景 rag top-k 混合块返回 3~10 个候选 sku（92.1% 混合块），LLM 若需"候选全查"（对比意图/清单意图）只能逐码串行调用——N 次往返 + N 次跨快照（价格窗口内变动 → 行间不一致，破坏原子性）。本 spec 为 @tool 增加批量路径，**一次 IN、同一快照、按入参序返回**；节点链路已具备等价能力（`fetch_by_skus`），本 spec 不动节点、仅工具层扩展，两处行为约定统一
 > **依赖前置**: 方案 A（sku-only + RAG 门控）已实施（9b4ebcc/e3514a8）；DB `product_price_stock.sku` unique 与 47 行数据在库
 > **技术栈**: langchain @tool + Pydantic v2 args_schema + SQLAlchemy（select WHERE IN）+ 既有 _query_with_retry（超时/瞬时重试/异常分类三态协议不变）
-> **状态**: 待实施 —— 范围：仅 `product_stock_tool.py` + 服务/节点零改动（回归验证）+ 测试
+> **状态**: 已完成 —— 范围：仅 `product_stock_tool.py` + 服务/节点零改动（回归验证）+ 测试
 > **关联文档**: [[SPEC_SKU_ALIGNMENT.md]]（数据键）[[SPEC_RAG_SKU_METADATA.md]]（rag 侧多码元数据）[PRODUCT_TOOL_SKU_GATE 方案 A（对话决策 2026-09-06）] [[SPEC_PRODUCT_STOCK_TOOL.md]]
 
 ---
