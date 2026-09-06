@@ -35,6 +35,7 @@ DOC_TITLE = "京东智能家具产品知识文档"
 # TSV 列名
 COL_CATEGORY, COL_NAME, COL_BRAND, COL_PRICE = "品类", "商品名称", "品牌", "参考价格(元)"
 COL_FEATURES, COL_SPECS, COL_AFTERSALES, COL_SOURCE = "功能特点", "规格参数", "售后服务", "来源"
+COL_SKU = "sku"
 
 # 品类中文序号
 CN_NUM = "一二三四五六七八九十"
@@ -46,8 +47,15 @@ def split_bullets(text: str) -> list[str]:
 
 
 def add_product(doc: Document, row: dict) -> None:
-    """单个商品: H3 商品名称 + H4 子章节。"""
-    doc.add_heading(row[COL_NAME].strip(), level=3)
+    """单个商品: H3 商品名称(+SKU 编码锚点) + H4 子章节。
+
+    H3 标题携带 (SKU:xxx) 锚点:供索引构建 parse 阶段提取商品编码注入 chunk metadata
+    (文档自包含,见 SPEC_RAG_SKU_METADATA P0/D1);sku 缺省时回退原标题向前兼容。
+    """
+    name = row[COL_NAME].strip()
+    sku = (row.get(COL_SKU) or "").strip()
+    title = f"{name} (SKU:{sku})" if sku else name
+    doc.add_heading(title, level=3)
 
     # 商品信息（价格为动态信息，存储于数据库 product_price_stock 表，不入文档）
     doc.add_heading("商品信息", level=4)

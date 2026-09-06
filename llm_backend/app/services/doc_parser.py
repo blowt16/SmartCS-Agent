@@ -10,12 +10,16 @@ from pathlib import Path
 
 _ENCODINGS = ["utf-8", "gbk", "gb2312", "latin-1"]  # gbk 覆盖 gb2312,保留对齐外仓库
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+# 商品编码锚点:仅匹配标题行尾的 (SKU:xxx)/(SKU：xxx)——提取用原始标题文本(clean 前),
+# 正文出现同形文本不会被误判;格式与 scripts/add_sku_column.py 的 JD-[A-Z]{3}-{NNN} 一致
+_SKU_SUFFIX = re.compile(r"\((?:SKU|sku)[:：]\s*([A-Za-z0-9_-]+)\)\s*$")
 
 
 @dataclass
 class Segment:
     text: str
     chapter: str = ""
+    sku: str = ""   # 本段所属商品编码(标题携带 (SKU:xxx) 锚点时随章节栈继承);政策/通用段为空
 
 
 def parse_text_file(path: Path, ext: str) -> list[Segment]:
@@ -34,24 +38,37 @@ def parse_text_file(path: Path, ext: str) -> list[Segment]:
     return _split_md_by_headings(content)
 
 
+def _active_sku(stack: list[tuple[int, str, str]]) -> str:
+    """栈内最深非空 sku(产品 H3 标题段以下继承;新产品标题替换时随栈剪枝自动切换)。"""
+    for _, _, s in reversed(stack):
+        if s:
+            return s
+    return ""
+
+
 def _split_md_by_headings(content: str) -> list[Segment]:
     segments: list[Segment] = []
-    chapter_stack: list[tuple[int, str]] = []  # (级别, 标题);同级标题互相替换
+    chapter_stack: list[tuple[int, str, str]] = []  # (级别, 标题, sku);同级标题互相替换
     cur: list[str] = []
 
     def flush():
         text = "\n".join(cur).strip()
         if text:
             segments.append(
-                Segment(text=text, chapter=" > ".join(t for _, t in chapter_stack))
+                Segment(
+                    text=text,
+                    chapter=" > ".join(t for _, t, _ in chapter_stack),
+                    sku=_active_sku(chapter_stack),
+                )
             )
         cur.clear()
 
     def push_heading(level: int, title: str):
         # 仅保留级别更低的祖先,同级/更高级标题直接替换(避免 `stack[:level-1]`
         # 把旧的同级标题误当祖先,见 test_md_cross_chapter_chunk_ownership)
-        chapter_stack[:] = [(lv, t) for lv, t in chapter_stack if lv < level]
-        chapter_stack.append((level, title))
+        chapter_stack[:] = [(lv, t, s) for lv, t, s in chapter_stack if lv < level]
+        m = _SKU_SUFFIX.search(title)
+        chapter_stack.append((level, title, m.group(1) if m else ""))
 
     for line in content.split("\n"):
         m = _HEADING.match(line)
@@ -78,21 +95,26 @@ def parse_docx(path: Path) -> list[Segment]:
 
     doc = Document(str(path))
     segments: list[Segment] = []
-    chapter_stack: list[tuple[int, str]] = []  # (级别, 标题);同级标题互相替换
+    chapter_stack: list[tuple[int, str, str]] = []  # (级别, 标题, sku);同级标题互相替换
     cur: list[str] = []
 
     def flush():
         text = "\n".join(cur).strip()
         if text:
             segments.append(
-                Segment(text=text, chapter=" > ".join(t for _, t in chapter_stack))
+                Segment(
+                    text=text,
+                    chapter=" > ".join(t for _, t, _ in chapter_stack),
+                    sku=_active_sku(chapter_stack),
+                )
             )
         cur.clear()
 
     def push_heading(level: int, title: str):
         # 与 md 章节栈同规则:仅保留级别更低的祖先(切片赋值避免闭包重绑定)
-        chapter_stack[:] = [(lv, t) for lv, t in chapter_stack if lv < level]
-        chapter_stack.append((level, title))
+        chapter_stack[:] = [(lv, t, s) for lv, t, s in chapter_stack if lv < level]
+        m = _SKU_SUFFIX.search(title)
+        chapter_stack.append((level, title, m.group(1) if m else ""))
 
     def handle_para(p: Paragraph):
         style = (p.style.name or "") if p.style else ""

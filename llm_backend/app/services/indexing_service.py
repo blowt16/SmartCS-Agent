@@ -41,16 +41,32 @@ class IndexingService:
     # ==================== 分块归属 ====================
 
     @staticmethod
-    def _locate_chapter(spans: List[tuple[int, int, str]], pos: int) -> str:
-        """块内首个非空字符所在段 → 章节。
+    def _locate_chapter(spans: List[tuple[int, int, str, str]], pos: int) -> str:
+        """块内首个非空字符所在段 → 章节(单值,块首归属,语义不变)。
 
         段间以 \\n\\n 连接,连接符为"空字符":块起点落在连接符上时顺延到下一段
         (spans 的 end 不含连接符,故 pos < end 即命中本段或顺延后的下一段)。
         """
-        for start, end, chapter in spans:
+        for start, end, chapter, _sku in spans:
             if pos < end:
                 return chapter
         return ""
+
+    @staticmethod
+    def _collect_skus(spans: List[tuple[int, int, str, str]], start: int, end: int) -> List[str]:
+        """块文本区间 [start, end) 覆盖段的全部商品编码,按首次出现序去重。
+
+        与 _locate_chapter 单值归属不同:chunk 跨商品为全文统一切分的必然态,
+        sku 必须多值收集(不猜主体,主体判断下放消费侧 LLM,见 SPEC_RAG_SKU_METADATA D3)。
+        重叠区(chunk_overlap)使边界块与邻块重复收集同编码——符合预期(两块文本均真实覆盖该段)。
+        """
+        skus: List[str] = []
+        seen: set[str] = set()
+        for s, e, _ch, sku in spans:
+            if sku and s < end and e > start and sku not in seen:
+                seen.add(sku)
+                skus.append(sku)
+        return skus
 
     # ==================== 解析 ====================
 
@@ -113,33 +129,46 @@ class IndexingService:
         # 5. 清洗 + 6. 分块(全文统一递归切分,2026-08-23):
         #    段间 \n\n 连接成全文 → split_documents 一次切分 → 块归属=块内首个非空
         #    字符所在段的章节(段字符轴定位,见 spec_plan/SPEC_CHUNK_MERGE_STRATEGY.md §3)
-        clean_segments: List[tuple[str, str]] = []
+        clean_segments: List[tuple[str, str, str]] = []   # (text, chapter, sku)
         for seg in segments:
             text = clean_text(seg.text) if settings.TEXT_CLEAN_ENABLED else seg.text.strip()
             if text:
-                clean_segments.append((text, seg.chapter))
+                clean_segments.append((text, seg.chapter, seg.sku))
         if not clean_segments:
             return self._fail("empty_file", "清洗后无内容")
 
-        # 段字符轴:(start, end, chapter);每段后 +2 补偿 \n\n 连接符,与 join 严格同步
-        spans: List[tuple[int, int, str]] = []
+        # 段字符轴:(start, end, chapter, sku);每段后 +2 补偿 \n\n 连接符,与 join 严格同步
+        spans: List[tuple[int, int, str, str]] = []
         cap = 0
-        for text, chapter in clean_segments:
-            spans.append((cap, cap + len(text), chapter))
+        for text, chapter, sku in clean_segments:
+            spans.append((cap, cap + len(text), chapter, sku))
             cap += len(text) + 2
-        full_text = "\n\n".join(t for t, _ in clean_segments)
+        full_text = "\n\n".join(t for t, _, _ in clean_segments)
 
         docs = self.text_splitter.split_documents([LangchainDocument(page_content=full_text)])
         chunks: List[str] = []
         chapters: List[str] = []
+        chunk_skus: List[List[str] | None] = []
         for d in docs:
             content = d.page_content
             if len(content.strip()) < settings.CHUNK_MIN_SIZE:
                 continue
             chunks.append(content)
-            chapters.append(self._locate_chapter(spans, d.metadata["start_index"]))
+            start = d.metadata["start_index"]
+            # chapter 单值(块首归属)与 sku_codes 多值(区间收集)并存,语义不同
+            chapters.append(self._locate_chapter(spans, start))
+            skus = self._collect_skus(spans, start, start + len(content))
+            chunk_skus.append(skus or None)   # 空列表统一为 NULL(JSONB 存储面一致)
         if not chunks:
             return self._fail("empty_file", "清洗分块后无内容")
+
+        # 多商品块占比统计(SPEC_RAG_SKU_METADATA 归档前置验证项落地)
+        multi = sum(1 for s in chunk_skus if s and len(s) > 1)
+        logger.info(
+            "sku 注入完成: 多商品块 {} / {} ({:.1%}),含商品块 {} / {}",
+            multi, len(chunks), multi / len(chunks),
+            sum(1 for s in chunk_skus if s), len(chunks),
+        )
 
         # 7. 嵌入(退避重试已内置于 embed_in_batches;全部成功才进事务)
         embeddings = await embed_in_batches(chunks)
@@ -162,9 +191,9 @@ class IndexingService:
                         chunk_id=f"{user_id}_{md5_hex}_{i:04d}",
                         md5=md5_hex, file_type=ext,
                         source=original_name, file_path=path, user_id=user_id,
-                        chunk_index=i, content=c, embedding=e, chapter=ch,
+                        chunk_index=i, content=c, embedding=e, chapter=ch, sku_codes=sk,
                     )
-                    for i, (c, e, ch) in enumerate(zip(chunks, embeddings, chapters))
+                    for i, (c, e, ch, sk) in enumerate(zip(chunks, embeddings, chapters, chunk_skus))
                 ]
                 s.add_all(rows)
                 await s.commit()

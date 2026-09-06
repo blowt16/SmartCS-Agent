@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, func, Computed
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
 from app.core.config import settings
@@ -19,7 +19,8 @@ class DocumentChunk(Base):
     md5 = Column(String(32), nullable=True)
     file_type = Column(String(20), nullable=True)
     page = Column(Integer, nullable=True)              # PDF 页号(MVP 为 null,演进 layout.json)
-    chapter = Column(String(255), nullable=True)       # 章节路径
+    chapter = Column(String(255), nullable=True)       # 章节路径(块首段归属,单值)
+    sku_codes = Column(JSONB, nullable=True)           # 商品编码多值列表(块覆盖商品的字符轴区间收集);[]/NULL=政策/通用块
     content = Column(Text, nullable=False)            # 文本块内容
     embedding = Column(Vector(settings.EMBEDDING_DIMENSION), nullable=False)
     # BM25 全文检索生成列（jiebacfg 分词，DB 端自动维护，ORM 只读使用）

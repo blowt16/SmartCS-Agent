@@ -41,6 +41,50 @@ def test_md_cross_chapter_chunk_ownership(tmp_path):
     assert segments[1].chapter == "章节B"
 
 
+# ==================== sku 段级挂载(SPEC_RAG_SKU_METADATA C 阶段) ====================
+
+def test_md_sku_inherit_and_switch(tmp_path):
+    """(SKU:) 标题锚点:段继承该编码,新产品标题切换后旧编码不再出现,无锚点段为空。"""
+    md = (
+        "# 商品文档\n"
+        "总述段无归属\n"
+        "## 一、沙发\n"
+        "### 云享沙发 SF-2000 (SKU:JD-SOF-001)\n"
+        "#### 规格参数\n"
+        "参数A\n"
+        "### 云享沙发 SF-1000\n"
+        "无编码商品的段\n"
+    )
+    p = _write(tmp_path, "a.md", md.encode("utf-8"))
+    segments = parse_text_file(p, "md")
+    skus = [(s.chapter.split(">")[-1].strip(), s.sku) for s in segments]
+    assert ("商品文档", "") in skus               # 总述段(栈内无锚点)
+    assert ("一、沙发", "") in skus               # 品类段(无锚点)
+    assert ("云享沙发 SF-2000 (SKU:JD-SOF-001)", "JD-SOF-001") in skus  # 标题行自段
+    # 正文与所属标题行同段(段落间无标题则不分段):参数A 并入"规格参数"段、无编码正文并入其 H3 段
+    spec_seg = next(s for s in segments if s.chapter.endswith("规格参数"))
+    assert "参数A" in spec_seg.text and spec_seg.sku == "JD-SOF-001"   # H4 小节段继承商品编码
+    assert ("云享沙发 SF-1000", "") in skus       # 无锚点新标题:旧 sku 随栈剪枝清空
+    assert "无编码商品的段" in next(s.text for s in segments if s.chapter.endswith("云享沙发 SF-1000"))
+
+
+def test_md_sku_case_and_fullwidth_colon(tmp_path):
+    """锚点兼容 (sku:xxx) 小写与全角冒号 (SKU：xxx)。"""
+    for anchor in ["(sku:JD-LCK-001)", "(SKU：JD-LCK-001)", "(SKU:JD-LCK-001)"]:
+        md = f"## 商品 (SKU 前缀示例)\n### 门锁 {anchor}\n正文"
+        p = _write(tmp_path, "a.md", md.encode("utf-8"))
+        segments = parse_text_file(p, "md")
+        assert any(s.sku == "JD-LCK-001" for s in segments), anchor
+
+
+def test_md_sku_body_text_not_matched(tmp_path):
+    """正文出现 (SKU:...) 同形文本不误匹配——锚点只在标题行判定。"""
+    md = "## 标题 (SKU:JD-SOF-001)\n正文提到 (SKU:JD-SOF-002) 不应影响归属"
+    p = _write(tmp_path, "a.md", md.encode("utf-8"))
+    segments = parse_text_file(p, "md")
+    assert all(s.sku == "JD-SOF-001" for s in segments)
+
+
 def test_docx_body_order_and_tables(tmp_path):
     """段落-表格-段落交替:body 迭代保持顺序,表格合并单元格不重复。"""
     from docx import Document
