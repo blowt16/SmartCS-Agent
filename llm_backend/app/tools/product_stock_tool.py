@@ -1,21 +1,25 @@
-"""商品动态数据检索工具（langchain @tool 薄封装）
+"""商品动态数据补全工具（langchain @tool 薄封装，sku 精确通道）
 
-将 product_price_stock 表（价格/库存动态信息）检索封装为 agent 可调用的工具。
-与 rag_retrieval 互补：动态数据（价格/库存）查本工具，静态知识（参数/政策）查知识库。
-所有结果（成功/空/错误）均返回结构化 JSON，错误信息供 LLM 自主判断下一步。
+职责定位（2026-09-06 方案 A 整改，见对话决策"RAG 门控 + sku-only"）：
+- 本工具是 rag_retrieval 的**辅助工具**：为 RAG 已检索命中的商品补全动态信息（价格/库存）
+- **商品检索的召回与准确性由 rag_retrieval 负责**：rag 未命中商品 → 不调用本工具，
+  回答口径为"该商品动态信息暂未收录"，禁止按名称猜测检索
+- 入参仅 sku（必填，来自 rag 返回段的【商品编码:】前缀）——名称/品类模糊通道已移除
+- 返回的 product_name/category 等为**展示与身份核对字段**（供 LLM 向用户展示与比对），
+  不作为检索键
 
 用法（后续 agent 接入）：
     from app.tools.product_stock_tool import product_stock_lookup
-    llm.bind_tools([product_stock_lookup, rag_retrieval])
+    from app.tools.rag_tool import rag_retrieval
+    llm.bind_tools([rag_retrieval, product_stock_lookup])
 """
 import asyncio
 import json
-from typing import Optional
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from psycopg.errors import InvalidPassword  # psycopg3 驱动层认证异常（SQLAlchemy 不暴露）
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.core.config import settings
@@ -23,15 +27,6 @@ from app.core.database import AsyncSessionLocal
 from app.models.product_price_stock import ProductPriceStock
 
 # 超时与重试配置统一入 env（settings.TOOL_*，与 rag_retrieval 共用）
-
-
-def _normalize_keyword(name: str) -> str:
-    """参数预处理：去全部空格 + 转义 ILIKE 通配符（%/_），防止注入式全表匹配。
-
-    空格去除后与表内名称（同样压缩空格）连续匹配——"京东京造 智能门锁"
-    可命中表内"京东京造 智能门锁 全自动3D人脸识别"（保留词序，精确度高）。
-    """
-    return name.replace(" ", "").replace("%", r"\%").replace("_", r"\_")
 
 
 def _classify_error(e: Exception) -> tuple[str, bool]:
@@ -73,13 +68,12 @@ def _ok(records: list[dict]) -> str:
     return json.dumps({"status": "ok", "count": len(records), "data": records}, ensure_ascii=False)
 
 
-def _empty(product_name: str, category: Optional[str]) -> str:
+def _empty(sku: str) -> str:
     msg = (
-        f"未找到名称包含「{product_name}」的商品"
-        + (f"（品类：{category}）" if category else "")
-        + "。建议：1) 缩短或更换商品名关键词重试；"
-        + "2) 若用户询问的是商品参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；"
-        + "3) 若用户提供的商品名过于模糊，可向用户澄清具体商品。"
+        f"商品编码 {sku} 未找到：该商品不在在售商品库中（编码不存在或已下线）。建议："
+        "1) 核对编码是否与 rag_retrieval 返回的【商品编码:】前缀一致（含大小写）；"
+        "2) 若用户询问的是参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；"
+        "3) 若确实无此商品动态数据，如实告知用户『该商品动态信息暂未收录』，不要编造价格。"
     )
     return json.dumps({"status": "empty", "count": 0, "data": [], "message": msg}, ensure_ascii=False)
 
@@ -98,96 +92,52 @@ def _error(error_type: str, retryable: bool, message: str) -> str:
 
 
 class ProductStockLookupInput(BaseModel):
-    """商品动态数据查询参数（Pydantic args_schema——描述与范围约束进 JSON schema）。
+    """商品动态数据补全参数（Pydantic args_schema——描述进 JSON schema）。
 
-    默认 @tool 的 parse_docstring=False：docstring 的 Args 段不进参数 schema，
-    模型只能看到参数类型看不到说明。args_schema 将参数描述/示例/范围显式暴露给模型。
+    sku 为唯一入参（必填）：精确等值查询，一次一个商品；编码一律大写归一。
     """
 
-    sku: Optional[str] = Field(
-        default=None,
-        description="商品编码（来自 rag_retrieval 返回段的【商品编码:】前缀，精确匹配，"
-        "如 JD-LCK-001）。传了 sku 时精确命中该商品，跳过名称模糊；"
-        "多个编码时先按正文/用户问题定位目标商品再传对应编码；"
-        "无编码（用户口语/条件型询问）则留空走 product_name 名称模糊通道",
-    )
-    product_name: Optional[str] = Field(
-        default=None,
-        description='商品名称关键词（模糊匹配，传简称即可，如"门锁"可命中'
-        '"京东京造 智能门锁 全自动3D人脸识别"；sku 精确命中时无需传）',
-    )
-    category: Optional[str] = Field(
-        default=None,
-        description='品类过滤（可选，仅名称模糊通道生效），品类为固定集合（如"智能门锁"'
-        '"智能晾衣机"）；不传则按名称模糊全表匹配',
-    )
-    limit: int = Field(
-        default=5, ge=1, le=20,
-        description="返回条数上限（1~20）。泛查询（用户问'有哪些 XX/卖什么'，无指定商品）"
-        "传 20 获取全量清单；单商品详情查询保持默认 5",
+    sku: str = Field(
+        description="商品编码（必填，来自 rag_retrieval 返回段的【商品编码:】前缀，"
+        "如 JD-LCK-001）。为 RAG 已命中商品补全价格/库存动态信息，不用于按名称猜测检索；"
+        "rag 未命中商品时不要调用本工具，如实说明动态信息暂未收录。"
     )
 
 
 @tool(args_schema=ProductStockLookupInput)
-async def product_stock_lookup(
-    sku: Optional[str] = None,
-    product_name: Optional[str] = None,
-    category: Optional[str] = None,
-    limit: int = 5,
-) -> str:
-    """查询商品实时价格与库存。
+async def product_stock_lookup(sku: str) -> str:
+    """为商品补全实时价格与库存（sku 精确，一次一个商品）。
 
-    当用户询问商品价格、是否有货、库存情况时使用。动态数据（价格/库存）存储在
-    数据库中，商品参数/规格/售后政策等静态信息请使用 rag_retrieval。
+    本工具是 rag_retrieval 的辅助工具：商品检索准确性由 rag_retrieval 负责，
+    本工具仅为 RAG 已命中（返回段含【商品编码:】前缀）的商品补全动态数据。
 
-    检索通道(SPEC_SKU_ALIGNMENT D-2):
-    - sku 精确通道: 传 rag_retrieval 返回的【商品编码:】编码即精确命中该商品
-      (确定性对齐,消除同前缀名称模糊歧义);编码在库查不到 → empty
-    - 名称模糊通道: 无编码场景(用户口语/条件型选购/零命中)走 product_name 简称
-      + category 过滤,与改造前行为一致
-
-    泛查询（用户问"有哪些沙发/卖什么"，未指定具体商品）：
-    - 以品类词作为 product_name 传入（如"沙发"），并传 limit=20 获取全量清单；
-      动态清单（名称/价格/库存）配合 rag_retrieval 的静态概述组装回答
+    何时使用本工具：
+    - rag_retrieval 返回段含商品编码前缀，且用户询问该商品价格/是否有货/库存时，
+      以对应编码调用（rag 前缀含多个编码的混合块：先按块正文/用户问题定位目标商品
+      再传对应编码，勿取首码）
 
     何时不要使用本工具：
+    - rag_retrieval 未检索到用户所指商品 → 不调用，如实告知"该商品动态信息暂未收录"
+      （静态知识库无该商品时亦然），禁止按名称猜测检索
     - 询问商品参数/规格/功能特点/售后政策 → 使用 rag_retrieval（静态知识库检索）
     - 与业务无关的闲聊 → 直接回答，无需查询
 
     Returns:
         结构化 JSON 字符串（status=ok/empty/error）：
         - ok: {"status":"ok","count":N,"data":[{sku,product_name,category,current_price,stock_quantity,updated_at}]}
-        - empty: 无匹配，message 含建议
+        - empty: 编码不存在/已下线，message 含建议与不编造指引
         - error: 入参/数据库异常，error_type + message 供 LLM 判断
     """
-    # 入参校验：sku 与 product_name 至少提供其一（retryable=true）
-    sku = (sku or "").strip()
-    product_name = (product_name or "").strip()
-    if not sku and not product_name:
+    # 入参校验：sku 为空 → 明确错误，引导先 rag 检索拿编码（retryable=true）
+    sku = (sku or "").strip().upper()  # 大写归一，防大小写差异稳定 empty
+    if not sku:
         return _error(
             "invalid_argument", True,
-            "参数错误：sku 与 product_name 至少提供一个。有 rag_retrieval 返回的商品编码时传 sku=精确查询；"
-            "否则从用户消息提取商品名称关键词（可传简称）后重试；确实无法提取请向用户澄清。",
+            "参数错误：sku 不能为空。请先调用 rag_retrieval 检索商品，从返回段的"
+            "【商品编码:】前缀取得编码后，再以 sku= 调用本工具补全动态信息。",
         )
-    try:
-        limit = max(1, min(int(limit), 20))  # 钳制 1~20，防超量
-    except (TypeError, ValueError):
-        limit = 5  # 非数字按默认值（边界 #6）
 
-    stmt = select(ProductPriceStock)
-    if sku:
-        # 精确通道:sku 唯一命中,跳过名称模糊(即使 product_name 同时传入也以 sku 为准)
-        stmt = stmt.where(ProductPriceStock.sku == sku)
-    else:
-        kw = _normalize_keyword(product_name)  # 去空格 + 通配符转义
-        stmt = stmt.where(
-            func.replace(ProductPriceStock.product_name, " ", "").ilike(
-                f"%{kw}%", escape="\\"
-            )
-        )
-        if category:
-            stmt = stmt.where(ProductPriceStock.category == category)
-    stmt = stmt.order_by(ProductPriceStock.updated_at.desc()).limit(limit)
+    stmt = select(ProductPriceStock).where(ProductPriceStock.sku == sku)
 
     try:
         # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
@@ -201,12 +151,12 @@ async def product_stock_lookup(
         )
 
     if not rows:
-        return _empty(product_name, category)
+        return _empty(sku)
 
     records = [
         {
             "sku": r.sku,
-            "product_name": r.product_name,
+            "product_name": r.product_name,   # 展示与身份核对字段（非检索键）
             "category": r.category,
             "current_price": float(r.current_price),
             "stock_quantity": r.stock_quantity,

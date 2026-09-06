@@ -78,9 +78,12 @@ async def test_success_prefix_metadata():
 
 
 async def test_empty_result_advice():
+    """空结果(零文档):不再引导调 product_stock_lookup——无商品命中即无 sku 来源,
+    检索准确性由本工具负责,如实告知未收录(方案 A 口径,2026-09-06)。"""
     result = await _invoke("不存在的知识", AsyncMock(return_value=[]))
     assert "未检索到" in result
-    assert "product_stock_lookup" in result  # 价格/库存引导
+    assert "product_stock_lookup" not in result  # 无命中不引导动态查询
+    assert "暂未收录" in result
     assert "换措辞" in result
 
 
