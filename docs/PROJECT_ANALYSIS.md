@@ -1,6 +1,8 @@
 # SmartCS-Agent 项目深度分析报告
 
 > **分析日期**: 2026-08-08（§4 核心模块详解于 2026-09-02 按代码实测状态重写） | **版本**: 1.1 | **许可**: MIT
+>
+> **2026-09-06 同步**：SKU 确定性对齐全链路落地（TSV 编码 → docx H3 (SKU:) 锚点 → chunk `sku_codes` 多值 JSONB → rag 返回元数据前缀）+ 方案 A（product_stock_lookup 收窄 sku-only 辅助通道、售前检索节点 RAG 门控动态补全、静态/动态同码配对供 summarize）+ 工具多 sku 批量——§4.4/§4.9.3/§5.5/§7.3/§10.2.1 已按实测同步；历史文本保留原样，最新判定以各节 ⚠️ 同步注与本行为准
 
 ---
 
@@ -459,7 +461,7 @@ flowchart TD
 
 ### 4.4 售前导购模块：MultiTool 子图 + ragTool 检索工具链（总 — 分）
 
-**模块职责**：承接 `type=presale`（商品参数/价格/推荐/使用咨询）。模块由三层组成：主图节点 `create_research_plan`（容器）→ **Multi-Tool 工作流子图**（planner → 并行检索 → summarize → final_answer 的 map-reduce 编排）→ **检索工具层**（向量检索节点直接消费 `RAGRetrieverService` 混合检索管线；另有两枚 langchain `@tool` 薄封装 `rag_retrieval` / `product_stock_lookup` 已按"动态查库 + 静态查知识"互补协议落地并单测，**生产链路当前未 bind_tools**，接入售前/售后 Agent 时即按 §4.4.3/§4.4.4 流程运行）。其中 ragTool 指向的**混合检索管线**运行流程最为复杂，按"总 → 分"拆解如下。
+**模块职责**：承接 `type=presale`（商品参数/价格/推荐/使用咨询）。模块由三层组成：主图节点 `create_research_plan`（容器）→ **Multi-Tool 工作流子图**（planner → 并行检索 → summarize → final_answer 的 map-reduce 编排）→ **检索工具层**（检索节点直接消费 `RAGRetrieverService` 混合检索管线 + `product_dynamic_service` 动态补全；另有两枚 langchain `@tool` 薄封装 `rag_retrieval` / `product_stock_lookup` 按"静态查知识 + sku 动态补全"协议落地并单测，**LLM 编排形态（bind_tools）未接入**——两 tool 的语义组合已由检索节点以确定性形态投入生产（2026-09-06 方案 A：RAG 门控 + sku-only 动态补全 + 静态/动态同码配对供 summarize，见下各节）。其中 ragTool 指向的**混合检索管线**运行流程最为复杂，按"总 → 分"拆解如下。
 
 #### 4.4.1 模块总运行流程图（节点容器层）
 
@@ -487,19 +489,19 @@ flowchart TD
 ```
 
 - **planner**：问题拆分为独立子任务（规则：不依赖/去重/合并相互依赖），并行度即任务数。
-- **检索节点**（`customer_tools/node.py`）：每个子任务调一次 `RAGRetrieverService.search(task)`，结果以 `records.result`（拼接文本）与 `records.hybrid_docs` 进 `searches` 状态（`Annotated add` 聚合）。
-- **summarize**：同一模型实例（tags=`research_plan`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）。
+- **检索节点**（`customer_tools/node.py`）：每个子任务一次 `RAGRetrieverService.search(task)`（静态检索）→ **RAG 门控动态补全**（2026-09-06 方案 A）：收集命中块 `sku_codes` 候选（去重保序，一次 `WHERE IN` 批量经 `product_dynamic_service.fetch_by_skus`）→ 结果以 `records.result`（= 动态区【商品动态信息区】+ 静态块文本，同 sku 编码配对、免 LLM join）与 `records.hybrid_docs` / `records.dynamic_rows` 进 `searches` 状态。零文档/无 sku 块（政策/通用）**不查动态库**（检索准确性由 rag 负责，宁缺勿错）。
+- **summarize**（= 最终 answer LLM）：同一模型实例（tags=`research_plan`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
 - 无结果时 `summary="No data to summarize."`，final_answer 原样透传（无显式兜底话术，属已知边界）。
 
-#### 4.4.3 子图②：检索工具层现状（生产节点直连 + 两枚 @tool 待接入）
+#### 4.4.3 子图②：检索工具层现状（2026-09-06 SKU 对齐 + 方案 A 同步）
 
 | 检索入口 | 位置 | 现状 |
 |---------|------|------|
-| `vector_search_query` 节点 | `customer_tools/node.py` | **生产在用**（§4.4.2 子图的检索环节），直连 `RAGRetrieverService.search()`，无三态协议，异常记 errors 列表 |
-| `rag_retrieval`（@tool） | `app/tools/rag_tool.py` | 已落地 + 三态协议 + 单测（`tests/test_rag_tool.py`），**生产未 bind**（全仓无 `bind_tools` 调用） |
-| `product_stock_lookup`（@tool） | `app/tools/product_stock_tool.py` | 同上（`tests/test_product_stock_tool.py`）；数据源 `product_price_stock` 表（§4.9.3） |
+| `vector_search_query` 节点 | `customer_tools/node.py` | **生产在用**（§4.4.2 子图的检索环节）：`RAGRetrieverService.search()` 静态检索 + **RAG 门控动态补全**（方案 A，fetch_by_skus 批量 IN），输出动态区+静态块合并文本 |
+| `rag_retrieval`（@tool） | `app/tools/rag_tool.py` | 已落地 + 三态协议 + 单测；输出每块带 `【商品编码:S1\|S2｜知识类型:X｜来源:F】` 元数据前缀（sku 来自 chunk `sku_codes`，多值）；空态（零文档）明令**不要**调 product_stock_lookup（无命中即无 sku 来源）——**LLM 编排形态未 bind**，语义已由节点确定性形态投用 |
+| `product_stock_lookup`（@tool） | `app/tools/product_stock_tool.py` | 已落地 + 单测；**sku-only 契约**（方案 A）：`sku`/`skus` 双参（至少其一），单条 `WHERE IN` 批量、入参序、部分命中 ok/全缺失 empty、上限 20；docstring 负向：rag 未命中不调用、禁按名称猜测——数据源 `product_price_stock` 表含 `sku` unique 对齐键（§4.9.3） |
 
-两枚 @tool 的目标用法（`llm.bind_tools([rag_retrieval, product_stock_lookup])` 的 LLM 工具编排、降级链与 SKU 对齐演进）见 `docs/spec_plan/已完成/SPEC_RAG_TOOL_OPTIMIZATION.md` 与 `SPEC_PRODUCT_STOCK_TOOL.md`——工具已就绪，Agent 编排层待接入。
+工具与链路演进文档：`docs/spec_plan/已完成/SPEC_SKU_ALIGNMENT.md`（TSV/DB sku 键）、`SPEC_RAG_SKU_METADATA.md`（docx 锚点 + chunk sku_codes 注入 + 返回元数据）、`SPEC_PRODUCT_TOOL_SKU_BATCH.md`（多 sku 批量）；LLM 编排（bind_tools）仍为待接入演进方向。
 
 #### 4.4.4 子图③：ragTool（`rag_retrieval` @tool）运行流程
 
@@ -509,8 +511,8 @@ flowchart TD
     B -->|"是"| E1["返回错误：请先给出要检索的问题<br/>（可提示向用户澄清）"]
     B -->|"否"| C["执行知识库检索<br/>（超时保护 10 秒；<br/>数据库 / 网络抖动自动重试一次）"]
     C -->|"检索失败"| E2["返回统一错误：知识库暂不可用<br/>提示用户稍后再试或转人工，禁止编造"]
-    C -->|"无匹配结果"| E3["返回空结果 + 建议：<br/>换措辞重试 / 价格库存改用动态工具 /<br/>如实告知未收录"]
-    C -->|"检索到内容"| OK["返回相关文档片段<br/>（每段标注【来源:文件名】，供引用）"]
+    C -->|"无匹配结果"| E3["返回空结果 + 建议（2026-09-06 方案 A 口径）：<br/>换措辞重试 / 明令不要调用动态工具（无命中即无 sku 来源）/ 如实告知暂未收录"]
+    C -->|"检索到内容"| OK["返回相关文档片段<br/>（每段带【商品编码｜知识类型｜来源】元数据前缀，<br/>sku 供动态补全/精确查询配对）"]
 ```
 
 #### 4.4.5 子图④：ragTool 核心——RAGRetrieverService 混合检索管线运行流程
@@ -724,22 +726,21 @@ flowchart TD
 
 #### 4.9.3 商品动态数据模块（product_price_stock + product_stock_lookup）
 
-**知识分层**：价格/库存属动态信息，只存表不写 docx。`llm_backend/scripts/import_product_price_stock.py` 从 `scripts/data/jd_smart_furniture.tsv` 按 `product_name` 幂等 upsert（范围价取均值、0=无货）；表结构 `product_name`(唯一) / `category` / `current_price`(Numeric) / `stock_quantity`(Integer) / `updated_at`。
+**知识分层**：价格/库存属动态信息，只存表不写 docx。`llm_backend/scripts/import_product_price_stock.py` 从 `scripts/data/jd_smart_furniture.tsv` 按 **`sku`** 幂等 upsert（冲突键 2026-09-06 由 product_name 切换；范围价取均值、0=无货、测试库存规则固定）；前置 `validate_sku` 结构性校验 fail-fast（sku 空/格式/重复/同名双 sku，零部分写入）。表结构（物理列序）：`id` / **`sku`**(unique，确定性对齐/join 主键，与 TSV 逐字符一致) / `product_name`(unique，可变展示名) / `category` / `current_price`(Numeric) / `stock_quantity`(Integer) / `updated_at`（当前 47 行 = 50 − 3 行价格"—"跳过）。
 
-**product_stock_lookup @tool 运行流程**（与 rag_retrieval 同为三态协议，现状=落地+单测，待 Agent bind）：
+**product_stock_lookup @tool 运行流程**（2026-09-06 方案 A 重定位 = rag 的辅助补全工具，sku-only 契约）：
 
 ```mermaid
 flowchart TD
-    A["智能体调用 product_stock_lookup<br/>（查询商品实时价格 / 库存）"] --> B{"商品名称为空?"}
-    B -->|"是"| E1["返回错误：请提供商品名称<br/>（可向用户追问）"]
-    B -->|"否"| C["整理关键词：去掉空格、转义特殊符号<br/>（避免一次匹配出全部商品）"]
-    C --> D["模糊查询价格库存表：<br/>名称包含匹配，可加品类过滤与条数限制<br/>（带超时保护与自动重试）"]
-    D -->|"查询失败"| E2["返回统一错误：暂时查不了价格<br/>提示勿编造数字"]
-    D -->|"无匹配商品"| E3["返回空 + 建议：换关键词 /<br/>静态参数改用知识库检索 / 向用户确认"]
-    D -->|"找到商品"| OK["返回清单：名称、品类、现价、库存量"]
+    A["调用 product_stock_lookup<br/>（sku 必填:单码 sku= / 批量 skus=[...]）"] --> B{"至少一个有效编码?"}
+    B -->|"否"| E1["invalid_argument: 先 rag 检索拿<br/>【商品编码:】前缀再调用"]
+    B -->|"是"| C["归一: strip+upper+去重(≤20)<br/>单条 WHERE IN 精确查询(同快照)"]
+    C -->|"查询失败"| E2["返回统一错误：暂时查不了价格<br/>提示勿编造数字"]
+    C -->|"全缺失"| E3["返回 empty: 编码不存在/已下线<br/>+ 不编造指引"]
+    C -->|"部分/全部命中"| OK["返回清单(入参序): sku、名称、<br/>品类、现价、库存量、更新时间"]
 ```
 
-**意图语义**：泛查询（"有哪些 XX/卖什么"）`limit=20` 全量清单，单商品详情默认 5——LLM 编排层按查询意图取值（设计约定，随 Agent 接入生效）。
+**意图语义与门控**（方案 A，2026-09-06）：商品检索的召回与准确性由 rag_retrieval 负责——rag 未命中商品**不调用本工具**（如实"动态信息暂未收录"）；rag 命中多码候选（混合块 92.1%）批量 `skus=` 一次取齐，缺失码静默（部分命中 ok）；品类清单 query 接受 rag 候选子集（不做全量泛查）。返回的 `product_name` 为展示/身份核对字段，非检索键。
 
 #### 4.9.4 前端模块（出口接收端）
 
@@ -880,9 +881,10 @@ flowchart TD
     A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
     A --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
     R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
-    S2 --> S3["混合检索（每子任务）<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合 top-20"]
-    S3 --> S4["Reranker 精排<br/>bge-reranker-v2-m3 top-5"]
-    S4 --> S5["Summarize 结果汇总<br/>客服风格生成"]
+    S2 --> S3["混合检索（每子任务）<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合 top-20 → Reranker top-5"]
+    S3 --> S3B["RAG 门控动态补全（2026-09-06 方案 A）<br/>收集命中块 sku_codes → 批量查动态行<br/>动态区置前 + 静态块同码配对"]
+    S3B --> S4["合并上下文 records.result<br/>（【商品动态信息区】+ 静态块前缀行）"]
+    S4 --> S5["Summarize 结果汇总（最终 answer LLM）<br/>客服风格 + 同码配对/未收录口径规则"]
     S5 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
     R -->|"超时"| S1B["降级回答<br/>「抱歉，系统处理超时，请稍后再试」"]
     S1B --> OUT
@@ -983,13 +985,17 @@ flowchart TD
 
 ```
 原始文档 (PDF/DOCX/TXT)
-  → 文档解析 (PyPDF2 / python-docx / TXT)
+  → 文档解析 (PyPDF2 / python-docx / TXT)——docx 按 Heading 维护章节栈
   → 文本清洗
   → RecursiveCharacterTextSplitter 分块 (500/50)
   → Embedding (EmbeddingProvider, qwen text-embedding-v4 API 1024 维, 分批 ≤10 条/请求)
   → pgvector 入库 (document_chunks 表, HNSW 索引)
   → BM25 侧自动就绪：content_tsv 生成列（jiebacfg 精确模式分词）+ GIN 倒排索引
     （CREATE EXTENSION pg_jieba；生成列随 INSERT 自动维护，无重建窗口）
+  → sku_codes 多值注入（2026-09-06，见已完成/SPEC_RAG_SKU_METADATA）：
+    商品 docx 由 TSV 生成（H3 标题含 (SKU:xxx) 锚点）→ parse 段级继承
+    → 切分后按字符轴区间收集块内全部编码存 JSONB 列（chapter 单值归属并存）
+    政策/通用块为 SQL NULL（无商品归属语义）；实测多商品块占比 92.1%（35/38）
 ```
 
 ---
@@ -1150,6 +1156,8 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 #### 10.2.1 单元测试覆盖不足（已部分缓解）
 
 已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（46 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
+
+> ⚠️ 2026-09-06 同步：`llm_backend/tests/` 现 80+ 项，已覆盖解析/分块归属/BM25 集成（真实 PG）/两 @tool 三态与 sku 批量/节点 RAG 门控/导入校验与模型约束；已知唯一失败 = `test_bm25_recalls_docs_with_partial_terms`（生产语料挤压非隔离缺陷，见 `未完成/SPEC_BM25_TEST_ISOLATION.md`）。本小节的"核心模块无 pytest 覆盖"已大幅缓解；语义缓存与 LangGraph Agent 行为验证仍待补。
 
 **建议**:
 
