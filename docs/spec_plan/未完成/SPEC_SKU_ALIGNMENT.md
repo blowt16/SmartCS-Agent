@@ -55,7 +55,7 @@
 - 数据 50 行商品，9 品类分布：智能门锁 12、电动智能沙发 7、电动升降桌 6、智能窗帘 6、智能电动床 5、智能晾衣架 5、按摩椅 4、智能床垫 3、智能床头柜 2
 - `来源` 列 URL 为第三方比价页（smzdm/manmanbuy），其参数 id **非京东商品 SKU，不可复用**
 - 商品名称长名风格（示例）：`芝华仕 50611B 头等舱智能电动沙发 小三座双电 2.43M 赤霞橙`、`米家智能晾衣机2 隐形超薄隐藏式升降`
-- 消费方均为 **header 名读取**（`csv.DictReader` / `row[COL_*]`），无按列序位置读取 → **表尾追加列安全**，但执行前仍做全项目消费方扫描（§8-2）
+- 消费方全量扫描（2026-09-06 实测，共 3 个读写方 + 文档引用）：`scripts/build_smart_furniture_docx.py`、`llm_backend/scripts/import_product_price_stock.py`、`scripts/enrich_product_tsv.py`（DictReader/DictWriter **header 往返——保留 sku 列与行序，零改动**，但注意其全量重写行为，勿与 sku 固化流程并发运行）；`docs/PROJECT_ANALYSIS.md` 与归档 design 文档仅文字引用，不改。三方均 header 名读取，无按列序位置解析 → **表尾追加列安全**（结论闭环，替代原开放扫描项 §8-2）
 
 ### 2.2 动态库表 product_price_stock（llm_backend/app/models/product_price_stock.py）
 
@@ -132,6 +132,7 @@ SPEC_PRODUCT_STOCK_TOOL.md §12.1 已完整预研 SKU 对齐五步（TSV 增列 
 - 填充规则（幂等，二次执行零 diff）：
   1. 已有合法 sku 的行**永不重写**
   2. 缺 sku 行按（品类，商品名称）升序；每品类内取现有最大 NNN + 1 续编（无现存则 001 起）
+- **写回行序纪律**：只逐行**原位补 sku 值**，禁止整表排序/重排——TSV 行序驱动导入脚本 `assign_stock`"品类第一款=0/少量"库存规则（`import_product_price_stock.py:43-49`），重排会使零库存分布漂移、A3~A5 断言失真
 - 完成后人工 `git diff` 审阅 50 行编码 → 提交固化；后续手工新增商品行时 sku 留空、由生成器补
 - 附带输出自检：全量 sku 非空/格式/唯一/映射唯一，违规即报错退出
 
@@ -162,6 +163,7 @@ SKU_RE = re.compile(r"^JD-[A-Z]{3}-\d{3}$")
 def validate_sku(rows: list[dict]) -> None:
     """结构性校验:任一违规抛 ValueError(整体终止,不写任何行)"""
     seen_sku: dict[str, str] = {}          # sku -> product_name(查一列多值/重复)
+    seen_name: dict[str, str] = {}         # product_name -> sku(同名双 sku 违规提前拦截,防 DB 层撞 unique 整体回滚)
     for row in rows:
         sku, name = row["sku"].strip(), row[COL_NAME].strip()
         if not sku:
@@ -170,7 +172,10 @@ def validate_sku(rows: list[dict]) -> None:
             raise ValueError("sku 格式非法(期望 JD-XXX-000): {} = {}".format(name, sku))
         if sku in seen_sku:
             raise ValueError("sku 重复: {} 与 {} 同为 {}".format(seen_sku[sku], name, sku))
+        if name in seen_name:
+            raise ValueError("商品名重复(同名双 sku 违规): {} 同时为 {} 与 {}".format(name, seen_name[name], sku))
         seen_sku[sku] = name
+        seen_name[name] = sku
 ```
 
 - 校验放 `read_tsv_rows` 完成后、任何 DB 写之前；若表头缺 `sku` 列（`row["sku"]` KeyError）同样整体终止并提示"TSV 未升级，先执行 add_sku_column"
@@ -201,9 +206,12 @@ stmt = stmt.on_conflict_do_update(
 ```bash
 # 1. 数据源升级
 python -m scripts.add_sku_column --write        # llm_backend 同级 scripts/ 下执行或按脚本指引
-git diff scripts/data/jd_smart_furniture.tsv    # 人工审阅 50 行编码
-# 2. DB 重建
-#    DROP/CREATE 或 TRUNCATE product_price_stock（选一,按部署方式文档化）——执行前确认无真实业务数据
+git diff scripts/data/jd_smart_furniture.tsv    # 人工审阅 50 行编码(含行序未变校验)
+# 2. DB 结构 + 数据重建 —— 顺序约束:先清空后加列(或 DROP 重建表)
+#    注意:sku 列 NOT NULL 无 default,表内有行时 ALTER ADD COLUMN 直接失败——严禁"先加列后清空"
+#    方式 A(本环境,结构由 create_all 管理): DROP TABLE product_price_stock; 改 model 后建表
+#    方式 B(保留表): TRUNCATE product_price_stock; 再 ALTER ADD COLUMN sku VARCHAR(32) NOT NULL + unique 约束
+#    执行前确认: 建表机制(create_all/迁移)与目标库无真实业务数据
 python -m scripts.import_product_price_stock    # 50 行全部入库
 ```
 
@@ -224,6 +232,7 @@ python -m scripts.import_product_price_stock    # 50 行全部入库
 | scripts/add_sku_column.py | **新增**生成器（dry-run 默认） |
 | llm_backend/app/models/product_price_stock.py | 加 sku 列 + unique；注释更新 |
 | llm_backend/scripts/import_product_price_stock.py | COL_SKU、前置校验、upsert 冲突键切换、日志含 sku 计数 |
+| scripts/enrich_product_tsv.py | **不改**（已实测 DictReader/DictWriter header 往返保留 sku 列与行序）；注意勿与 sku 固化流程并发运行 |
 | product_stock_lookup（app/tools/product_stock_tool.py） | **本期不改**（名称通道返回字段不变，新增列不影响现有查询/返回）；回归验证 A6 |
 | 引用 product_price_stock 模型的测试/建表 fixture | 同步加 sku 列（新建表路径自然生效；测试若用独立 schema 需重建） |
 | SPEC_PRODUCT_STOCK_TOOL.md（已完成/） | **不改历史**，仅在需要处可加一行指向本 spec 的承接注记（CLAUDE.md §6 规则 4） |
@@ -284,9 +293,11 @@ python -m scripts.import_product_price_stock   # llm_backend 下执行
 ## 8. 风险与避坑清单
 
 1. **sku 编码稳定性纪律**：编码一经固化禁改禁重排。改动 sku = 商品身份变更，会传播到 docx 文本、chunk metadata、DB 全量重建（阶段 B~D 落地后成本更高）。新增商品只走生成器续编。TSV 手工编辑只允许动其他 8 列
-2. **TSV 消费方全量扫描**（执行前必做）：本 spec 只确认了 docx 生成与导入两处按 header 名读取；实施时全项目 grep TSV 打开点（`open.*tsv`、`DictReader`、`read_csv`），确认无按列序位置解析的消费方后再定 sku 列尾追加
+2. **TSV 消费方扫描（已闭环，2026-09-06 实测）**：3 个读写方（docx 构建/导入/enrich_product_tsv，均 header 名读取，enrich 往返保留新列与行序）——表尾追加列安全结论成立，无需再扫；文档引用（PROJECT_ANALYSIS/归档 design）不改
 3. **price 解析失败跳行 vs 校验**：校验只拦结构性错误；价格解析失败跳行现状保留——跳行后 DB 行数 < 50 属预期（日志有 warning），勿与 A3 混判
 4. **并发/重复上传无关**：本阶段不触碰 RAG 入库链路（document_chunks 未改），无 md5/重灌联动
 5. **upsert 键切换的隐性行为**：改名后旧行不再按 name 命中新名——`product_stock_lookup` 名称模糊通道仍按新名可查（工具不依赖冲突键），无用户可见差异
 6. **模型/表不同步风险**：执行顺序严格按 §6.1（先 TSV+生成器 → 再 model → 再 import），表结构未变时旧导入脚本新 TSV（含 sku 列）会 KeyError 读列？——不会：旧脚本不读 sku 列，仅新脚本校验；反之新脚本旧 TSV 会终止（§4.3.1 提示语）
 7. **归档文档关系**：SPEC_PRODUCT_STOCK_TOOL.md §12.1 属已完成归档历史，本 spec 实施后不改其原文（CLAUDE.md §6 规则 3），承接关系以本 spec §2.4 表述为准
+8. **商品下线/删除语义（未设计，需产品/运营确认）**：导入 upsert 只增改不删——TSV 删行后 DB 残留旧行，sku 精确通道会把已下线商品当在售（比名称模糊通道更隐蔽）。后续需下线清理流程（按 TSV diff 删除/人工清理）或明确定义下线运营流程
+9. **真实京东 SKU 替换 = 全链路一次性重建流程（演进注记，非逐行零散替换）**：现校验正则 `JD-[A-Z]{3}-\d{3}`（本 spec）与 RAG 侧锚点正则（SPEC_RAG_SKU_METADATA D9）均以自造格式为前提；真实 SKU 为纯数字串，替换时同步放宽两处正则 + docx 重灌 + DB 重建一次完成，与本条 #1"禁改"纪律不矛盾（#1 禁的是无流程的零散改动）

@@ -47,6 +47,7 @@
 - 不改 `rag_retrieval` 入参/三态协议（`query` 单参、ok/空结果/error JSON 不变）
 - 不做 H3 硬边界切分、不做按 sku 的检索过滤（方案 A"先召回后对齐"不需要 filter；需"定向检索"另议）
 - 不注入商品名称列表到元数据（名称在块文本/chapter 中已可见，注入重复存储；见决策 D2）
+- 不解决"含具体商品名+政策主题的混合 query 中商品块召回占优、政策块掉出 top-5"的召回问题（属售后 Agent 接入时实体识别/定向检索演进，归档 2026-08-27 design.md:78，静态知识库无法完全避免）——本方案只保证命中块的商品身份可对齐，不改变召回排序
 - `product_stock_lookup` 的 sku 参数为**可裁剪子项** D-2（§7-3），核心范围不含
 
 ## 2. 现状核查（代码实测）
@@ -209,10 +210,16 @@ def render_doc_blocks(docs: list[dict]) -> str:
         skus = d.get("sku_codes") or []
         sku_part = "|".join(skus) if skus else "—（无商品归属:政策/通用,不可查动态数据）"
         chapter = d.get("chapter") or ""
-        ctype = chapter.split(">")[-1].strip() if chapter else ""
+        # 末级 = H4 小节名 → 知识类型;例外:H3 标题行自段的末级是商品标题(含 (SKU:) 锚点),
+        # 此时显示 "—"(标题段),避免把商品名误标为知识类型
+        last = chapter.split(">")[-1].strip() if chapter else ""
+        if last and "(SKU:" in last:
+            last = ""
+        # 注:混合块的 chapter 为块首段归属——知识类型仅为块首章节近似值,非全块精确;
+        #     全块商品的精确归属由 sku_codes(字符轴区间)承担,两者语义不同勿混用
         src = Path(d.get("file_path") or "未知").name
         blocks.append(
-            f"【商品编码:{sku_part}｜知识类型:{ctype or '—'}｜来源:{src}】\n{d.get('text','')}"
+            f"【商品编码:{sku_part}｜知识类型:{last or '—'}｜来源:{src}】\n{d.get('text','')}"
         )
     return "\n\n".join(blocks)
 ```
@@ -226,7 +233,9 @@ def render_doc_blocks(docs: list[dict]) -> str:
 【元数据说明】每段含"商品编码:S1|S2"前缀:1) 用户问该商品价格/库存时,以
 product_stock_lookup 查询并优先传 sku=精确匹配(回退传正文商品名关键词);
 2) 前缀为"—（无商品归属）"的段(政策/通用)只能佐证政策与通用条款,不得据此
-查询或断言任何单一商品动态数据;3) 引用商品名时省略标题中括号编码。
+查询或断言任何单一商品动态数据;3) 引用商品名时省略标题中括号编码;
+4) 前缀含多个编码的混合块:先按块正文/用户问题定位目标商品,再传**对应**编码,
+   勿顺手取第一个;5) 前缀编码在动态库查不到(empty)时,回退用正文商品名关键词走模糊通道。
 ```
 
 #### 4.3.4 summarize 提示词规则句（summarize/prompts.py:33-39 增补）
@@ -279,7 +288,7 @@ class ProductStockLookupInput(BaseModel):   # :100-120 增加可选字段(置于
 - **A1** 重建 docx 后抽查 3 个商品：H3 文本 = `原商品名 (SKU:JD-XXX-NNN)`，sku 与 TSV 逐字符一致
 - **A2** `test_parser` 扩展：含标注标题的 docx/md → 段 `sku` 正确继承/切换/清空（新产品标题替换后旧 sku 不再出现）
 - **A3** 重灌后 SQL：`SELECT count(*) FROM document_chunks WHERE sku_codes IS NULL` = 政策文档块数 + 总述/说明块数；抽查跨商品边界块 `sku_codes` 长度 ≥2（与块文本实际含两商品对照）；构建日志出现多商品块占比
-- **A4** 注入幂等：同一 docx 重灌两次 sku_codes 全等
+- **A4** 注入幂等：删旧行→重传→对比 sku_codes（重复此流程两遍，两遍结果全等；**不删旧行时 md5 相同会被 duplicate 短路**——该行为正确，勿误判为重灌成功）
 - **A5** 无标注文件不回归：txt/md/政策 docx 入库 sku_codes 空、检索行为不变（test_smoke/test_indexing 既有断言绿）
 - **A6** chunk 文本中可见 `(SKU:...)`（clean_text 保留性）且可被检索命中（编码类 query 召回提升为附带收益，不设硬指标）
 
@@ -311,15 +320,16 @@ class ProductStockLookupInput(BaseModel):   # :100-120 增加可选字段(置于
 | 2 | docx 标注括号格式 | ` (SKU:JD-XXX-NNN)` | 与 D9 锚点一致；若改全角括号需同步锚点正则 |
 | 3 | D-2（product_stock_lookup sku 参数）本期是否包含 | 包含（闭环必需,改动小） | 若另有 product_tool 专项 spec 计划可裁剪,本 spec 降级为纯 rag 侧 |
 | 4 | 重灌时机 | P0+C 完成后一次性 | 依赖阶段 A 已入库（sku 列有值） |
-| 5 | rerank 后 dict 键保留性验证结果（§8-6） | 实施期实测,若重建则 rerank 后 merge 元数据 | 影响 _to_doc 扩列是否够用 |
+| 5 | ~~rerank 后 dict 键保留性~~（**已实测关闭** 2026-09-06） | `reranker_service.py:108` `out=dict(doc)` 浅拷贝保留全部键 + 附加 rerank_score | 无需 merge 回补；测试断言（A7）覆盖即可防回归 |
 
 ## 8. 风险与避坑清单
 
 1. **单值注入陷阱**：严禁把 sku 挂到 `chapter` 或做"块首段 sku"——混合块后段商品身份丢失即不一致复发；_collect_skus 必须走区间（实施时以 A3 边界块用例钉死）
-2. **rerank dict 重建**：`reranker.rerank` 返回若只保留 text/score 等已知键，sku_codes/chapter 会被静默丢弃——实施期先跑一次带日志断言（最终输出含元数据键），必要时 rerank 后按 chunk_id merge 回补
+2. **rerank dict 键保留（已实测定案 2026-09-06）**：`reranker_service.py:108` `out = dict(doc)` 浅拷贝保留全部键——`sku_codes`/`chapter` 不会被丢弃，无需 merge 回补；在 A7 测试断言中固化，防未来实现变更回归
 3. **旧行残留**：docx md5 变 → 上传 duplicate 短路不触发 → 直接重传会新旧双份共存（检索重复）。必须按 §4.2.4 先删旧行（source 匹配），勿依赖"自动覆盖"
 4. **政策文档/通用块误用**：空 sku 前缀语义若缺失，LLM 可能拿政策块断言单一商品动态——前缀文案与 docstring 负向规则（§4.3.3）缺一不可；summarize 规则句同源
 5. **两通道漂移**：@tool 与 customer_tools 若手写两份格式必漂移（历史教训:现@tool 有【来源】而节点无）——render_doc_blocks 单函数是硬约束,代码评审关注点
 6. **JSONB 空值**：`[]` 与 NULL 并存会引入断言歧义——写入侧统一 `or None`(NULL),读取侧统一 `or []`,两处约定写进函数 docstring
 7. **构建统计日志**为归档前置验证项（多商品块占比）落地,勿删;若占比 > 预期(如 >50%)记录到归档 spec 备注,供后续章节感知切分排期依据
 8. **阶段 A 依赖**：本 spec 所有验收依赖 TSV sku 列与 DB sku unique（[[SPEC_SKU_ALIGNMENT]] A3~A5 通过）；未落地前开工 = P0 无值可标、C 无锚可提,直接拒收
+9. **chapter String(255) 上界**：H3 标题 +14 字符后最长章节路径估算 <255 安全，但 PG varchar 超长会直接入库报错（无截断）——P0 重建后加"最长 chapter 路径 <255"构建断言统计一次，后续标题变更回归该断言
