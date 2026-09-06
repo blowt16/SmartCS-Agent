@@ -46,7 +46,8 @@ def test_assign_stock_default():
 # ==================== sku 结构性校验(validate_sku) ====================
 
 def _row(sku="JD-LCK-001", name="小米智能门锁M30 掌静脉版"):
-    return {"sku": sku, "商品名称": name}
+    # 键名与 read_tsv_rows 产物一致(SQLAlchemy 列名 product_name)
+    return {"sku": sku, "product_name": name}
 
 
 def test_validate_sku_pass():

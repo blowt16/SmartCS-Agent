@@ -69,12 +69,13 @@ async def test_success_with_metadata(svc, test_user_id, tmp_path, cleanup_test_d
 def test_locate_chapter_span_edge():
     """_locate_chapter:块起点落在段间空位(\\n\\n)时顺延到下一段;段内命中本段。"""
     svc = IndexingService()
-    spans = [(0, 5, "章A"), (7, 20, "章B")]        # 段A 0-4(含连接符 5-6)
-    assert svc._locate_chapter(spans, 2) == "章A"   # 段 A 内部
-    assert svc._locate_chapter(spans, 5) == "章B"   # 段间空位(连接符) → 顺延
+    # 4 元组 (start, end, chapter, sku)——sku 随 spans 升级(SPEC_RAG_SKU_METADATA C 阶段)
+    spans = [(0, 5, "章A", ""), (7, 20, "章B", "")]   # 段A 0-4(含连接符 5-6)
+    assert svc._locate_chapter(spans, 2) == "章A"      # 段 A 内部
+    assert svc._locate_chapter(spans, 5) == "章B"      # 段间空位(连接符) → 顺延
     assert svc._locate_chapter(spans, 6) == "章B"
-    assert svc._locate_chapter(spans, 15) == "章B"  # 段 B 内部
-    assert svc._locate_chapter(spans, 99) == ""     # 越界(理论上不可达) → 空
+    assert svc._locate_chapter(spans, 15) == "章B"     # 段 B 内部
+    assert svc._locate_chapter(spans, 99) == ""        # 越界(理论上不可达) → 空
 
 
 # ---- 去重 ----

@@ -63,8 +63,9 @@ def validate_sku(rows: list[dict]) -> None:
     seen_sku: dict[str, str] = {}   # sku -> product_name
     seen_name: dict[str, str] = {}  # product_name -> sku
     for row in rows:
-        sku = (row.get(COL_SKU) or "").strip()
-        name = (row.get(COL_NAME) or "").strip()
+        # 注意:read_tsv_rows 产物以 SQLAlchemy 列名(product_name)为键,非 TSV 列名(商品名称)
+        sku = (row.get("sku") or "").strip()
+        name = (row.get("product_name") or "").strip()
         if not sku:
             raise ValueError(f"存在空 sku 行: {name}(TSV 是否已跑 add_sku_column 固化?)")
         if not SKU_RE.match(sku):
