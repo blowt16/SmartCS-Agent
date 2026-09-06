@@ -82,3 +82,22 @@ async def test_dynamic_fetch_empty_degrades_to_static_only():
     assert "【商品编码:JD-DRY-003" in text           # 静态块正常
     assert records["dynamic_rows"] == {}
     assert not out["searches"][0].errors
+
+
+async def test_dynamic_fetch_exception_not_crash_node():
+    """节点层独立兜底:fetch_by_skus 抛异常(service 兜底之外)不得崩溃子任务——
+    降级为仅静态 + errors 记录(2026-09-06 场景2 实测缺陷修复)。"""
+    docs = [_doc(sku_codes=["JD-DRY-003"])]
+    node = create_vector_search_query_node()
+    retriever = AsyncMock()
+    retriever.search = AsyncMock(return_value=docs)
+    with patch("app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools.node."
+               "get_rag_retriever_service", return_value=retriever):
+        with patch("app.lg_agent.kg_sub_graph.agentic_rag_agents.components.customer_tools.node."
+                   "fetch_by_skus", AsyncMock(side_effect=RuntimeError("sim db timeout"))):
+            out = await node({"task": "米家智能晾衣机2 多少钱"})
+    search = out["searches"][0]
+    assert "dynamic_fetch_failed" in search.errors          # 异常被记录
+    assert search.records["dynamic_rows"] == {}
+    assert "【商品编码:JD-DRY-003" in search.records["result"]  # 静态正常
+    assert "【商品动态信息区】" not in search.records["result"]   # 无动态区

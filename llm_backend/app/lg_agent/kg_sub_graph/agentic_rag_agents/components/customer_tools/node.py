@@ -70,7 +70,14 @@ def create_vector_search_query_node() -> Callable[
                     if s and s not in skus:
                         skus.append(s)
             if skus:
-                dynamic_rows = await fetch_by_skus(skus)
+                # 节点层独立兜底(与 service 内兜底双保险):任何动态异常 → 降级仅静态,
+                # 防子任务整体崩溃(一致性=失败减数据不减错,口径由 summarize 规则承接)
+                try:
+                    dynamic_rows = await fetch_by_skus(skus)
+                except Exception as e:
+                    logger.warning("动态补全异常,降级为仅静态: {}", e)
+                    errors.append("dynamic_fetch_failed")
+                    dynamic_rows = {}
                 logger.info("动态补全: 候选 {} 个 sku,命中 {} 行", len(skus), len(dynamic_rows))
 
         # 构建 LLM 可用的文本上下文——公共渲染与 rag_retrieval @tool 输出同格式
