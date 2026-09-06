@@ -82,7 +82,7 @@ async def test_empty_result_advice():
     检索准确性由本工具负责,如实告知未收录(方案 A 口径,2026-09-06)。"""
     result = await _invoke("不存在的知识", AsyncMock(return_value=[]))
     assert "未检索到" in result
-    assert "product_stock_lookup" not in result  # 无命中不引导动态查询
+    assert "不要调用 product_stock_lookup" in result  # 明令禁止(无命中即无 sku 来源),非引导
     assert "暂未收录" in result
     assert "换措辞" in result
 
