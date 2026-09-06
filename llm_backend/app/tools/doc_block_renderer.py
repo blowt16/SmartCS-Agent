@@ -13,6 +13,28 @@
 from pathlib import Path
 
 
+def render_dynamic_rows(rows: dict[str, dict]) -> str:
+    """商品动态区渲染(方案 A,2026-09-06):RAG 候选集 sku 的动态行一次给全。
+
+    每行一条:【动态|商品编码:S｜商品名:N】价格/库存/更新时间——编码与静态块
+    前缀行【商品编码:】同键,LLM 无需 join 即可配对(原子性呈现)。
+    调用方保证 rows 为 {sku: row_dict} 有序 dict(product_dynamic_service.fetch_by_skus)。
+    """
+    lines = []
+    for sku, r in rows.items():
+        price = r.get("current_price")
+        stock = r.get("stock_quantity")
+        stock_txt = "无货" if stock == 0 else f"库存{stock}"
+        price_txt = f"¥{price:.2f}" if price is not None else "价格未知"
+        lines.append(
+            f"【动态|商品编码:{sku}｜商品名:{r.get('product_name', '')}】"
+            f"{price_txt}｜{stock_txt}｜更新:{r.get('updated_at', '')}"
+        )
+    if not lines:
+        return ""
+    return "【商品动态信息区】\n" + "\n".join(lines)
+
+
 def render_doc_blocks(docs: list[dict]) -> str:
     """doc dict 列表 → LLM 上下文文本(每块前缀行 + 文本,块间空行分隔)。"""
     blocks = []

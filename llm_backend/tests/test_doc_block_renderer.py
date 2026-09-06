@@ -3,7 +3,7 @@
 覆盖:有 sku 块 / 无 sku 块(无商品归属语义) / 无 chapter 块 / H3 标题段(含 (SKU:)
 锚点)不误标为知识类型 / 多值 sku 与混合块近似注记的渲染行为。
 """
-from app.tools.doc_block_renderer import render_doc_blocks
+from app.tools.doc_block_renderer import render_doc_blocks, render_dynamic_rows
 
 
 def _doc(**kw) -> dict:
@@ -45,3 +45,26 @@ def test_h3_title_segment_sku_suffix_not_type():
 
 def test_empty_docs_returns_empty():
     assert render_doc_blocks([]) == ""
+
+
+# ==================== 动态区渲染(方案 A) ====================
+
+
+def _row(sku="JD-DRY-003", name="米家智能晾衣机2", price=783.33, stock=50):
+    return {"sku": sku, "product_name": name, "category": "智能晾衣架",
+            "current_price": price, "stock_quantity": stock, "updated_at": "2026-09-06T10:00:00"}
+
+
+def test_dynamic_rows_rendered():
+    out = render_dynamic_rows({"JD-DRY-003": _row()})
+    assert "【商品动态信息区】" in out
+    assert "【动态|商品编码:JD-DRY-003｜商品名:米家智能晾衣机2】¥783.33｜库存50｜更新:2026-09-06T10:00:00" in out
+
+
+def test_dynamic_rows_zero_stock_wording():
+    out = render_dynamic_rows({"JD-LCK-001": _row(sku="JD-LCK-001", stock=0)})
+    assert "无货" in out
+
+
+def test_dynamic_rows_empty_dict():
+    assert render_dynamic_rows({}) == ""

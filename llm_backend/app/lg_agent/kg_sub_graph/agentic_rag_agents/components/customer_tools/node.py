@@ -3,8 +3,9 @@ from typing import Any, Callable, Coroutine, Dict, List
 from pydantic import BaseModel, Field
 
 from app.core.logger import get_logger
+from app.services.product_dynamic_service import fetch_by_skus
 from app.services.rag_retriever_service import get_rag_retriever_service
-from app.tools.doc_block_renderer import render_doc_blocks
+from app.tools.doc_block_renderer import render_doc_blocks, render_dynamic_rows
 
 logger = get_logger(service="customer_tools")
 
@@ -51,6 +52,7 @@ def create_vector_search_query_node() -> Callable[
         """
         errors = list()
         docs = []
+        dynamic_rows: dict = {}
 
         query = state.get("task", "")
         if not query:
@@ -60,9 +62,25 @@ def create_vector_search_query_node() -> Callable[
             docs = await retriever.search(query)
             logger.info("检索节点返回 {} 条文档", len(docs))
 
+            # RAG 门控动态补全(方案 A,2026-09-06):检索准确性由 RAG 负责——
+            # 仅对命中块的 sku 候选集取动态行;零命中/无 sku 块不查动态库
+            skus: list[str] = []
+            for d in docs:
+                for s in d.get("sku_codes") or []:
+                    if s and s not in skus:
+                        skus.append(s)
+            if skus:
+                dynamic_rows = await fetch_by_skus(skus)
+                logger.info("动态补全: 候选 {} 个 sku,命中 {} 行", len(skus), len(dynamic_rows))
+
         # 构建 LLM 可用的文本上下文——公共渲染与 rag_retrieval @tool 输出同格式
         # (SPEC_RAG_SKU_METADATA D5:双通道共用 render_doc_blocks,防格式漂移)
-        response_text = render_doc_blocks(docs)
+        # 方案 A:动态区(按 sku 与静态块前缀同键配对)置于静态块之前,LLM 免 join 原子消费
+        static_text = render_doc_blocks(docs)
+        dynamic_text = render_dynamic_rows(dynamic_rows)
+        response_text = (
+            f"{dynamic_text}\n\n{static_text}" if dynamic_text else static_text
+        )
 
         return {
             "searches": [
@@ -74,6 +92,7 @@ def create_vector_search_query_node() -> Callable[
                         "records": {
                             "result": response_text,
                             "hybrid_docs": docs,
+                            "dynamic_rows": dynamic_rows,  # {sku: 动态行}(程序化消费,非 LLM 通道)
                         },
                         "steps": ["execute_vector_search"],
                     }
