@@ -15,6 +15,7 @@
 """
 import asyncio
 import json
+from typing import List, Optional
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -68,13 +69,24 @@ def _ok(records: list[dict]) -> str:
     return json.dumps({"status": "ok", "count": len(records), "data": records}, ensure_ascii=False)
 
 
-def _empty(sku: str) -> str:
-    msg = (
-        f"商品编码 {sku} 未找到：该商品不在在售商品库中（编码不存在或已下线）。建议："
-        "1) 核对编码是否与 rag_retrieval 返回的【商品编码:】前缀一致（含大小写）；"
-        "2) 若用户询问的是参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；"
-        "3) 若确实无此商品动态数据，如实告知用户『该商品动态信息暂未收录』，不要编造价格。"
-    )
+def _empty(codes: list[str]) -> str:
+    """全缺失 empty：单码文案与方案 A 原文一致(回归锚点)；批量文案列全部入参码。"""
+    if len(codes) == 1:
+        sku = codes[0]
+        msg = (
+            f"商品编码 {sku} 未找到：该商品不在在售商品库中（编码不存在或已下线）。建议："
+            "1) 核对编码是否与 rag_retrieval 返回的【商品编码:】前缀一致（含大小写）；"
+            "2) 若用户询问的是参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；"
+            "3) 若确实无此商品动态数据，如实告知用户『该商品动态信息暂未收录』，不要编造价格。"
+        )
+    else:
+        codes_txt = "、".join(codes)
+        msg = (
+            f"商品编码 {codes_txt} 均未找到：均不在在售商品库中（编码不存在或已下线）。建议："
+            "1) 核对编码是否与 rag_retrieval 返回的【商品编码:】前缀一致（含大小写）；"
+            "2) 若用户询问的是参数/规格/售后政策等静态信息，请改用 rag_retrieval 工具；"
+            "3) 若确实无这些商品动态数据，如实告知用户『该商品动态信息暂未收录』，不要编造价格。"
+        )
     return json.dumps({"status": "empty", "count": 0, "data": [], "message": msg}, ensure_ascii=False)
 
 
@@ -94,27 +106,39 @@ def _error(error_type: str, retryable: bool, message: str) -> str:
 class ProductStockLookupInput(BaseModel):
     """商品动态数据补全参数（Pydantic args_schema——描述进 JSON schema）。
 
-    sku 为唯一入参（必填）：精确等值查询，一次一个商品；编码一律大写归一。
+    sku 与 skus 至少提供一个：单码（sku）/ 批量（skus）一次精确取齐；
+    编码一律大写归一去重。SPEC_PRODUCT_TOOL_SKU_BATCH D1~D7。
     """
 
-    sku: str = Field(
-        description="商品编码（必填，来自 rag_retrieval 返回段的【商品编码:】前缀，"
-        "如 JD-LCK-001）。为 RAG 已命中商品补全价格/库存动态信息，不用于按名称猜测检索；"
-        "rag 未命中商品时不要调用本工具，如实说明动态信息暂未收录。"
+    sku: Optional[str] = Field(
+        default=None,
+        description="商品编码（单码，来自 rag_retrieval 返回段的【商品编码:】前缀，"
+        "如 JD-LCK-001）。已定位单一目标商品时使用；sku 与 skus 至少提供一个。"
+        "不用于按名称猜测检索；rag 未命中商品时不要调用本工具",
+    )
+    skus: Optional[List[str]] = Field(
+        default=None,
+        description="商品编码列表（批量，一次检索全部候选的动态信息，单条查询同一时刻快照）。"
+        "rag 返回段含多个编码且需一次全查（清单/对比/混合块候选）时使用；"
+        "最多 20 个；与 sku 同时提供则合并去重；返回 data 顺序与入参一致",
     )
 
 
 @tool(args_schema=ProductStockLookupInput)
-async def product_stock_lookup(sku: str) -> str:
-    """为商品补全实时价格与库存（sku 精确，一次一个商品）。
+async def product_stock_lookup(
+    sku: Optional[str] = None,
+    skus: Optional[List[str]] = None,
+) -> str:
+    """为商品补全实时价格与库存（sku 精确，单码或批量一次取齐）。
 
     本工具是 rag_retrieval 的辅助工具：商品检索准确性由 rag_retrieval 负责，
     本工具仅为 RAG 已命中（返回段含【商品编码:】前缀）的商品补全动态数据。
 
     何时使用本工具：
-    - rag_retrieval 返回段含商品编码前缀，且用户询问该商品价格/是否有货/库存时，
-      以对应编码调用（rag 前缀含多个编码的混合块：先按块正文/用户问题定位目标商品
-      再传对应编码，勿取首码）
+    - 已定位单一目标商品（rag 前缀为单码，或混合块中已按正文/用户问题定位）→ 传 sku=
+    - rag 返回多个候选编码且需一次全查（清单/对比/混合块多码候选）→ 传 skus=[...]，
+      单条查询同一时刻快照，返回按入参顺序；缺失编码不报错（部分命中 ok，
+      全部缺失 empty），勿据缺失码推断除"未收录"外的结论
 
     何时不要使用本工具：
     - rag_retrieval 未检索到用户所指商品 → 不调用，如实告知"该商品动态信息暂未收录"
@@ -124,20 +148,34 @@ async def product_stock_lookup(sku: str) -> str:
 
     Returns:
         结构化 JSON 字符串（status=ok/empty/error）：
-        - ok: {"status":"ok","count":N,"data":[{sku,product_name,category,current_price,stock_quantity,updated_at}]}
-        - empty: 编码不存在/已下线，message 含建议与不编造指引
+        - ok: {"status":"ok","count":N,"data":[{sku,product_name,category,current_price,stock_quantity,updated_at}]}（入参序）
+        - empty: 全部编码不存在/已下线（单码文案与批量文案均含不编造指引）
         - error: 入参/数据库异常，error_type + message 供 LLM 判断
     """
-    # 入参校验：sku 为空 → 明确错误，引导先 rag 检索拿编码（retryable=true）
-    sku = (sku or "").strip().upper()  # 大写归一，防大小写差异稳定 empty
-    if not sku:
+    # 入参归一：合并(sku+skus) → strip+upper → 去重保序（D2/D4/D7）
+    raw: list[str] = []
+    if sku:
+        raw.append(sku)
+    if skus:
+        raw.extend(skus)
+    codes = list(dict.fromkeys(c.strip().upper() for c in raw if c and c.strip()))
+
+    # 入参校验：至少一个有效编码 → 明确错误，引导先 rag 检索拿编码（retryable=true）
+    if not codes:
         return _error(
             "invalid_argument", True,
-            "参数错误：sku 不能为空。请先调用 rag_retrieval 检索商品，从返回段的"
-            "【商品编码:】前缀取得编码后，再以 sku= 调用本工具补全动态信息。",
+            "参数错误：sku 与 skus 至少提供一个有效商品编码。请先调用 rag_retrieval 检索商品，"
+            "从返回段的【商品编码:】前缀取得编码后，再以 sku=（单码）或 skus=[...]（批量）"
+            "调用本工具补全动态信息。",
+        )
+    if len(codes) > 20:  # D6：防全库扫描式滥用
+        return _error(
+            "invalid_argument", True,
+            f"参数错误：商品编码数量 {len(codes)} 超过上限 20。"
+            "请按 rag 返回的候选范围收窄后重试（单商品用 sku=）。",
         )
 
-    stmt = select(ProductPriceStock).where(ProductPriceStock.sku == sku)
+    stmt = select(ProductPriceStock).where(ProductPriceStock.sku.in_(codes))
 
     try:
         # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
@@ -151,8 +189,10 @@ async def product_stock_lookup(sku: str) -> str:
         )
 
     if not rows:
-        return _empty(sku)
+        return _empty(codes)
 
+    # 部分命中：按入参序重排，缺失码静默（D5）
+    by_sku = {r.sku: r for r in rows}
     records = [
         {
             "sku": r.sku,
@@ -162,6 +202,7 @@ async def product_stock_lookup(sku: str) -> str:
             "stock_quantity": r.stock_quantity,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
-        for r in rows
+        for c in codes
+        if (r := by_sku.get(c)) is not None
     ]
     return _ok(records)

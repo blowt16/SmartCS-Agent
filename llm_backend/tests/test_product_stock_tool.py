@@ -60,10 +60,11 @@ def _sql_of(state) -> str:
 
 
 async def test_sku_exact_match_sql(db_mock):
+    """单码路径:归一后为单元素 IN(与 `=` 语义等价,批量实现统一走 IN)。"""
     db_mock["set_rows"]([_row()])
     out = json.loads(await product_stock_lookup.ainvoke({"sku": "JD-LCK-001"}))
     sql = _sql_of(db_mock)
-    assert "product_price_stock.sku = 'JD-LCK-001'" in sql
+    assert "product_price_stock.sku IN ('JD-LCK-001')" in sql
     assert out["status"] == "ok" and out["count"] == 1
 
 
@@ -71,7 +72,7 @@ async def test_sku_uppercase_normalized(db_mock):
     """大小写归一：jd-lck-001 → JD-LCK-001（防大小写差异稳定 empty）。"""
     db_mock["set_rows"]([_row()])
     out = json.loads(await product_stock_lookup.ainvoke({"sku": "  jd-lck-001  "}))
-    assert "product_price_stock.sku = 'JD-LCK-001'" in _sql_of(db_mock)
+    assert "product_price_stock.sku IN ('JD-LCK-001')" in _sql_of(db_mock)
     assert out["status"] == "ok"
 
 
@@ -133,21 +134,93 @@ async def test_error_permanent_no_retry(db_mock):
     assert out["error_type"] == "db_config"
 
 
+# ---------- 批量检索（SPEC_PRODUCT_TOOL_SKU_BATCH A1~A5） ----------
+
+
+async def test_batch_skus_in_sql_and_order(db_mock):
+    """批量 → 单条 WHERE IN；mock 乱序返回仍按入参序重排（保序依赖代码层映射）。"""
+    # mock 乱序返回两行
+    row_b = _row(sku="JD-LCK-001", name="锁B")
+    row_a = _row(sku="JD-DRY-003", name="晾衣机A")
+    db_mock["set_rows"]([row_b, row_a])
+    out = json.loads(await product_stock_lookup.ainvoke({"skus": ["JD-DRY-003", "JD-LCK-001"]}))
+    sql = _sql_of(db_mock)
+    assert "product_price_stock.sku IN ('JD-DRY-003', 'JD-LCK-001')" in sql
+    assert out["status"] == "ok" and out["count"] == 2
+    assert [r["sku"] for r in out["data"]] == ["JD-DRY-003", "JD-LCK-001"]  # 入参序
+
+
+async def test_batch_skus_normalize_dedup(db_mock):
+    """归一(strip+upper)+去重保序:小写/重复/空格码并入 2 码 IN。"""
+    db_mock["set_rows"]([_row(), _row(sku="JD-DRY-003", name="晾衣机A")])
+    out = json.loads(await product_stock_lookup.ainvoke({
+        "skus": ["jd-dry-003", " JD-DRY-003 ", "JD-LCK-001"]
+    }))
+    sql = _sql_of(db_mock)
+    assert "IN ('JD-DRY-003', 'JD-LCK-001')" in sql and sql.count("JD-DRY-003") == 1
+    assert out["count"] == 2
+
+
+async def test_batch_partial_hit_ok(db_mock):
+    """部分命中:仅 1/2 行 → ok count=1,data 仅命中行(缺失静默)。"""
+    db_mock["set_rows"]([_row()])  # 只返回 JD-LCK-001
+    out = json.loads(await product_stock_lookup.ainvoke({"skus": ["JD-DRY-003", "JD-LCK-001"]}))
+    assert out["status"] == "ok" and out["count"] == 1
+    assert out["data"][0]["sku"] == "JD-LCK-001"
+
+
+async def test_batch_all_miss_empty_lists_codes(db_mock):
+    db_mock["set_rows"]([])
+    out = json.loads(await product_stock_lookup.ainvoke({"skus": ["JD-DRY-003", "JD-LCK-001"]}))
+    assert out["status"] == "empty" and out["count"] == 0
+    assert "JD-DRY-003" in out["message"] and "JD-LCK-001" in out["message"]  # 列出全部入参码
+    assert "编造" in out["message"]
+
+
+async def test_batch_over_20_invalid_argument(db_mock):
+    db_mock["set_rows"]([])
+    out = json.loads(await product_stock_lookup.ainvoke({"skus": [f"JD-LCK-{i:03d}" for i in range(21)]}))
+    assert out["status"] == "error"
+    assert out["error_type"] == "invalid_argument"
+    assert out["retryable"] is True
+    assert db_mock["session"].execute.call_count == 0  # SQL 未执行
+
+
+async def test_sku_and_skus_merged(db_mock):
+    """双参同时提供 → 合并去重一次 IN(D2)。"""
+    db_mock["set_rows"]([_row(), _row(sku="JD-DRY-003", name="晾衣机A")])
+    out = json.loads(await product_stock_lookup.ainvoke({"sku": "JD-LCK-001", "skus": ["JD-LCK-001", "JD-DRY-003"]}))
+    assert "IN ('JD-LCK-001', 'JD-DRY-003')" in _sql_of(db_mock)
+    assert out["count"] == 2
+
+
+async def test_single_code_empty_message_unchanged(db_mock):
+    """回归锚点:单码 empty 文案与方案 A 完全一致。"""
+    db_mock["set_rows"]([])
+    out = json.loads(await product_stock_lookup.ainvoke({"sku": "JD-LCK-999"}))
+    assert out["message"].startswith("商品编码 JD-LCK-999 未找到：")
+    assert "已下线" in out["message"] and "编造" in out["message"]
+
+
 # ---------- 参数 schema 完整性 ----------
 
 
-def test_args_schema_sku_only_required():
+def test_args_schema_dual_params():
     schema = product_stock_lookup.args_schema.model_json_schema()
     props = schema["properties"]
-    assert schema["required"] == ["sku"]                      # sku 必填唯一参数
-    assert set(props.keys()) == {"sku"}                        # 无 product_name/category/limit
+    assert schema.get("required") in (None, [])               # 双参可选(sku/skus 至少其一由代码校验)
+    assert {"sku", "skus"} <= set(props.keys())
+    assert "product_name" not in props and "category" not in props  # 名称/品类通道未复活
     assert "rag_retrieval" in props["sku"]["description"]      # 来源引导（【商品编码:】前缀）
     assert "猜测检索" in props["sku"]["description"]            # 禁止按名称猜测检索语义
+    assert "批量" in props["skus"]["description"] and "快照" in props["skus"]["description"]
+    assert "20" in props["skus"]["description"]
 
 
 def test_tool_description_complete():
     desc = product_stock_lookup.description
     assert "辅助" in desc  # 职责定位：rag 的辅助补全工具
     assert "何时不要使用本工具" in desc
+    assert "skus" in desc  # 批量指引
     assert "未检索到" in desc  # rag 未命中不调用的负向指引
     assert "不得" not in desc or "猜" in desc  # 禁止按名称猜测语义在 docstring 或 schema 描述
