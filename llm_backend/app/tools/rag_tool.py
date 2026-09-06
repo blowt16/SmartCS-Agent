@@ -12,7 +12,6 @@ RAG 检索工具（langchain @tool 薄封装）
 
 import asyncio
 import json
-from pathlib import Path
 
 import aiohttp
 from langchain_core.tools import tool
@@ -22,6 +21,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.services.rag_retriever_service import get_rag_retriever_service
+from app.tools.doc_block_renderer import render_doc_blocks
 
 logger = get_logger(service="rag_tool")
 
@@ -89,11 +89,18 @@ async def rag_retrieval(query: str) -> str:
     - 与业务无关的闲聊 → 直接回答，无需检索
     - 违规/高风险内容 → 按风险规则处理，不检索
 
+    【元数据说明】每段前缀含"商品编码:S1|S2":1) 用户问该商品价格/库存时,以
+    product_stock_lookup 查询并优先传 sku=精确匹配(回退传正文商品名关键词);
+    2) 前缀为"—（无商品归属）"的段(政策/通用)只能佐证政策与通用条款,不得据此
+    查询或断言任何单一商品动态数据;3) 引用商品名时省略标题中括号编码;
+    4) 前缀含多个编码的混合块:先按块正文/用户问题定位目标商品,再传**对应**编码,
+    勿顺手取第一个;5) 前缀编码在动态库查不到(empty)时,回退用正文商品名关键词走模糊通道。
+
     Args:
         query: 用户的问题（建议为补全指代后的完整问题）
 
     Returns:
-        成功：相关文档片段列表（每段以换行分隔，含【来源:文件名】前缀）；
+        成功：相关文档片段列表（每段以换行分隔，含【商品编码/知识类型/来源】元数据前缀）；
         空结果：提示未检索到 + 可执行建议；
         失败：统一错误 JSON（status=error，含 error_type/retryable/message）。
     """
@@ -125,7 +132,5 @@ async def rag_retrieval(query: str) -> str:
             "3) 可向用户说明该信息暂未收录。"
         )
 
-    return "\n\n".join(
-        f"【来源:{Path(doc.get('file_path') or '未知').name}】\n{doc.get('text', '')}"
-        for doc in docs
-    )
+    # 公共渲染(与 customer_tools 节点通道共用,见 doc_block_renderer)——格式零漂移约束
+    return render_doc_blocks(docs)

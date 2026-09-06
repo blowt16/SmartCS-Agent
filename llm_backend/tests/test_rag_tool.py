@@ -18,8 +18,9 @@ from app.tools.rag_tool import _classify_error, rag_retrieval
 DOC_PATH = "D:/knowledge/product_knowledge_docx/京东智能家具产品知识文档.docx"
 
 
-def _doc(text: str = "测试片段", file_path: str = DOC_PATH) -> dict:
-    return {"text": text, "file_path": file_path}
+def _doc(text: str = "测试片段", file_path: str = DOC_PATH,
+         sku_codes: list | None = None, chapter: str = "") -> dict:
+    return {"text": text, "file_path": file_path, "sku_codes": sku_codes or [], "chapter": chapter}
 
 
 async def _invoke(query: str, mock_search) -> str:
@@ -37,16 +38,16 @@ async def test_success_with_source_prefix():
         "沙发参数",
         AsyncMock(return_value=[_doc("参数A"), _doc("参数B", file_path="")]),
     )
-    assert "【来源:京东智能家具产品知识文档.docx】" in result
+    assert "来源:京东智能家具产品知识文档.docx】" in result
     assert "参数A" in result and "参数B" in result
 
 
 async def test_source_prefix_empty_path_falls_back_unknown():
     """边界 #4：file_path 空串/缺失 → 来源回退「未知」"""
     result = await _invoke("灯", AsyncMock(return_value=[_doc("无路径", file_path="")]))
-    assert "【来源:未知】" in result
+    assert "来源:未知】" in result
     result = await _invoke("灯", AsyncMock(return_value=[_doc("无路径", file_path=None)]))
-    assert "【来源:未知】" in result
+    assert "来源:未知】" in result
 
 
 async def test_success_multiple_docs_separate_source():
@@ -55,7 +56,22 @@ async def test_success_multiple_docs_separate_source():
         "门锁",
         AsyncMock(return_value=[_doc("A", "a.docx"), _doc("B", "b.docx")]),
     )
-    assert result.count("【来源:") == 2
+    assert result.count("｜来源:") == 2
+
+
+async def test_success_prefix_metadata():
+    """前缀行带商品编码/知识类型(sku 多值);无 sku 块显式"无商品归属"——@tool 通道与
+    render_doc_blocks 输出一致(公共渲染约束)。"""
+    result = await _invoke(
+        "沙发参数",
+        AsyncMock(return_value=[
+            _doc("参数A", sku_codes=["JD-SOF-001", "JD-SOF-002"],
+                 chapter="京东智能家具产品知识文档 > 一、电动智能沙发 > 芝华仕 XX (SKU:JD-SOF-001) > 规格参数"),
+            _doc("政策B", file_path="京东自营售后政策.docx"),
+        ]),
+    )
+    assert "【商品编码:JD-SOF-001|JD-SOF-002｜知识类型:规格参数｜来源:京东智能家具产品知识文档.docx】" in result
+    assert "商品编码:—（无商品归属" in result  # 政策块空语义
 
 
 # ---------- 三态：空结果 ----------

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.core.logger import get_logger
 from app.services.rag_retriever_service import get_rag_retriever_service
+from app.tools.doc_block_renderer import render_doc_blocks
 
 logger = get_logger(service="customer_tools")
 
@@ -59,8 +60,9 @@ def create_vector_search_query_node() -> Callable[
             docs = await retriever.search(query)
             logger.info("检索节点返回 {} 条文档", len(docs))
 
-        # 构建 LLM 可用的文本上下文
-        response_text = "\n\n".join(d.get("text", "") for d in docs)
+        # 构建 LLM 可用的文本上下文——公共渲染与 rag_retrieval @tool 输出同格式
+        # (SPEC_RAG_SKU_METADATA D5:双通道共用 render_doc_blocks,防格式漂移)
+        response_text = render_doc_blocks(docs)
 
         return {
             "searches": [

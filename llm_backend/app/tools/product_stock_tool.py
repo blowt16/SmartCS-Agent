@@ -104,14 +104,22 @@ class ProductStockLookupInput(BaseModel):
     模型只能看到参数类型看不到说明。args_schema 将参数描述/示例/范围显式暴露给模型。
     """
 
-    product_name: str = Field(
+    sku: Optional[str] = Field(
+        default=None,
+        description="商品编码（来自 rag_retrieval 返回段的【商品编码:】前缀，精确匹配，"
+        "如 JD-LCK-001）。传了 sku 时精确命中该商品，跳过名称模糊；"
+        "多个编码时先按正文/用户问题定位目标商品再传对应编码；"
+        "无编码（用户口语/条件型询问）则留空走 product_name 名称模糊通道",
+    )
+    product_name: Optional[str] = Field(
+        default=None,
         description='商品名称关键词（模糊匹配，传简称即可，如"门锁"可命中'
-        '"京东京造 智能门锁 全自动3D人脸识别"）'
+        '"京东京造 智能门锁 全自动3D人脸识别"；sku 精确命中时无需传）',
     )
     category: Optional[str] = Field(
         default=None,
-        description='品类过滤（可选），品类为固定集合（如"智能门锁""智能晾衣机"）；'
-        "不传则按名称模糊全表匹配",
+        description='品类过滤（可选，仅名称模糊通道生效），品类为固定集合（如"智能门锁"'
+        '"智能晾衣机"）；不传则按名称模糊全表匹配',
     )
     limit: int = Field(
         default=5, ge=1, le=20,
@@ -122,7 +130,8 @@ class ProductStockLookupInput(BaseModel):
 
 @tool(args_schema=ProductStockLookupInput)
 async def product_stock_lookup(
-    product_name: str,
+    sku: Optional[str] = None,
+    product_name: Optional[str] = None,
     category: Optional[str] = None,
     limit: int = 5,
 ) -> str:
@@ -130,6 +139,12 @@ async def product_stock_lookup(
 
     当用户询问商品价格、是否有货、库存情况时使用。动态数据（价格/库存）存储在
     数据库中，商品参数/规格/售后政策等静态信息请使用 rag_retrieval。
+
+    检索通道(SPEC_SKU_ALIGNMENT D-2):
+    - sku 精确通道: 传 rag_retrieval 返回的【商品编码:】编码即精确命中该商品
+      (确定性对齐,消除同前缀名称模糊歧义);编码在库查不到 → empty
+    - 名称模糊通道: 无编码场景(用户口语/条件型选购/零命中)走 product_name 简称
+      + category 过滤,与改造前行为一致
 
     泛查询（用户问"有哪些沙发/卖什么"，未指定具体商品）：
     - 以品类词作为 product_name 传入（如"沙发"），并传 limit=20 获取全量清单；
@@ -141,35 +156,38 @@ async def product_stock_lookup(
 
     Returns:
         结构化 JSON 字符串（status=ok/empty/error）：
-        - ok: {"status":"ok","count":N,"data":[{product_name,category,current_price,stock_quantity,updated_at}]}
+        - ok: {"status":"ok","count":N,"data":[{sku,product_name,category,current_price,stock_quantity,updated_at}]}
         - empty: 无匹配，message 含建议
         - error: 入参/数据库异常，error_type + message 供 LLM 判断
     """
-    # 入参校验：product_name 为空 → 明确错误，引导 LLM 提取商品名重试（retryable=true）
-    if not product_name or not product_name.strip():
+    # 入参校验：sku 与 product_name 至少提供其一（retryable=true）
+    sku = (sku or "").strip()
+    product_name = (product_name or "").strip()
+    if not sku and not product_name:
         return _error(
             "invalid_argument", True,
-            "参数错误：product_name 不能为空。请从用户消息中提取商品名称关键词（可传简称）后重试，"
-            "若确实无法提取，请向用户询问具体想查询哪款商品。",
+            "参数错误：sku 与 product_name 至少提供一个。有 rag_retrieval 返回的商品编码时传 sku=精确查询；"
+            "否则从用户消息提取商品名称关键词（可传简称）后重试；确实无法提取请向用户澄清。",
         )
     try:
         limit = max(1, min(int(limit), 20))  # 钳制 1~20，防超量
     except (TypeError, ValueError):
         limit = 5  # 非数字按默认值（边界 #6）
-    kw = _normalize_keyword(product_name)  # 去空格 + 通配符转义
 
-    stmt = (
-        select(ProductPriceStock)
-        .where(
+    stmt = select(ProductPriceStock)
+    if sku:
+        # 精确通道:sku 唯一命中,跳过名称模糊(即使 product_name 同时传入也以 sku 为准)
+        stmt = stmt.where(ProductPriceStock.sku == sku)
+    else:
+        kw = _normalize_keyword(product_name)  # 去空格 + 通配符转义
+        stmt = stmt.where(
             func.replace(ProductPriceStock.product_name, " ", "").ilike(
                 f"%{kw}%", escape="\\"
             )
         )
-        .order_by(ProductPriceStock.updated_at.desc())  # 同名前多商品：最新更新时间在前（结果序确定）
-        .limit(limit)
-    )
-    if category:
-        stmt = stmt.where(ProductPriceStock.category == category)
+        if category:
+            stmt = stmt.where(ProductPriceStock.category == category)
+    stmt = stmt.order_by(ProductPriceStock.updated_at.desc()).limit(limit)
 
     try:
         # 超时保护（10s）+ 瞬时错误自动重试 1 次；重试后仍失败 → 返回 error
@@ -187,6 +205,7 @@ async def product_stock_lookup(
 
     records = [
         {
+            "sku": r.sku,
             "product_name": r.product_name,
             "category": r.category,
             "current_price": float(r.current_price),

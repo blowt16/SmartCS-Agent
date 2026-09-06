@@ -83,6 +83,9 @@ class BM25SQLRetriever:
                     "file_path": r["file_path"],
                     "user_id": r["user_id"],
                     "chunk_index": r["chunk_index"],
+                    # metadata 透出,与向量路 _to_doc 同构(SELECT * 已含新列,仅需取值)
+                    "sku_codes": r["sku_codes"] or [],
+                    "chapter": r["chapter"],
                     "text": r["content"],
                     "bm25_score": float(r["bm25_score"]),
                 }

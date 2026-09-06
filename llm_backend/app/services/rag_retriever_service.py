@@ -62,6 +62,10 @@ class RAGRetrieverService:
             "file_path": chunk.file_path,
             "user_id": chunk.user_id,
             "chunk_index": chunk.chunk_index,
+            # metadata 透出(SPEC_RAG_SKU_METADATA D 阶段):sku_codes=块覆盖商品编码多值
+            # ([]=政策/通用块),chapter=块首章节路径(消费侧渲染知识类型/来源)
+            "sku_codes": chunk.sku_codes or [],
+            "chapter": chunk.chapter,
         }
         if score is not None:
             # 归一化向量下 cosine_distance = 1 - 余弦相似度，score 取相似度（越大越相关）

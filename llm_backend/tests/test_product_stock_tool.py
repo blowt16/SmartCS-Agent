@@ -20,8 +20,9 @@ from app.tools.product_stock_tool import product_stock_lookup
 DOC_NAME = "京东京造 智能门锁 全自动3D人脸识别"
 
 
-def _row(name=DOC_NAME, category="智能门锁", price="899.00", stock=156, updated=None):
+def _row(name=DOC_NAME, category="智能门锁", price="899.00", stock=156, updated=None, sku="JD-LCK-001"):
     return ProductPriceStock(
+        sku=sku,
         product_name=name,
         category=category,
         current_price=Decimal(price),
@@ -120,6 +121,7 @@ async def test_ok_records_fields(db_mock):
     out = json.loads(await product_stock_lookup.ainvoke({"product_name": "门锁"}))
     assert out["status"] == "ok"
     rec = out["data"][0]
+    assert rec["sku"] == "JD-LCK-001"
     assert rec["product_name"] == DOC_NAME
     assert rec["category"] == "智能门锁"
     assert rec["current_price"] == 899.0  # Decimal → float
@@ -141,11 +143,42 @@ async def test_empty_result_with_advice(db_mock):
 
 
 async def test_invalid_argument(db_mock):
+    # sku 与 product_name 均空(或空白)才判非法;单个空 + 另一个合法不触发
     for bad in ("", "   "):
         out = json.loads(await product_stock_lookup.ainvoke({"product_name": bad}))
         assert out["status"] == "error"
         assert out["error_type"] == "invalid_argument"
         assert out["retryable"] is True
+    out = json.loads(await product_stock_lookup.ainvoke({"sku": ""}))
+    assert out["status"] == "error" and out["error_type"] == "invalid_argument"
+
+
+# ---------- sku 精确通道(D-2) ----------
+
+
+async def test_sku_exact_match_sql(db_mock):
+    """传 sku → 等值 WHERE,不再出现名称 ILIKE。"""
+    db_mock["set_rows"]([_row()])
+    out = json.loads(await product_stock_lookup.ainvoke({"sku": "JD-LCK-001"}))
+    sql = _sql_of(db_mock)
+    assert "product_price_stock.sku = 'JD-LCK-001'" in sql
+    assert "ilike" not in sql.lower()
+    assert out["status"] == "ok" and out["count"] == 1
+
+
+async def test_sku_wins_over_product_name(db_mock):
+    """sku 与 product_name 同时传入 → 以 sku 精确为准(名称即使含糊也不影响)。"""
+    db_mock["set_rows"]([_row()])
+    await product_stock_lookup.ainvoke({"sku": "JD-LCK-001", "product_name": "冰箱"})
+    sql = _sql_of(db_mock)
+    assert "product_price_stock.sku = 'JD-LCK-001'" in sql
+    assert "ilike" not in sql.lower()
+
+
+async def test_sku_miss_returns_empty(db_mock):
+    db_mock["set_rows"]([])
+    out = json.loads(await product_stock_lookup.ainvoke({"sku": "JD-LCK-999"}))
+    assert out["status"] == "empty" and out["count"] == 0
 
 
 # ---------- 错误分类与重试 ----------
@@ -173,12 +206,14 @@ async def test_error_permanent_no_retry(db_mock):
 def test_args_schema_complete():
     schema = product_stock_lookup.args_schema.model_json_schema()
     props = schema["properties"]
-    assert schema["required"] == ["product_name"]
+    assert "required" not in schema or schema["required"] == []  # sku/名称至少其一,双双可选
     assert props["limit"]["minimum"] == 1 and props["limit"]["maximum"] == 20
     assert props["limit"]["default"] == 5
     assert "泛查询" in props["limit"]["description"]  # limit 意图语义指引
     assert "智能门锁" in props["category"]["description"]  # 品类示例
     assert "门锁" in props["product_name"]["description"]  # 命中示例
+    assert "rag_retrieval" in props["sku"]["description"]  # sku 来源引导(【商品编码:】前缀)
+    assert "精确" in props["sku"]["description"]
 
 
 def test_tool_description_complete():
