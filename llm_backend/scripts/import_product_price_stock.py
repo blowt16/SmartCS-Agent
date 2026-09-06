@@ -1,4 +1,4 @@
-"""将 TSV 商品价格/库存导入 product_price_stock 表(按 product_name 幂等 upsert,可重复执行)。
+"""将 TSV 商品价格/库存导入 product_price_stock 表(按 sku 幂等 upsert,可重复执行)。
 
 用法:
   python -m scripts.import_product_price_stock
@@ -25,6 +25,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 logger = get_logger(service="import_price_stock")
 
 COL_NAME, COL_CATEGORY, COL_PRICE, COL_AFTERSALES = "商品名称", "品类", "参考价格(元)", "售后服务"
+COL_SKU = "sku"
+
+# 商品编码格式(TSV 由 scripts/add_sku_column.py 固化;与 SPEC_SKU_ALIGNMENT §4.1.1 一致)
+SKU_RE = re.compile(r"^JD-[A-Z]{3}-\d{3}$")
 
 # 测试库存填充规则(固定选取保证可复现):
 # 品类行序第一款商品填 0 库存/少量,其余 50
@@ -49,6 +53,30 @@ def assign_stock(category: str, is_first_in_category: bool) -> int:
     return 50
 
 
+def validate_sku(rows: list[dict]) -> None:
+    """结构性校验:任一违规抛 ValueError(整体终止,不写任何行)。
+
+    校验对象是"价格解析通过"的行(价格解析失败跳行为内容性问题,现状保留)。
+    sku 维度 + 商品名维度双查——同名双 sku 违规在 TSV 层提前拦截,
+    避免一路撞到 DB product_name unique 才整体回滚(报错信息差,见 SPEC_SKU_ALIGNMENT A-3 审查修订)。
+    """
+    seen_sku: dict[str, str] = {}   # sku -> product_name
+    seen_name: dict[str, str] = {}  # product_name -> sku
+    for row in rows:
+        sku = (row.get(COL_SKU) or "").strip()
+        name = (row.get(COL_NAME) or "").strip()
+        if not sku:
+            raise ValueError(f"存在空 sku 行: {name}(TSV 是否已跑 add_sku_column 固化?)")
+        if not SKU_RE.match(sku):
+            raise ValueError(f"sku 格式非法(期望 JD-XXX-000): {name} = {sku}")
+        if sku in seen_sku:
+            raise ValueError(f"sku 重复: {seen_sku[sku]} 与 {name} 同为 {sku}")
+        if name in seen_name:
+            raise ValueError(f"商品名重复(同名双 sku 违规): {name} 同时为 {seen_name[name]} 与 {sku}")
+        seen_sku[sku] = name
+        seen_name[name] = sku
+
+
 def read_tsv_rows(path: Path) -> list[dict]:
     """读 TSV 并补充库存/价格字段;价格解析失败的行整行跳过(记警告)。"""
     with open(path, encoding="utf-8") as f:
@@ -66,6 +94,7 @@ def read_tsv_rows(path: Path) -> list[dict]:
             logger.warning("第 {} 行价格解析失败,整行跳过: {} ({})", idx, row[COL_NAME], row[COL_PRICE])
             continue
         result.append({
+            "sku": (row.get(COL_SKU) or "").strip(),
             "product_name": row[COL_NAME].strip(),
             "category": category,
             "current_price": price,
@@ -75,13 +104,18 @@ def read_tsv_rows(path: Path) -> list[dict]:
 
 
 async def upsert_rows(rows: list[dict]) -> int:
-    """按 product_name 幂等 upsert(存在则更新价格/库存,不存在则插入)。"""
+    """按 sku 幂等 upsert(存在则更新展示名/价格/库存,不存在则插入)。
+
+    冲突键从 product_name 切换为 sku:sku 为不可变身份,product_name 为可变展示名
+    (运营改名后价格/库存沿 sku 延续,不产生新行,见 SPEC_SKU_ALIGNMENT D7/A5)。
+    """
     async with AsyncSessionLocal() as s:
         for r in rows:
             stmt = pg_insert(ProductPriceStock).values(**r)
             stmt = stmt.on_conflict_do_update(
-                index_elements=[ProductPriceStock.product_name],
+                index_elements=[ProductPriceStock.sku],
                 set_={
+                    "product_name": stmt.excluded.product_name,
                     "category": stmt.excluded.category,
                     "current_price": stmt.excluded.current_price,
                     "stock_quantity": stmt.excluded.stock_quantity,
@@ -96,6 +130,11 @@ async def main():
     rows = read_tsv_rows(TSV_PATH)
     if not rows:
         logger.error("无可入库行(价格解析全部失败),终止")
+        return 1
+    try:
+        validate_sku(rows)  # 结构性校验 fail-fast:任何违规零写入
+    except ValueError as e:
+        logger.error("sku 结构性校验失败,整体终止(未写入任何行): {}", e)
         return 1
     count = await upsert_rows(rows)
     zero = [r["product_name"] for r in rows if r["stock_quantity"] == 0]
