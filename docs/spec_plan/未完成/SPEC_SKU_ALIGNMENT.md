@@ -1,9 +1,9 @@
 # 商品 SKU 确定性对齐改造（阶段 A：TSV 与动态库数据源优化）实施规格
-> **归档状态**: ⏳ 待实施（2026-09-06 起草，本期实施范围 = **阶段 A**：TSV 加 `sku` 列 + `product_price_stock` 表加 `sku` 对齐键 + 导入脚本改造；阶段 B/C/D 见 §6.2，另行起草后实施，落地后按 CLAUDE.md §6 更新本行状态并归档/移目录）
+> **归档状态**: 🔶 部分实施（2026-09-06 更新）——**阶段 A-TSV 已落地**（TSV sku 列 50 编码固化 + add_sku_column 生成器，8305b99，A1/A2 通过）；**阶段 A-DB 代码已落地**（model sku unique 双约束/导入校验 fail-fast/upsert 键切换 sku，7bfb4dc，纯函数单测 17 passed）——**A3~A7 DB 断言未跑**：本机 PostgreSQL（docker compose postgres+redis）无法从会话拉起，待环境就绪后按 §4.4.1 清空重建 + 重跑导入验证通过后改 ✅ 并归档 `已完成/`；历史状态行保留原文
 
 > **用途**: 解决 RAG 静态知识（rag_retrieval）与商品动态信息（product_stock_lookup）两 tool 检索结果不一致的问题——不一致根因是两侧对齐依赖"商品名称文本匹配"（LLM 从片段抽名 → ILIKE 子串模糊），存在同前缀多商品歧义、名称抽取失败、名称变更失联三类失效。本方案引入**全局唯一商品编码 sku 作为确定性对齐键**，从数据源（TSV）与存储层（动态库表）开始改造，docx 文本标注、RAG chunk metadata、rag 返回层透出、product_tool 精确入参为后续阶段。
 > **技术栈**: 纯数据层改造——TSV（单一数据源，header 名读取）+ PostgreSQL（product_price_stock）+ SQLAlchemy 2.x + 幂等导入脚本（`import_product_price_stock.py`），不涉及 LLM 链路
-> **状态**: 待实施（本期仅阶段 A；全链路方案沿用既有预研 [[SPEC_PRODUCT_STOCK_TOOL.md]] §12.1 演进方向设计，本次落地其中 TSV/DB 两项并修正其一决策——sku 不进 docx 的裁定将在阶段 B 重新审视）
+> **状态**: 部分实施（TSV/DB 代码已落地，DB 侧断言待环境补跑；全链路方案沿用既有预研 [[SPEC_PRODUCT_STOCK_TOOL.md]] §12.1 演进方向设计，本次落地其中 TSV/DB 两项并修正其一决策——sku 不进 docx 的裁定已在 [[SPEC_RAG_SKU_METADATA.md]] P0 推翻（2026-09-06））
 > **关联文档**: [[SPEC_PRODUCT_STOCK_TOOL.md]]（§12.1 SKU 对齐演进方向，本 spec 为其承接）[[SPEC_RAG_TOOL_OPTIMIZATION.md]]（决策 #10 片段前缀扩展约定）[[SPEC_ENTITY_PARALLEL_RAG.md]] [[PROJECT_ANALYSIS.md]]
 
 ---

@@ -1,10 +1,10 @@
 # RAG 索引构建 sku 注入与 rag_retrieval 返回 metadata 优化实施规格
-> **归档状态**: ⏳ 待实施（2026-09-06 起草，本期实施范围 = **阶段 P0 docx 标注 + 阶段 C 索引 sku_codes 注入 + 阶段 D rag 返回 metadata 透出**；D-2（product_stock_lookup sku 精确参数）为可裁剪子项见 §7-3）
+> **归档状态**: 🔶 部分实施（2026-09-06 更新）——**P0/C/D/D-2 代码全部落地**：docx H3 (SKU:) 标注并重建（50/50 锚点与 TSV 一致，最长章节路径 95<255）、sku_codes 注入链（doc_parser 段级挂载/indexing _collect_skus 区间多值/JSONB 列）、返回透出与双通道公共渲染、product_stock_lookup sku 精确参数（提交 f230a91 / 8de0baa；parser+renderer+tool mock 单测 44+17 passed）——**A3~A6、A7~A10 的 DB 侧断言未跑**（document_chunks 清旧行重灌、检索链路键断言、端到端一致性抽查需 PG 环境，docker compose 无法从会话拉起），待环境就绪按 §4.2.4 执行后验证改 ✅。**归档前置验证项已填数**：多商品块占比实测 **92.1%（35/38 块跨商品，覆盖 50/50 编码，DB-free 模拟）**——显著高于预期，佐证多值收集为硬需求而非边角
 > **依赖前置**: [[SPEC_SKU_ALIGNMENT.md]] 阶段 A 已实施（TSV 含 `sku` 列 + `product_price_stock.sku` unique 已入库）——本 spec 的 docx 标注与导入重灌全部消费阶段 A 产物；阶段 A 未落地前本 spec 不可开工
 
 > **用途**: 打通"RAG 静态知识块 ↔ 动态库价格行"的确定性对齐链路（两 tool 不一致问题第二阶段）：① 商品 docx H3 标题标注 `(SKU:xxx)`（提取锚点，文档自包含）；② 索引构建阶段把 sku 以**多值列表**注入 chunk 元数据（chunk 跨商品是切分必然态，单值注入必错）；③ `rag_retrieval` 返回层透出 LLM 决策所需 metadata（商品编码/知识类型/来源），并同步硬编码消费通道（customer_tools/summarize）——两通道渲染一致，杜绝"agent 场景有元数据、生产节点裸文本"的分叉
 > **技术栈**: python-docx（构建）+ doc_parser/indexing_service（docx 解析→分段→全文递归切分→入库）+ pgvector(document_chunks) + rag_tool/customer_tools/summarize（消费通道），零 LLM 链路改动（summarize 仅提示词加规则句）
-> **状态**: 待实施 —— 范围界定：把 [[SPEC_SKU_ALIGNMENT.md]] §6.2 的"阶段 B（docx 标注）+ 阶段 C（chunk metadata）+ 阶段 D（检索/工具侧）"纲领正式化，其中 docx 标注作为本 spec 前置 P0 一并实施（索引提取锚点依赖它，拆为独立 spec 会造成"docx 已重建、注入空转"的中间态）
+> **状态**: 部分实施（代码全落地、DB 侧断言待环境补跑）——范围界定：把 [[SPEC_SKU_ALIGNMENT.md]] §6.2 的"阶段 B（docx 标注）+ 阶段 C（chunk metadata）+ 阶段 D（检索/工具侧）"纲领正式化，其中 docx 标注作为本 spec 前置 P0 一并实施（索引提取锚点依赖它，拆为独立 spec 会造成"docx 已重建、注入空转"的中间态）
 > **关联文档**: [[SPEC_SKU_ALIGNMENT.md]]（阶段 A 前置）[[SPEC_PRODUCT_STOCK_TOOL.md]]（§12.1 SKU 对齐演进承接）[[SPEC_RAG_TOOL_OPTIMIZATION.md]]（决策 #10 片段前缀约定）[[SPEC_CHUNK_MERGE_STRATEGY.md]]（块归属机制出处）[[PROJECT_ANALYSIS.md]]
 
 ---
