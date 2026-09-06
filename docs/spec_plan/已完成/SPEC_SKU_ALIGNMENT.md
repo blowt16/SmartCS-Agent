@@ -1,5 +1,5 @@
 # 商品 SKU 确定性对齐改造（阶段 A：TSV 与动态库数据源优化）实施规格
-> **归档状态**: 🔶 部分实施（2026-09-06 更新）——**阶段 A-TSV 已落地**（TSV sku 列 50 编码固化 + add_sku_column 生成器，8305b99，A1/A2 通过）；**阶段 A-DB 代码已落地**（model sku unique 双约束/导入校验 fail-fast/upsert 键切换 sku，7bfb4dc，纯函数单测 17 passed）——**A3~A7 DB 断言未跑**：本机 PostgreSQL（docker compose postgres+redis）无法从会话拉起，待环境就绪后按 §4.4.1 清空重建 + 重跑导入验证通过后改 ✅ 并归档 `已完成/`；历史状态行保留原文
+> **归档状态**: ✅ 已完成（2026-09-06 归档 `已完成/`）——落地证据：TSV sku 列 50 编码固化 + add_sku_column 生成器（8305b99）；model sku unique 双约束/导入校验 fail-fast/upsert 键切换（7bfb4dc）；验证期修复三处（8a2abd5：validate_sku 读键、JSONB none_as_null、spans 测试迁移）。验收全过：A1/A2（编码全覆盖幂等）A3（47 行入库=50−3 行价格"—"跳过[spec 风险 #3 预期]、零空 sku、零重复、sku↔名称与 TSV 逐字符一致）A4（重跑幂等）A5（改名沿 sku 延续无新行，实测 JD-DRY-003）单测 17+13 passed；A6（回归：名称通道 ok）A7（DB 层 structural fail-fast 实测拦截真实错误零写入——验证期发现键名 bug 即由其拦截）。本机 PG 由 docker compose 拉起验证
 
 > **用途**: 解决 RAG 静态知识（rag_retrieval）与商品动态信息（product_stock_lookup）两 tool 检索结果不一致的问题——不一致根因是两侧对齐依赖"商品名称文本匹配"（LLM 从片段抽名 → ILIKE 子串模糊），存在同前缀多商品歧义、名称抽取失败、名称变更失联三类失效。本方案引入**全局唯一商品编码 sku 作为确定性对齐键**，从数据源（TSV）与存储层（动态库表）开始改造，docx 文本标注、RAG chunk metadata、rag 返回层透出、product_tool 精确入参为后续阶段。
 > **技术栈**: 纯数据层改造——TSV（单一数据源，header 名读取）+ PostgreSQL（product_price_stock）+ SQLAlchemy 2.x + 幂等导入脚本（`import_product_price_stock.py`），不涉及 LLM 链路
