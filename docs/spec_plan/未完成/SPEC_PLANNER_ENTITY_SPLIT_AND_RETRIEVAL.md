@@ -2,9 +2,15 @@
 
 > **归档状态**: ⏳ 待实施（2026-09-18 定稿，依据 main 分支代码实测与两份源 spec 整合）
 
-> **整合来源**（未实施部分全部移交本稿；源稿**暂留 `未完成/`**，归档时点见 §6 阶段 4）：
-> - `SPEC_ENTITY_PARALLEL_RAG.md` 阶段 2（planner 改造）/ 阶段 4（检索侧）/ 阶段 6（收尾）——该稿阶段 0/1/3/5 已落地，不在本稿范围
+> **整合来源**（未实施部分全部移交本稿；两份源稿已于 2026-09-18 `git rm` 删除，全文见 git 历史）：
+> - `SPEC_ENTITY_PARALLEL_RAG.md` 阶段 2（planner 改造）/ 阶段 4（检索侧）/ 阶段 6（收尾）——该稿阶段 0/1/3/5 已落地，不属本稿范围
 > - `SPEC_ENTITY_RECOGNITION_AND_RAG_RETRIEVAL.md` §3/§4（实体识别与子查询拆解机制）
+>
+> **已落地前置**（源稿阶段，实施前无需重做，此处保留提交索引以免随源稿删除而失传）：
+> 1. 阶段 0 —— customer_tools 单例化（`cf9e37b`）：收敛为 `RAGRetrieverService` 进程级单例，纯混合检索零 LLM
+> 2. 阶段 3 —— 子图简化 + 删 Cypher/guardrails/tool_selection 遗留：planner 直连 customer_tools（`multi_tool.py:59-80`）
+> 3. 阶段 3 Step 3 —— 子图模块级单次编译（`29e6f73`）：`get_research_graph` 懒加载双检锁单例（`lg_builder.py:410-438`）
+> 4. 阶段 1 入口消解 / 阶段 5 语义缓存前置 —— 由替代方案落地在 main 入口侧（`22b0c90` / `4882018`）：多轮无条件 LLM 消解 + 缓存 lookup/update
 >
 > **与源稿的 5 处差异（2026-09-18 实测后决策，详见 §8）**：
 > 1. **检索侧改为零 LLM 闭环**——源稿 §4.4 的 HyDE 与 LLM 相关性评分**不实施**：评分器已被 CrossEncoder 精排有意替代（`reranker_service.py:4` docstring 原文"替代原 LLM 相关性评分（grade_relevance）"），重新引入是架构回退；HyDE 当前代码零痕迹，属新建而非"移入"
@@ -16,7 +22,7 @@
 > **用途**: 售前（presale）链路 planner 节点与检索侧的合并改造——planner 从 Cypher 时代通用拆分模板改为商品场景的子问单元拆解（含实体名回填与一致性校验），检索侧在不新增 LLM 调用的前提下完成跨分支证据去重与实体约束
 > **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector HNSW + pg_jieba BM25 + RRF + bge-reranker-v2-m3 CrossEncoder + DeepSeek/Ollama
 > **状态**: 设计规格，待实施（前置结构条件已满足：customer_tools 单例化 cf9e37b、子图简化与 planner 直连、子图进程级单例 29e6f73 均已落地）
-> **关联文档**: [[SPEC_ENTITY_PARALLEL_RAG.md]]（源稿）[[SPEC_ENTITY_RECOGNITION_AND_RAG_RETRIEVAL.md]]（源稿）[[PROJECT_ANALYSIS.md]] §4.4 [[docs/项目问题.md]] #2/#3 [[SPEC_RAG_SKU_METADATA]]（sku_codes/chapter 透出）
+> **关联文档**: [[PROJECT_ANALYSIS.md]] §4.4 [[docs/项目问题.md]] #2/#3 [[SPEC_RAG_SKU_METADATA]]（sku_codes/chapter 透出）[[SPEC_ENTRY_LLM_RESOLUTION.md]]（入口消解产物入力）
 
 ---
 
@@ -626,21 +632,14 @@ def test_planner_node_name_in_internal_nodes():
 - [ ] **Step 4**：更新 `docs/PROJECT_ANALYSIS.md` §4.4.2（planner 现状边界改为落地后描述）与本稿归档状态行
 - [ ] **Step 5**：提交 `[docs] planner 改造与检索闭环落地后文档同步`
 
-### 阶段 4：源 spec 收口与归档
+### 阶段 4：本稿归档（阶段 1~3 全部落地后执行）
 
-> **归档时点说明**：两份源稿现为"部分实施"状态（阶段 0/1/3/5 已落地），按 CLAUDE.md §6 应留在 `未完成/`——**本稿未实施完之前不得 `git mv` 至 `已完成/`**，否则构成状态不实。分两步：
+> 两份源稿已随本稿定稿 `git rm`（2026-09-18，未实施内容全部移交本稿、已落地记录转记于本稿头部「已落地前置」），无需再走归档流程。本阶段只处理本稿自身；**阶段 1~3 未落地前不得执行**，否则构成状态不实。
 
-**本稿定稿时（立即执行）**：
-
-- [ ] **Step 1**：`SPEC_ENTITY_PARALLEL_RAG.md` 归档状态行追加未实施清单移交说明："阶段 2/4/6 已移交 [[SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL.md]]（2026-09-18），本稿保留为阶段 0/1/3/5 的落地记录与历史设计追溯"
-- [ ] **Step 2**：`SPEC_ENTITY_RECOGNITION_AND_RAG_RETRIEVAL.md` 归档状态行追加："机制内容已移交 [[SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL.md]]（2026-09-18）；§5.1（HyDE）、§5.5（LLM 相关性评分）经实测判定**不实施**，理由见新稿 §8 D1"
-- [ ] **Step 3**：修正仓库内对两份源稿的导航引用（`docs/PROJECT_ANALYSIS.md`、本稿关联文档行）——spec 内部 git 命令示例等历史记录不改
-
-**本稿阶段 1~3 全部落地后**：
-
-- [ ] **Step 4**：本稿归档状态行更新为 ✅ 已完成（附实施提交 hash、测试结果），`git mv` 至 `docs/spec_plan/已完成/`
-- [ ] **Step 5**：两份源稿同步 `git mv` 至 `docs/spec_plan/已完成/`（此时其全部内容要么已落地、要么已被本稿取代，归档不再状态不实）
-- [ ] **Step 6**：提交 `[docs] planner 实体拆解与检索闭环实施完成，spec 归档`
+- [ ] **Step 1**：本稿归档状态行更新为 ✅ 已完成（附实施提交 hash、关键文件路径、测试结果）
+- [ ] **Step 2**：`git mv` 本稿至 `docs/spec_plan/已完成/`
+- [ ] **Step 3**：修正仓库内对本稿的导航引用（`docs/PROJECT_ANALYSIS.md` §4.4）——spec 内部 git 命令示例等历史记录不改
+- [ ] **Step 4**：提交 `[docs] planner 实体拆解与检索闭环实施完成，spec 归档`
 
 ---
 
