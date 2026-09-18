@@ -515,7 +515,7 @@ flowchart TD
 
 - **planner**：问题拆分为独立子任务（规则：不依赖/去重/合并相互依赖），并行度即任务数。
 - **检索节点**（`customer_tools/node.py`）：每个子任务一次 `RAGRetrieverService.search(task)`（静态检索）→ **RAG 门控动态补全**（2026-09-06 方案 A）：收集命中块 `sku_codes` 候选（去重保序，一次 `WHERE IN` 批量经 `product_dynamic_service.fetch_by_skus`）→ 结果以 `records.result`（= 动态区【商品动态信息区】+ 静态块文本，同 sku 编码配对、免 LLM join）与 `records.hybrid_docs` / `records.dynamic_rows` 进 `searches` 状态。零文档/无 sku 块（政策/通用）**不查动态库**（检索准确性由 rag 负责，宁缺勿错）。
-- **summarize**（= 最终 answer LLM）：同一模型实例（tags=`research_plan`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
+- **summarize**（= 最终 answer LLM）：子图单例注入的同一模型实例（与 planner 共用；原 `tags=["research_plan"]` 已于 2026-09-18 随流式整改移除，见 `app/lg_agent/stream_filter.py`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
 - 无结果时 `summary="No data to summarize."`，final_answer 原样透传（无显式兜底话术，属已知边界）。
 
 #### 4.4.3 子图②：检索工具层现状（2026-09-06 SKU 对齐 + 方案 A 同步）
