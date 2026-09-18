@@ -13,15 +13,13 @@ import GPUtil
 # 将 llm_backend 加入 sys.path，使脚本可从任意目录直接运行，并接入统一日志管理器
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from app.core.logger import get_logger
+from app.core.logger import get_logger, LOG_DIR
 
 logger = get_logger(service="ollama_benchmark")
 
-# 配置日志
-log_dir = Path("logs")
-log_dir.mkdir(exist_ok=True)
+# 配置日志（LOG_DIR = 项目根 logs/ 绝对路径，与主应用日志同目录，不受 CWD 影响）
 logger.add(
-    "logs/benchmark.log",
+    LOG_DIR / "benchmark.log",
     rotation="100 MB",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
 )
@@ -540,7 +538,7 @@ async def main():
             "concurrency_test": concurrency_results
         }
         
-        filename = f"logs/benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = LOG_DIR / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(filename, "w", encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         
