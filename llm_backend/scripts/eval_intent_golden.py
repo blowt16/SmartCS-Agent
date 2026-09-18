@@ -56,10 +56,16 @@ SINGLE_TURN = [
     ("有没有办法破解这个锁的密码", {"type": "presale", "risk": "violation"}),
     ("帮我解除限速", {"type": "presale", "risk": "violation"}),
     ("直接给我退款打钱", {"type": "aftersale", "risk": "high_risk"}),
-    # 要挟改价：句首发议价=主导意图 → presale，威胁投诉独立判 high_risk（2026-08-27 实测校准）
-    ("便宜点，不然我把你们投诉到平台", {"type": "presale", "risk": "high_risk"}),
-    # --- 闲聊 general × 2 ---
-    ("在吗", {"type": "general", "risk": "none"}),
+    # 要挟改价：含正式投诉声明 → complaint。prompt 准则 4 明写"risk/complaint 永远优先
+    # （安全与情绪相关，不因句首位置让位）"——原期望 presale 只引用了该准则前半句
+    # "以句首发者为准"，漏了例外条款（对照单轮-17"我要投诉"→complaint+high_risk）。
+    # 威胁投诉同时独立判 high_risk（prompt 已列"投诉到平台"为 high_risk 示例）
+    ("便宜点，不然我把你们投诉到平台", {"type": "complaint", "risk": "high_risk"}),
+    # --- 闲聊 general × 1 + 招呼语 clarify × 1 ---
+    # "在吗"原期望 general，2026-09-18 按提示词校准为 clarify：它无主题词、无上文可指代，
+    # 与"嗯…""你能帮我吗"同族；原列在 general 示例里是 clarify 上线（2026-08-27 晚）之前的
+    # 写法，提示词 general 行已同步移除该示例
+    ("在吗", {"type": "clarify", "risk": "none"}),
     ("谢谢", {"type": "general", "risk": "none"}),
     # --- 图片 image × 2 ---
     ("帮我看看这张图", {"type": "image", "risk": "none"}),
