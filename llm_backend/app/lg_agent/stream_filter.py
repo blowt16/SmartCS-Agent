@@ -2,9 +2,10 @@
 
 背景（2026-09-18 流式整改）：
 `stream_mode="messages"` 无差别广播图内所有 chat model 的 token，框架不区分"给用户看的答复"
-与"内部管道推理"。原实现用 langchain run tag 作黑名单（`tags=["research_plan"]`），但该 tag
-打在售前子图的**共享模型实例**上（planner 与 summarize 共用），把唯一对用户可见的 summarize
-一并挡掉——实测售前 query 的 285 个分片仅 1 个放行，链路退化为"十几秒后整段蹦出"。
+与"内部管道推理"。原实现用 langchain run tag 作黑名单（售前子图共享实例上的
+`tags=["research_plan"]`，已随本次整改移除），但该 tag 打在**共享模型实例**上——planner 与
+summarize 共用、分不出内部与外发，把唯一对用户可见的 summarize 一并挡掉——实测售前 query
+的 285 个分片仅 1 个放行，链路退化为"十几秒后整段蹦出"。
 
 现改为按 `metadata["langgraph_node"]` 精确判定（节点名实测稳定可取值）：
 - `INTERNAL_NODES`（路由/拆解节点）：结构化输出的内部推理，不外泄；

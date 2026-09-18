@@ -108,7 +108,7 @@ def build_agent_llm() -> object:
     AGENT_SERVICE=deepseek → ChatDeepSeek；否则 ChatOllama（本地）。
     被测方配置取自生产 settings（属"被测对象"而非"评测配置"，见 spec §5.2 隔离边界）。
     生产侧已将模型实例提升为单例（跨请求复用）；评测按隔离原则自建独立实例
-    （tags 用 ragas_eval 与生产 research_plan 区分），故不直接复用 get_research_graph。
+    （自建实例并保留 ragas_eval 标签），故不直接复用 get_research_graph。
     """
     from langchain_deepseek import ChatDeepSeek
     from langchain_ollama import ChatOllama
