@@ -37,17 +37,8 @@ class Settings(BaseSettings):
     OLLAMA_AGENT_MODEL: str
     # Service selection
     CHAT_SERVICE: ServiceType = ServiceType.DEEPSEEK
-    REASON_SERVICE: ServiceType = ServiceType.OLLAMA
     AGENT_SERVICE: ServiceType = ServiceType.DEEPSEEK
-    
-    # Search settings
-    SERPAPI_KEY: str
-    SERPAPI_BASE_URL: str = "https://serpapi.com/search"   # SerpAPI 端点
-    SEARCH_RESULT_COUNT: int = 3
-    SEARCH_LANGUAGE: str = "zh-CN"                          # 搜索语言
-    SEARCH_REGION: str = "cn"                               # 搜索地区
-    SEARCH_TIMEOUT: int = 15                                # 联网搜索超时（秒）
-    
+
     # Database settings
     DB_HOST: str
     DB_PORT: int

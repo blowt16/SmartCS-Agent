@@ -101,7 +101,6 @@ graph TB
 | **LangChain** | langchain-core/deepseek/ollama | - | LLM 抽象层，结构化输出 |
 | **前端** | Vue | 编译静态 dist | 聊天 UI 界面（非主要重点） |
 | **部署** | Docker + Docker Compose | - | 2 基础服务（PostgreSQL(pgvector)/Redis）；App 应用本地运行（uvicorn/run.py） |
-| **搜索** | SerpAPI | - | Function Calling 联网搜索 |
 | **图片处理** | Pillow (PIL) | - | 上传图片压缩/格式转换 |
 | **异步 HTTP** | aiohttp | - | 视觉 API 异步调用 |
 
@@ -979,7 +978,7 @@ flowchart TD
 | 设计模式 | 应用位置 | 具体实现 |
 |---------|---------|---------|
 | **工厂模式** | `LLMFactory` | `create_chat_service()` 根据配置返回不同实例 |
-| **策略模式** | `config.py` 服务选择 | `CHAT_SERVICE` / `REASON_SERVICE` / `AGENT_SERVICE` 分别选择 DeepSeek/Ollama |
+| **策略模式** | `config.py` 服务选择 | `CHAT_SERVICE` / `AGENT_SERVICE` 分别选择 DeepSeek/Ollama |
 | **状态图模式** | `lg_builder.py` | LangGraph `StateGraph` + 条件边实现多路由 Agent 编排 |
 | **观察者/回调模式** | `deepseek_service.py` | `on_complete` 回调触发消息持久化，解耦 LLM 和存储 |
 | **建造者模式** | `lg_builder.py` | `builder.add_node().add_edge().compile()` 构建状态图 |

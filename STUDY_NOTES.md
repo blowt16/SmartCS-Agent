@@ -119,12 +119,10 @@ docker compose down
 ```bash
 # LLM 服务选择
 CHAT_SERVICE=deepseek          # deepseek 或 ollama
-REASON_SERVICE=deepseek
 AGENT_SERVICE=deepseek
 
 # API 密钥
 DEEPSEEK_API_KEY=sk-xxxxx
-SERPAPI_KEY=xxxxx
 
 # PostgreSQL
 DB_HOST=localhost
@@ -1246,7 +1244,7 @@ async def init_db():
 
 **位置**：`config.py` 的 `ServiceType` 枚举
 
-**应用**：`CHAT_SERVICE`、`REASON_SERVICE`、`AGENT_SERVICE` 可以分别配置不同的 LLM 服务。
+**应用**：`CHAT_SERVICE`、`AGENT_SERVICE` 可以分别配置不同的 LLM 服务。
 
 **原理**：定义一系列算法，把它们封装起来，使它们可以互相替换。
 

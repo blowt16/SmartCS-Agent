@@ -74,12 +74,10 @@ cp .env .env
 ```bash
 # 🤖 AI 服务配置
 CHAT_SERVICE=deepseek          # 聊天服务: deepseek/ollama
-REASON_SERVICE=deepseek        # 推理服务: deepseek/ollama  
 AGENT_SERVICE=deepseek         # Agent服务: deepseek/ollama
 
 # 🔑 API 密钥
 DEEPSEEK_API_KEY=sk-xxxxx      # DeepSeek API密钥
-SERPAPI_KEY=xxxxx              # SerpAPI搜索密钥
 VISION_API_KEY=xxxxx           # 视觉模型密钥
 
 # 🗄️ 数据库连接
