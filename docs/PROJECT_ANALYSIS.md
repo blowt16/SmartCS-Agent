@@ -486,20 +486,24 @@ flowchart TD
 
 ### 4.4 售前导购模块：MultiTool 子图 + ragTool 检索工具链（总 — 分）
 
+> ⚠️ **2026-09-18 同步**：① 子图自 2026-09-02 起为**进程级单例**（`get_research_graph` 懒加载复用），本节原"每请求新建检索子图实例"描述已过期；② 出口流式整改——售前回答由"整段一次性返回"恢复为**逐 token 流式**（SSE 闸门改为按节点判定，见 §4.4.1 末）；③ 补记 planner 的现状边界（提示词/校验/温度，见 §4.4.2）。§4.4.3~§4.4.5 经复核仍与代码一致。
+
 **模块职责**：承接 `type=presale`（商品参数/价格/推荐/使用咨询）。模块由三层组成：主图节点 `create_research_plan`（容器）→ **Multi-Tool 工作流子图**（planner → 并行检索 → summarize → final_answer 的 map-reduce 编排）→ **检索工具层**（检索节点直接消费 `RAGRetrieverService` 混合检索管线 + `product_dynamic_service` 动态补全；另有两枚 langchain `@tool` 薄封装 `rag_retrieval` / `product_stock_lookup` 按"静态查知识 + sku 动态补全"协议落地并单测，**LLM 编排形态（bind_tools）未接入**——两 tool 的语义组合已由检索节点以确定性形态投入生产（2026-09-06 方案 A：RAG 门控 + sku-only 动态补全 + 静态/动态同码配对供 summarize，见下各节）。其中 ragTool 指向的**混合检索管线**运行流程最为复杂，按"总 → 分"拆解如下。
 
 #### 4.4.1 模块总运行流程图（节点容器层）
 
 ```mermaid
 flowchart TD
-    A["路由 = 售前，进入售前节点"] --> B["准备：新建检索子图实例<br/>（子图内部 = 分解 → 检索 → 汇总 → 收尾）"]
+    A["路由 = 售前，进入售前节点"] --> B["取进程级单例子图<br/>（get_research_graph 懒加载复用：<br/>不重建模型/图，复用 llm 连接池）"]
     B --> C["取出当前问题<br/>（入口已把省略与指代补全）"]
     C --> D["运行检索子图<br/>（整体套 30 秒超时保护）"]
-    D -->|"按时完成"| E["把子图回答包装成消息返回主图<br/>→ 流式输出给用户"]
+    D -->|"按时完成"| E["summarize 逐 token 流式输出给用户<br/>（经 SSE 出口闸门放行）"]
     D -->|"超时"| F["降级话术：<br/>“抱歉，系统处理超时，请稍后再试”"]
     E --> G["（子图内部不写入主图检查点：<br/>避免并行任务与持久化冲突；<br/>会话记忆仍由主图保存）"]
     F --> G
 ```
+
+**出口流式机制**（2026-09-18 整改，见 `app/lg_agent/stream_filter.py`）：`stream_mode="messages"` 会**无差别广播图内所有 LLM 的 token**，框架不区分"给用户看的答复"与"内部管道推理"，故 SSE 出口设闸门按 `metadata["langgraph_node"]` 判定——**拦** `analyze_and_route_query` / `planner` 等内部推理节点，**放** `summarize` 等用户可见 LLM；容器节点 `create_research_plan` 回填的整段答案仅在"本轮无 token 流出"时兜底放行（超时/异常降级话术），避免与流式内容重复。整改前的闸门是打在**共享模型实例**上的 `tags=["research_plan"]` 黑名单（planner 与 summarize 共用同一实例），把唯一对用户可见的 summarize 一并挡掉——实测售前 query 图产 285 个分片仅 1 个放行，用户侧表现为"十几秒后整段蹦出"。
 
 #### 4.4.2 子图①：Multi-Tool 工作流运行流程
 
@@ -513,7 +517,7 @@ flowchart TD
     style VS fill:#fff3cd
 ```
 
-- **planner**：问题拆分为独立子任务（规则：不依赖/去重/合并相互依赖），并行度即任务数。
+- **planner**：把问题拆为独立子任务（map-reduce 的 map 端，1 任务 = 1 并行检索分支），拆不开则保留原问题为单任务。**现状边界**（2026-09-18 实测，详见 `docs/spec_plan/未完成/SPEC_ENTITY_PARALLEL_RAG.md` §2.3）：提示词仍是 Cypher 时代的通用拆分模板（`kg_prompts.py:8-38`，示例为"北风商贸有哪些饮料""订单10248""供应商 Exotic Liquids"等库表式问句），**无商品实体识别、无意图继承、无实体名回填约束**；输出模型 `PlannerOutput` 仅 `tasks: List[Task]`（无 `entity_count`），节点**只对"空列表"回退**——空串任务/重复任务/超过 3 条均不校验，空串可穿透为 `Send(task="")` → 该分支空记录 → summarize 输出 "No data to summarize."（**是失败而非降级**）；拆解复用 `LLM_TEMPERATURE=0.7` 的研究模型（无确定性约束，同问拆解结果随采样漂移）。spec 阶段 2 已备好可直接执行的替换 prompt 全文与节点校验代码（`_fallback` 单一出口 + 非空/去重/MAX_TASKS=3），**未实施**。
 - **检索节点**（`customer_tools/node.py`）：每个子任务一次 `RAGRetrieverService.search(task)`（静态检索）→ **RAG 门控动态补全**（2026-09-06 方案 A）：收集命中块 `sku_codes` 候选（去重保序，一次 `WHERE IN` 批量经 `product_dynamic_service.fetch_by_skus`）→ 结果以 `records.result`（= 动态区【商品动态信息区】+ 静态块文本，同 sku 编码配对、免 LLM join）与 `records.hybrid_docs` / `records.dynamic_rows` 进 `searches` 状态。零文档/无 sku 块（政策/通用）**不查动态库**（检索准确性由 rag 负责，宁缺勿错）。
 - **summarize**（= 最终 answer LLM）：子图单例注入的同一模型实例（与 planner 共用；原 `tags=["research_plan"]` 已于 2026-09-18 随流式整改移除，见 `app/lg_agent/stream_filter.py`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
 - 无结果时 `summary="No data to summarize."`，final_answer 原样透传（无显式兜底话术，属已知边界）。
@@ -903,7 +907,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["构建 Multi-Tool 子图<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
+    A["进入节点<br/>create_research_plan<br/>（query 已由入口消解）"] --> B["取进程级单例子图<br/>（get_research_graph 懒加载复用）<br/>Planner → Send 并行 → 向量检索<br/>→ Summarize → FinalAnswer"]
     A --> R["TimeoutGuard 30s 超时保护<br/>ainvoke 子图"]
     R --> S2["Planner 任务分解<br/>Send 并发派发子任务"]
     S2 --> S3["混合检索（每子任务）<br/>HNSW ∥ pg_jieba BM25 并行<br/>RRF 融合 top-20 → Reranker top-5"]
@@ -911,6 +915,7 @@ flowchart TD
     S3B --> S4["合并上下文 records.result<br/>（【商品动态信息区】+ 静态块前缀行）"]
     S4 --> S5["Summarize 结果汇总（最终 answer LLM）<br/>客服风格 + 同码配对/未收录口径规则"]
     S5 --> S7["FinalAnswer 组装输出<br/>写入会话历史"]
+    S5 -.->|"逐 token（出口闸门放行 summarize；<br/>容器节点整段回填仅在无 token 时兜底）"| OUT
     R -->|"超时"| S1B["降级回答<br/>「抱歉，系统处理超时，请稍后再试」"]
     S1B --> OUT
     S7 --> OUT
@@ -1183,6 +1188,8 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（46 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
 
 > ⚠️ 2026-09-06 同步：`llm_backend/tests/` 现 80+ 项，已覆盖解析/分块归属/BM25 集成（真实 PG）/两 @tool 三态与 sku 批量/节点 RAG 门控/导入校验与模型约束；已知唯一失败 = `test_bm25_recalls_docs_with_partial_terms`（生产语料挤压非隔离缺陷，见 `未完成/SPEC_BM25_TEST_ISOLATION.md`）。本小节的"核心模块无 pytest 覆盖"已大幅缓解；语义缓存与 LangGraph Agent 行为验证仍待补。
+>
+> ⚠️ 2026-09-18 复核：实测 **114 项，113 passed / 1 failed**（唯一失败仍为上述 BM25 隔离用例）。其中售前链路专项约 60 项：`test_customer_tools_node.py`(6) / `test_rag_tool.py`(10) / `test_product_stock_tool.py`(17) / `test_doc_block_renderer.py`(9) / `test_stream_filter.py`(12，新增——出口流式闸门) / `test_rrf.py`(2) / `test_bm25_retriever.py`(4)。
 
 **建议**:
 
