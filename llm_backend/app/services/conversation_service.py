@@ -1,13 +1,28 @@
+from datetime import datetime, timezone
 from typing import List, Dict
 from app.core.database import AsyncSessionLocal
 from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from app.core.logger import get_logger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 logger = get_logger(service="conversation")
 
 class ConversationService:
+    @staticmethod
+    def _iso_utc(dt: datetime | None) -> str | None:
+        """naive datetime → 带 UTC 偏移的 ISO 串。
+
+        本库时间列均为 timestamp without time zone，`func.now()` 写入的是库时区
+        （实测 Etc/UTC）的时刻，但 isoformat() 不带偏移，前端 new Date() 会按
+        **本地时间**解析 → UTC+8 下恒差 8 小时。此处显式标注 UTC 消除歧义。
+        """
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+
     @staticmethod
     def get_conversation_title(message: str, max_length: int = 20) -> str:
         """从消息中提取会话标题"""
@@ -63,6 +78,11 @@ class ConversationService:
                 if messages_count == 0:
                     title = ConversationService.get_conversation_title(user_content)
                     conversation.title = title
+
+                # 每轮都触碰 updated_at：列的 onupdate 只在行被 UPDATE 时触发，
+                # 而本方法仅首条消息改 title，后续轮次不动该行 → updated_at 停在
+                # 创建时刻，列表按它排序时延续中的会话不会上浮
+                conversation.updated_at = func.now()
                 
                 # 保存用户消息
                 user_message = Message(
@@ -95,16 +115,17 @@ class ConversationService:
                 # 查询用户的所有会话（注意：不能排除"新会话"标题——新建会话默认标题就是"新会话"，排除后列表永远为空）
                 stmt = select(Conversation).where(
                     Conversation.user_id == user_id
-                ).order_by(Conversation.created_at.desc())
-                
+                ).order_by(Conversation.updated_at.desc())
+
                 result = await db.execute(stmt)
                 conversations = result.scalars().all()
-                
+
                 return [
                     {
                         "id": conv.id,
                         "title": conv.title,
-                        "created_at": conv.created_at.isoformat(),
+                        "created_at": ConversationService._iso_utc(conv.created_at),
+                        "updated_at": ConversationService._iso_utc(conv.updated_at),
                         "status": conv.status,
                         "dialogue_type": conv.dialogue_type.value
                     }
@@ -131,20 +152,22 @@ class ConversationService:
                 if not conversation:
                     raise ValueError(f"Conversation {conversation_id} not found or not owned by user {user_id}")
                 
-                # 查询会话的所有消息
+                # 查询会话的所有消息。按 id 排序而非 created_at：一问一答在同一事务内
+                # 写入，created_at 取 func.now()（事务时刻）→ 两条完全相同，按时间排序
+                # 的结果顺序未定义，问答可能颠倒
                 stmt = select(Message).where(
                     Message.conversation_id == conversation_id
-                ).order_by(Message.created_at)
-                
+                ).order_by(Message.id)
+
                 result = await db.execute(stmt)
                 messages = result.scalars().all()
-                
+
                 return [
                     {
                         "id": msg.id,
                         "sender": msg.sender,
                         "content": msg.content,
-                        "created_at": msg.created_at.isoformat(),
+                        "created_at": ConversationService._iso_utc(msg.created_at),
                         "message_type": msg.message_type
                     }
                     for msg in messages

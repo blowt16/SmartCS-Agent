@@ -169,7 +169,8 @@ async function loadConversations() {
     conversations.value = data.map(conv => ({
       id: conv.id,
       name: conv.title,
-      updatedAt: new Date(conv.created_at),
+      // updated_at 为最近活跃时刻（后端已按它倒序）；缺失时回退 created_at
+      updatedAt: new Date(conv.updated_at || conv.created_at),
       dialogue_type: conv.dialogue_type
     }));
   } catch (e) {
@@ -188,7 +189,10 @@ async function createNewConversation() {
     conversations.value.unshift(newConv);
     currentConversation.value = newConv;
     messages.value = [];
-    chat.langgraphConversationId.value = null;
+    // LangGraph 线程 id 直接复用 DB 会话 id：thread_id 由后端按 conversation_id
+    // 原样取用（main.py langgraph_query），这样刷新/切换会话后线程不变，历史上下文
+    // 得以接续。此前用响应头里的随机 UUID 且只存内存，刷新即丢 → 续聊必然开新线程。
+    chat.langgraphConversationId.value = String(newConv.id);
     sidebarOpen.value = false;
   } catch (e) {
     console.error('创建对话失败:', e);
@@ -197,7 +201,8 @@ async function createNewConversation() {
 
 async function selectConversation(conv) {
   currentConversation.value = conv;
-  chat.langgraphConversationId.value = conv.langgraphId || null;
+  // 同上：线程 id = 会话 id，切回历史会话即可续上原来的上下文
+  chat.langgraphConversationId.value = String(conv.id);
   await loadMessages(conv.id);
   sidebarOpen.value = false;
 }
@@ -236,6 +241,9 @@ async function handleSend({ content, images }) {
   }
   if (!currentConversation.value) return;
   await sendMessage(content, images);
+  // 消息落库后回拉列表：首条消息的标题、最近活跃时间都由后端生成，
+  // 本地那条是占位名「新对话」，不刷新则要等整页重载才更新
+  await loadConversations();
 }
 
 // ========== 文档上传 ==========

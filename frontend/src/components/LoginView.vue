@@ -170,7 +170,10 @@ function validate() {
     error.value = '请输入密码';
     return false;
   }
-  if (!PASSWORD_RE.test(passwordVal)) {
+  // 复杂度只在注册时校验：登录只需"非空"，密码规则属于设置密码的环节（注册/改密）。
+  // 放在登录侧会把历史存量账号（密码不满足现行规则）永久挡在门外——后端校验照常执行，
+  // 前端拦下等于连试都不试。
+  if (mode.value === 'register' && !PASSWORD_RE.test(passwordVal)) {
     error.value = '密码必须包含大小写字母和数字，至少8位';
     return false;
   }
