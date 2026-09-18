@@ -3,6 +3,8 @@
 > **分析日期**: 2026-08-08（§4 核心模块详解于 2026-09-02 按代码实测状态重写） | **版本**: 1.1 | **许可**: MIT
 >
 > **2026-09-06 同步**：SKU 确定性对齐全链路落地（TSV 编码 → docx H3 (SKU:) 锚点 → chunk `sku_codes` 多值 JSONB → rag 返回元数据前缀）+ 方案 A（product_stock_lookup 收窄 sku-only 辅助通道、售前检索节点 RAG 门控动态补全、静态/动态同码配对供 summarize）+ 工具多 sku 批量——§4.4/§4.9.3/§5.5/§7.3/§10.2.1 已按实测同步；历史文本保留原样，最新判定以各节 ⚠️ 同步注与本行为准
+>
+> **2026-09-18 同步**：入口指代消解由"正则门控 → 命中才 LLM"改为**多轮无条件 LLM 统一消解**（消解器 6 规则 prompt + 三态日志 + `RESOLVE_MODEL` 可降档；正则判定层已在入口侧弃用，`pronoun_detector` 仅存于缓存入口与 `_is_filler` 借用；缓存入口 `_resolve_message` 仍是旧两段式、属未落地部分）——§4.2 按代码实测重写，§3.2 目录树/§4.0 模块清单/§5.1/§7.2/§8.2/§9.2 同步；历史文本保留原样，最新判定以各节 ⚠️ 同步注与本行为准
 
 ---
 
@@ -182,9 +184,9 @@ SmartCS-Agent/
 │       │   ├── llm_factory.py           # LLM 工厂模式
 │       │   ├── deepseek_service.py      # DeepSeek + 语义缓存
 │       │   ├── ollama_service.py        # Ollama 备选
-│       │   ├── redis_semantic_cache.py  # Redis 语义缓存（asyncio + ZSET 索引 + 分级指代消解）
-│       │   ├── pronoun_detector.py      # 指代检测器（三层规则引擎，缓存/入口共用门控）
-│       │   ├── pronoun_resolver.py      # 指代消解器（LLM 补全，temperature=0，失败降级）
+│       │   ├── redis_semantic_cache.py  # Redis 语义缓存（asyncio + ZSET 索引 + 旧两段式消解入口，待改造）
+│       │   ├── pronoun_detector.py      # 指代检测器（三层规则引擎；入口已弃用，仅缓存侧与 _is_filler 在用）
+│       │   ├── pronoun_resolver.py      # 统一消解器（一次 LLM 完成指代+省略补全，temperature=0，失败降级）
 │       │   ├── rag_retriever_service.py # RAG 检索核心服务（HNSW ∥ BM25 并行 → RRF → 精排，唯一检索入口）
 │       │   ├── reranker_service.py      # bge-reranker-v2-m3 精排（CrossEncoder，GPU/fp16，失败降级）
 │       │   ├── rag_tool.py              # langchain @tool 薄封装（rag_retrieval）
@@ -267,7 +269,7 @@ flowchart TB
 | 阶段 | 模块 | 核心文件 | 运行流程 |
 |------|------|---------|---------|
 | ① 入口 | HTTP 网关与应用装配 | `llm_backend/main.py`、`run.py`、`app/core/middleware.py`、`app/core/config.py` | §4.1（应用启动 + 请求分发） |
-| ② 前置 | 入口指代消解 + 语义缓存 | `main.py` 入口段、`app/services/pronoun_detector.py`、`pronoun_resolver.py`、`redis_semantic_cache.py` | §4.2（模块总图 + 检测/缓存子图） |
+| ② 前置 | 入口指代消解 + 语义缓存 | `main.py` 入口段、`app/services/pronoun_resolver.py`（统一消解器）、`redis_semantic_cache.py`、`pronoun_detector.py`（仅缓存侧残留） | §4.2（模块总图 + 统一消解/缓存子图 + 两侧现状对照） |
 | ③ 主图 | 双维意图识别与路由 | `app/lg_agent/lg_builder.py`、`lg_states.py`、`lg_prompts.py`；检查点 `psycopg_pool` + `AsyncPostgresSaver` | §4.3（主图运行 + 识别节点/路由子图） |
 | ④ 业务 | 售前导购（RAG 检索） | `lg_builder.py:create_research_plan`、`kg_sub_graph/.../workflows/multi_agent/multi_tool.py`、`edges.py`、`components/{planner,customer_tools,summarize,final_answer}/`、`app/services/rag_retriever_service.py`、`reranker_service.py` | §4.4（模块总图 → 子图① 工作流 → 子图② 工具层 → 子图③ ragTool @tool → 子图④ 混合检索管线） |
 | ④ 业务 | 业务应答节点群 | `lg_builder.py` 各节点、`lg_prompts.py` 话术/模板 | §4.5 |
@@ -312,18 +314,19 @@ flowchart TB
 
 ### 4.2 前置处理模块：入口指代消解 + 语义缓存
 
-**模块职责**：在主图执行前完成两件事——(1) 多轮指代/省略句补全为自包含完整问题；(2) 语义缓存检索，命中则短路返回不进图。模块由 `main.py` 的入口段 + `pronoun_detector` / `pronoun_resolver` / `redis_semantic_cache` 组成，消解器以鸭子类型依赖 LLM 服务（`DeepseekService`/`OllamaService` 均可）。
+> ⚠️ **2026-09-18 同步（本节按 `main.py` / `pronoun_resolver.py` / `pronoun_detector.py` / `redis_semantic_cache.py` 代码实测重写）**：入口消解已由"正则门控 → 命中才 LLM"改为**多轮无条件 LLM 统一消解**（2026-09-02 落地，见 `docs/spec_plan/未完成/SPEC_ENTRY_LLM_RESOLUTION.md`）——正则判定层（代词表/省略触发词）在入口侧整体弃用，保留的闸门只剩两个免费项：**无历史直通**与**纯语气词跳过**。`pronoun_detector.py` 仍存在，但**仅服务缓存入口**（`_resolve_message` 内的三层判定）与 `_is_filler` 借用（`main.py:29` 临时 import）。缓存入口侧**仍是旧两段式、属未落地部分**（见下"两侧现状对照"与 `docs/项目问题.md #11`）。
+
+**模块职责**：在主图执行前完成两件事——(1) 多轮指代/省略句补全为自包含完整问题；(2) 语义缓存检索，命中则短路返回不进图。模块由 `main.py` 的入口段 + `pronoun_resolver`（统一消解器）+ `redis_semantic_cache`（缓存，内含未改造的旧消解入口）+ `pronoun_detector`（仅缓存侧与语气词判定在用）组成，消解器以鸭子类型依赖 LLM 服务（`DeepseekService`/`OllamaService` 均可）。
 
 **模块总运行流程图**：
 
 ```mermaid
 flowchart TD
     A["收到用户消息"] --> B{"有历史对话?<br/>（按会话号查主图状态）"}
-    B -->|"有"| C1["取出最近几轮上下文"]
-    B -->|"无（首条消息）"| C2
-    C1 --> C2{"规则预检：<br/>语气词？含指代 / 省略?"}
-    C2 -->|"含指代且有历史可参考"| D["大模型依据历史把问题补全为完整句<br/>（补全失败则退回原句）"]
-    C2 -->|"完整问题或纯语气词"| D2["原句直接用<br/>（纯语气词在缓存内部会被识别并自动跳过）"]
+    B -->|"有"| C1{"纯语气词?<br/>（好的 / 谢谢…）"}
+    B -->|"无（首条消息）"| D2["原句直接用<br/>（首条无历史 / 纯语气词）"]
+    C1 -->|"是"| D2
+    C1 -->|"否"| D["大模型依据历史把问题补全为完整句<br/>（一次调用同时完成指代消除 + 省略补全；<br/>已完整的原样返回；失败/超时退回原句）"]
     D --> E
     D2 --> E["查语义缓存：<br/>把问题向量化后与缓存比对相似度"]
     E -->|"命中"| HIT["直接返回缓存中的最佳回答<br/>（模拟逐字推送，不进智能体）"]
@@ -336,7 +339,19 @@ flowchart TD
     UP --> OUT
 ```
 
-**子图①：指代检测三层判定**（`pronoun_detector.detect_pronoun`，纯字符串规则、无 LLM）：
+**子图①：入口统一消解**（`pronoun_resolver.resolve_pronouns`，一次 LLM 调用完成指代消除 + 省略补全）：
+
+```mermaid
+flowchart TD
+    A["多轮非语气词消息"] --> B["组装 prompt：<br/>system = 6 条规则（补全指代/省略；<br/>已完整则原样返回；命令式补全为查询意图；<br/>不加历史外信息；只输出问题文本）<br/>user = 最近 5 轮历史 + 当前问题"]
+    B --> C["LLM 调用<br/>（temperature=0，max_tokens=200，<br/>超时 RESOLVE_TIMEOUT_MS=10s；<br/>可用 RESOLVE_MODEL 换同 provider 模型降档）"]
+    C --> D{"输出与原文相同?"}
+    D -->|"是"| E1["unchanged 自包含：原样返回<br/>（no-op 观测——完整问题也必经一次调用）"]
+    D -->|"否"| E2["changed：输出补全后的完整问题"]
+    C -->|"异常 / 超时 / 空"| E3["error：降级返回原句<br/>（消解失败不阻塞主流程）"]
+```
+
+**残留：缓存入口的三层规则判定**（`pronoun_detector.detect_pronoun` —— **入口已不再使用**，仅 `redis_semantic_cache._resolve_message` 与 `main.py` 的 `_is_filler` 借用）：
 
 ```mermaid
 flowchart TD
@@ -349,6 +364,15 @@ flowchart TD
     S -->|"是"| R
     S -->|"否"| T["完整问题：原样使用<br/>（多数消息走这里，零开销）"]
 ```
+
+**两侧现状对照**（同一套消解的入口版与缓存版，形态不同步）：
+
+| 环节 | 入口（`main.py` → `resolve_pronouns`） | 缓存内部（`redis_semantic_cache._resolve_message`） |
+|---|---|---|
+| 门控 | 只剩两个免费闸门：无历史直通、纯语气词跳过；**其余多轮一律调 LLM** | 旧两段式：`detect_pronoun` 三层规则判定，**仅 NEED_RESOLVE 才调 LLM** |
+| 改造状态 | ✅ 已落地（2026-09-02，`SPEC_ENTRY_LLM_RESOLUTION`） | ⏳ **未实施**（该 spec §4.2；`docs/项目问题.md #11`） |
+| 现网影响 | **生效中**（`RESOLVE_ENABLED=true`） | **休眠中**——`SEMANTIC_CACHE_ENABLED=false` 使 lookup/update 在开关处提前返回（`redis_semantic_cache.py:233/301`），走不到 `_resolve_message` |
+| 已知缺陷（缓存侧，开关恢复后兑现） | — | ① 入口已消解的完整句若仍含"这款/它"等词 → 二次消解（lookup+update 叠加，每 miss 轮最多 3 次消解调用，spec 成本模型为 ×1/轮）② 首条含指代消息（无历史）→ 空历史补写（浪费 + 缓存 key 漂移风险） |
 
 **子图②：语义缓存读写与索引维护**（`redis_semantic_cache.py`，key 均基于**消解后**消息 MD5）：
 
@@ -376,10 +400,11 @@ flowchart LR
 **要点**：
 
 - 两个独立实例池：语义缓存 `RedisSemanticCache.get_instance(prefix, user_id)` 按用户池化（每用户一个实例 + 一个清理任务）；记忆摘要缓存 `MemoryCache` 按会话（§4.6）。
-- 分级门控把 LLM 消解调用控制在约 15% 含指代消息（日志佐证），温度 0 + 2s 超时（`.env` 建议 ≥15s）+ 失败降级原句；语气词既不消解也不写缓存。
+- 消解调用面（2026-09-18 同步）：入口为**多轮无条件**——凡有历史且非纯语气词的消息一律调一次 LLM，原"分级门控把调用压在约 15% 含指代消息"已不适用；成本改由 `RESOLVE_MODEL` 降档（空 = 沿用 CHAT_SERVICE 模型）与三态日志观测 no-op 率来控。参数：`RESOLVE_LLM_TEMPERATURE=0.0`（同输入同输出，是缓存 key 一致性的前提）、`RESOLVE_TIMEOUT_MS=10000`（`.env` 生效值；`config.py` 默认 2000 仅为声明性兜底）、`RESOLVE_MAX_TURNS=5`、单条历史截断 200 字、`RESOLVE_MAX_TOKENS=200`；超时/空/异常一律降级原句；语气词既不消解也不写缓存。
+- 实测样本（`logs/app.log`）：2026-09-02 调参期 changed 16 / error 9（当时超时值偏低，超时占多数）；2026-09-18 真实前端多轮会话 2 条均为 **unchanged**（自包含原样返回）——两句都是**无指代词、也非省略触发词开头**的长句（"我想买个性价比高的桌子有什么推荐吗"、"乐歌 E2 电动升降桌 1.2M 灰胡桃木色还有货吗"），按旧正则门控必为 PASS_THROUGH 零调用，可反证入口已按"多轮无条件"调用 LLM。
 - 缓存命中判定为**逐条线性余弦比较**（ZSET 仅提供条目清单与清理排序，非 ANN），命中后 `update_metadata` 刷新 score，支撑 LRU 淘汰。
 - 向量化通道由 `EMBEDDING_TYPE` 决定：现网日志为 qwen text-embedding-v4（DashScope，1024 维 + L2 归一化），可切 ollama/local 兜底（`embed_in_batches` 承担索引侧分批重试）。
-- 总开关：`SEMANTIC_CACHE_ENABLED=false`（查与写全关）、`RESOLVE_ENABLED=false`（退化无消解行为），用于调试一键回滚。
+- 总开关：`SEMANTIC_CACHE_ENABLED=false`（缓存查与写全关，故缓存侧消解入口随之休眠）、`RESOLVE_ENABLED=true`（入口消解**生效中**；置 false 则完全退化为无消解行为）、`RESOLVE_SKIP_FILLER=true`，用于调试一键回滚。
 
 ### 4.3 主图模块：LangGraph 双维意图识别与路由
 
@@ -777,7 +802,7 @@ flowchart TD
     API -->|"无 thread_id"| NEW["新会话<br/>生成 thread_id + InputState"]
     API -->|"已有 thread_id"| CTD["多轮会话<br/>PostgresSaver 加载检查点"]
     API -->|"存在中断"| RSM["中断恢复<br/>Command(resume) 继续人工确认"]
-    NEW --> RESOLVE["入口前置指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    NEW --> RESOLVE["入口前置指代消解<br/>多轮无条件 LLM 统一消解<br/>（图执行前完成；首条/语气词直通）"]
     CTD --> RESOLVE
     RSM --> RESOLVE
 
@@ -814,8 +839,8 @@ flowchart TD
 **关键说明**:
 
 1. **入口三态**：同一端点根据 thread_id 区分新会话 / 多轮续聊 / 中断恢复（human-in-the-loop）
-2. **入口前置指代消解**：多轮代词/省略（"那个有货吗"）在 `graph.astream` 前完成改写（规则门控 + LLM 补全），首条消息无历史直接透传；图内意图识别与检索拿到的均为完整问题
-3. **入口语义缓存检索**：消解后、进图前按 user_id 查缓存（key=消解后消息），命中短路返回不进图；未命中走图，完整回答生成后回写（非空才写，语气词/失败不写）；含指代且无历史可消解时跳过缓存检索
+2. **入口前置指代消解**：多轮非语气词消息（"那个有货吗"）在 `graph.astream` 前完成改写（**多轮无条件 LLM 统一消解**，正则门控已在入口侧弃用——2026-09-18 同步），首条消息无历史直接透传、纯语气词跳过；图内意图识别与检索拿到的均为完整问题
+3. **入口语义缓存检索**：消解后、进图前按 user_id 查缓存（key=消解后消息），命中短路返回不进图；未命中走图，完整回答生成后回写（非空才写，语气词/失败不写）；无历史的首条消息直通后照常 lookup（当前 `SEMANTIC_CACHE_ENABLED=false`，查与写整体关闭）
 4. **状态持久化**：PostgresSaver 检查点在每个节点执行后自动写入 PostgreSQL，服务重启不丢失
 5. **流式输出**：`stream_mode="messages"` 让每个 AIMessage chunk 实时推送给前端
 6. 对话记录落库（conversations/messages 表）由前端经 `/api/conversations/save-messages` 接口保存，langgraph 路径的会话状态由检查点承载
@@ -825,7 +850,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     Q["用户输入"]
-    RESOLVE["入口指代消解<br/>规则门控 → LLM 补全<br/>（图执行前完成）"]
+    RESOLVE["入口指代消解<br/>多轮无条件 LLM 统一消解<br/>（图执行前完成；首条/语气词直通）"]
     CACHE{"语义缓存检索<br/>key=消解后消息"}
     SG["ScopeGuard<br/>关键词预检"]
     Q --> RESOLVE
@@ -973,7 +998,7 @@ flowchart TD
 ### 7.2 语义缓存存储
 
 ```
-用户问题 → 分级指代消解 → EmbeddingProvider → Redis:
+用户问题 → 指代消解（入口=多轮无条件 LLM；缓存入口待改造为同源）→ EmbeddingProvider → Redis:
   {prefix}:vec:{md5}  → JSON 向量（md5 基于消解后消息）
   {prefix}:resp:{md5} → 回复文本
   {prefix}:meta:{md5} → 访问元数据
@@ -1077,7 +1102,7 @@ score(doc) = Σ 1/(k + rank_i)  # k=60, rank_i 是文档在第 i 路检索中的
 **工程细节**:
 
 - 按用户隔离缓存 (`prefix:user_id:...`)
-- **分级指代消解**：三层规则引擎（显性指代 / 省略主语 / 纯语气词）先过滤，80% 完整问题零开销透传、15% 含指代消息才调 LLM 补全（temperature=0 保证确定性、2s 超时失败降级透传）、纯语气词不查不写避免污染
+- **入口统一消解**（2026-09-18 同步）：多轮非语气词消息一律一次 LLM 调用完成指代消除 + 省略补全（6 规则 prompt，"已完整则原样返回"为主路径），temperature=0 保证同输入同输出、超时/失败降级原句、纯语气词不查不写避免污染；**原"三层规则引擎门控（约 15% 含指代消息才调 LLM）"已在入口侧弃用**——正则无法覆盖换问法与新指代写法，改以三态日志（unchanged/changed/error）观测 no-op 率；缓存入口仍是旧两段式（未改造，见 §4.2）
 - **lookup/update 同源消解**：缓存 key 基于消解后消息 MD5，保证"那个有货吗"与"扫地机器人X1有货吗"命中同一缓存
 - **graphrag 入口前置检索**：`/api/langgraph/query` 消解后、进图前查缓存，命中短路跳过整个图流程；未命中走图、完整回答后回写（两条链路共享按 user_id 的缓存池）
 - **ZSET 有序索引** + `redis.asyncio` 异步客户端 + 实例池化（消除 keys 全库扫描与事件循环阻塞）
@@ -1121,7 +1146,7 @@ app:
 | **检索质量闭环** | 混合检索 → Reranker 精排，DB 内检索 + 交叉编码器把关 |
 | **多层护栏** | 范围预检 + 超时保护，层层保障 |
 | **内存管理成熟** | 三层摘要 + Token 预算 + Redis 缓存，处理长对话 |
-| **成本控制意识** | 语义缓存降本 + 入口指代消解门控（仅约 15% 含指代消息调 LLM） |
+| **成本控制意识** | 语义缓存降本 + 入口消解可配降档（`RESOLVE_MODEL`）与三态日志观测 no-op 率；代价是消解面扩大——多轮非语气词消息一律 1 次 LLM 调用（2026-09-18 同步，原"仅约 15% 门控"已在入口侧弃用） |
 
 ### 9.3 工程实践
 
