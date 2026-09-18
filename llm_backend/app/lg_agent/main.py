@@ -10,6 +10,7 @@ sys.path.append(str(root_dir))
 from app.lg_agent.lg_states import InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
+from app.lg_agent.stream_filter import StreamChunkFilter
 from app.core.logger import get_logger
 import asyncio
 import builtins
@@ -24,9 +25,12 @@ async def process_query(query):
     try:
         inputState = InputState(messages=query)
 
+        # 出口闸门与 HTTP 入口共用，防同源过滤逻辑再次分叉（app/lg_agent/stream_filter.py）
+        chunk_filter = StreamChunkFilter()
         async for c, metadata in graph.astream(input=inputState, stream_mode="messages", config=thread):
-            if c.content and "research_plan" not in metadata.get("tags", []):
-                print(c.content, end="", flush=True)
+            text = chunk_filter.select(c, metadata)
+            if text:
+                print(text, end="", flush=True)
     except Exception as e:
         logger.exception("CLI 查询处理失败: {}", str(e))
         raise

@@ -25,6 +25,7 @@ import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
+from app.lg_agent.stream_filter import StreamChunkFilter
 from app.services.pronoun_detector import _is_filler  # 语气词闸门临时借用（SPEC_ENTRY_LLM_RESOLUTION 落地后 FILLER 迁入 redis_semantic_cache，届时改 import）
 from app.services.pronoun_resolver import resolve_pronouns
 from app.services.redis_semantic_cache import RedisSemanticCache
@@ -428,18 +429,22 @@ async def langgraph_query(
         async def process_stream():
             # 收集完整回答，图结束后回写语义缓存
             complete_response = []
+            # 出口闸门：内部推理（router/planner）不外泄 + 售前容器节点不重复，
+            # 见 app/lg_agent/stream_filter.py（旧 tag 黑名单误挡售前 summarize）
+            chunk_filter = StreamChunkFilter()
             async for c, metadata in graph.astream(
                 input=input_state,
                 stream_mode="messages",
                 config=thread_config
             ):
-                if c.content and "research_plan" not in metadata.get("tags", []) and not c.additional_kwargs.get("tool_calls"):
-                    complete_response.append(c.content)
-                    content_json = json.dumps(c.content, ensure_ascii=False)
-                    yield f"data: {content_json}\n\n"
-                elif c.additional_kwargs.get("tool_calls"):
-                    tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                    logger.debug("Tool call: {}", tool_data)
+                text = chunk_filter.select(c, metadata)
+                if text is None:
+                    if c.additional_kwargs.get("tool_calls"):
+                        tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
+                        logger.debug("Tool call: {}", tool_data)
+                    continue
+                complete_response.append(text)
+                yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
             # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存；
             # 纯语气词由缓存内部 _resolve_message 判定跳过，不在此门控）
             if complete_response:
