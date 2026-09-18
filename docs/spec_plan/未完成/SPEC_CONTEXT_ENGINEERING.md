@@ -542,7 +542,7 @@ sequenceDiagram
 | 3 | ❌ 不要解析 Checkpointer 内部序列化数据做业务查询 | 🟡 重要 | 当前用 PostgresSaver（已符合） |
 | 4 | ❌ 不要把摘要作为消息追加进 messages 列表 | 🟡 重要 | 当前以 SystemMessage 追加（待改） |
 | 5 | ❌ 不要将业务库对话记录回填 state 做正常会话恢复 | 🟡 重要 | N/A |
-| 6 | ✅ 阈值不要贴近模型最大窗口 | 🟡 重要 | 当前 TokenBudget=8000 偏低 |
+| 6 | ✅ 阈值不要贴近模型最大窗口 | 🟡 重要 | 原 TokenBudget=8000 偏低；2026-09-18 精简后已无总量预算，仅剩 800/2000 两部分裁剪阈值——总量控制仍缺失（本规格 §5 待实施） |
 | 7 | ✅ 业务库单机限制，多实例需迁移 | 🟢 注意 | 业务库已为 PostgreSQL（conversations/messages 表） |
 
 ---

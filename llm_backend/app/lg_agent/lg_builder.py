@@ -189,7 +189,7 @@ async def respond_to_general_query(
     conversation_id = config.get("configurable", {}).get("thread_id", None)
     memory_manager = MemoryManager(llm=model, cache=MemoryCache())
     managed_messages = await memory_manager.manage(
-        state.messages, system_prompt=system_prompt, conversation_id=conversation_id
+        state.messages, conversation_id=conversation_id
     )
     messages = [{"role": "system", "content": system_prompt}] + managed_messages
     response = await model.ainvoke(messages)
@@ -263,7 +263,7 @@ async def clarify_node(
         conversation_id = config.get("configurable", {}).get("thread_id", None)
         memory_manager = MemoryManager(llm=model, cache=MemoryCache())
         managed_messages = await memory_manager.manage(
-            state.messages, system_prompt=system_prompt, conversation_id=conversation_id
+            state.messages, conversation_id=conversation_id
         )
         messages = [{"role": "system", "content": system_prompt}] + managed_messages
         response = await model.ainvoke(messages)

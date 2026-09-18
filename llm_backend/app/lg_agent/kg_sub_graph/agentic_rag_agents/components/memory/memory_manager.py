@@ -10,7 +10,7 @@
     1. 输入：完整的 state.messages
     2. 分层：按轮次切分为三层
     3. 压缩：对老消息调用 LLM 生成摘要
-    4. 预算检查：TokenBudgetManager 检查总 token 是否超限
+    4. 阈值裁剪：摘要超 800 tokens 按句裁剪，最近对话超 2000 tokens 丢最老的
     5. 输出：[系统提示] + [高层摘要] + [中等摘要] + [最近对话]
 """
 
@@ -44,7 +44,6 @@ class MemoryManager:
     def __init__(
         self,
         llm: BaseChatModel,
-        total_budget: int = 8000,
         recent_window: int = DEFAULT_RECENT_WINDOW,
         medium_turns: int = DEFAULT_MEDIUM_TURNS,
         budgets: Optional[Dict[str, int]] = None,
@@ -53,16 +52,15 @@ class MemoryManager:
         """
         Args:
             llm: 用于压缩摘要的 LLM
-            total_budget: 总 token 预算
             recent_window: 保留最近几轮完整对话
             medium_turns: 中等摘要覆盖的轮数
-            budgets: 自定义各部分预算分配
+            budgets: 自定义各部分裁剪阈值
             cache: Redis 缓存实例（可选，不传则不使用缓存）
         """
         self.llm = llm
         self.recent_window = recent_window
         self.medium_turns = medium_turns
-        self.budget = TokenBudgetManager(total_budget=total_budget, budgets=budgets)
+        self.budget = TokenBudgetManager(budgets=budgets)
         self.cache = cache
 
         # 内存中的摘要缓存（无 Redis 时的降级方案）
@@ -98,17 +96,13 @@ class MemoryManager:
     async def manage(
         self,
         messages: List[Any],
-        system_prompt: str = "",
-        documents_text: str = "",
         conversation_id: Optional[str] = None,
     ) -> List[Any]:
         """
-        管理对话历史，返回符合 token 预算的消息列表。
+        管理对话历史，返回按阈值裁剪后的消息列表。
 
         Args:
             messages: 完整的对话历史消息列表
-            system_prompt: 系统提示词（固定占用预算）
-            documents_text: 检索到的文档文本（固定占用预算）
             conversation_id: 会话 ID（可选，传入则启用 Redis 缓存）
 
         Returns:
@@ -187,19 +181,11 @@ class MemoryManager:
         # 4. 构建摘要系统消息
         summary_text = "\n".join(summary_parts) if summary_parts else ""
 
-        # 5. Token 预算检查与裁剪
-        actual_usage = {
-            "system_prompt": self.budget.count_tokens(system_prompt),
-            "history_summary": self.budget.count_tokens(summary_text),
-            "documents": self.budget.count_tokens(documents_text),
-        }
-
-        # 裁剪摘要如果超预算
-        if actual_usage["history_summary"] > self.budget.budgets.get("history_summary", 800):
-            summary_text = self.budget.trim_text(
-                summary_text, self.budget.budgets.get("history_summary", 800)
-            )
-            actual_usage["history_summary"] = self.budget.count_tokens(summary_text)
+        # 5. 摘要超阈值则按句裁剪（保留开头）
+        summary_budget = self.budget.budgets.get("history_summary", 800)
+        if self.budget.count_tokens(summary_text) > summary_budget:
+            summary_text = self.budget.trim_text(summary_text, summary_budget)
+        summary_tokens = self.budget.count_tokens(summary_text)
 
         # 6. 组装最终消息列表
         result = []
@@ -208,20 +194,16 @@ class MemoryManager:
         if summary_text:
             result.append(SystemMessage(content=f"以下是之前的对话摘要：\n{summary_text}"))
 
-        # 最近的完整对话
+        # 最近的完整对话（超阈值则从最老的开始丢弃，保留最新的）
         recent_messages = [msg for pair in recent_pairs for msg in pair]
-
-        # 检查最近对话是否超预算
-        recent_tokens = self.budget.count_messages_tokens(recent_messages)
         recent_budget = self.budget.budgets.get("recent_history", 2000)
 
-        if recent_tokens > recent_budget:
-            # 从最老的开始裁剪，保留最新的
+        if self.budget.count_messages_tokens(recent_messages) > recent_budget:
             trimmed = self._trim_messages_to_budget(recent_messages, recent_budget)
-            result.extend(trimmed)
             logger.info("最近对话裁剪: {} -> {} 条", len(recent_messages), len(trimmed))
-        else:
-            result.extend(recent_messages)
+            recent_messages = trimmed
+
+        result.extend(recent_messages)
 
         self._last_processed_count = len(messages)
 
@@ -237,10 +219,9 @@ class MemoryManager:
 
         total_tokens = self.budget.count_messages_tokens(result)
         logger.info(
-            "记忆管理完成: {} 条消息, ~{} tokens "
-            "(摘要 {} + 最近 {})",
+            "记忆管理完成: {} 条消息, ~{} tokens (摘要 {} + 最近 {})",
             len(result), total_tokens,
-            actual_usage["history_summary"], self.budget.count_messages_tokens(recent_messages),
+            summary_tokens, self.budget.count_messages_tokens(recent_messages),
         )
 
         return result
