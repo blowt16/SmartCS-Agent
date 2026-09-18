@@ -344,7 +344,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["多轮非语气词消息"] --> B["组装 prompt：<br/>system = 6 条规则（补全指代/省略；<br/>已完整则原样返回；命令式补全为查询意图；<br/>不加历史外信息；只输出问题文本）<br/>user = 最近 5 轮历史 + 当前问题"]
-    B --> C["LLM 调用<br/>（temperature=0，max_tokens=200，<br/>超时 RESOLVE_TIMEOUT_MS=10s；<br/>可用 RESOLVE_MODEL 换同 provider 模型降档）"]
+    B --> C["LLM 调用<br/>（temperature=0，<br/>reasoning_effort=none 关推理，<br/>max_tokens=RESOLVE_MAX_TOKENS=1024，<br/>超时 RESOLVE_TIMEOUT_MS=10s）"]
     C --> D{"输出与原文相同?"}
     D -->|"是"| E1["unchanged 自包含：原样返回<br/>（no-op 观测——完整问题也必经一次调用）"]
     D -->|"否"| E2["changed：输出补全后的完整问题"]
@@ -400,7 +400,8 @@ flowchart LR
 **要点**：
 
 - 两个独立实例池：语义缓存 `RedisSemanticCache.get_instance(prefix, user_id)` 按用户池化（每用户一个实例 + 一个清理任务）；记忆摘要缓存 `MemoryCache` 按会话（§4.6）。
-- 消解调用面（2026-09-18 同步）：入口为**多轮无条件**——凡有历史且非纯语气词的消息一律调一次 LLM，原"分级门控把调用压在约 15% 含指代消息"已不适用；成本改由 `RESOLVE_MODEL` 降档（空 = 沿用 CHAT_SERVICE 模型）与三态日志观测 no-op 率来控。参数：`RESOLVE_LLM_TEMPERATURE=0.0`（同输入同输出，是缓存 key 一致性的前提）、`RESOLVE_TIMEOUT_MS=10000`（`.env` 生效值；`config.py` 默认 2000 仅为声明性兜底）、`RESOLVE_MAX_TURNS=5`、单条历史截断 200 字、`RESOLVE_MAX_TOKENS=200`；超时/空/异常一律降级原句；语气词既不消解也不写缓存。
+- 消解调用面（2026-09-18 同步）：入口为**多轮无条件**——凡有历史且非纯语气词的消息一律调一次 LLM，原"分级门控把调用压在约 15% 含指代消息"已不适用；成本改由 `RESOLVE_MODEL` 降档（空 = 沿用 CHAT_SERVICE 模型）与三态日志观测 no-op 率来控。参数（2026-09-18 全部收进 `config.py` + `.env` 单一分节，原 `pronoun_resolver.py` 硬编码常量已删）：`RESOLVE_LLM_TEMPERATURE=0.0`（同输入同输出，是缓存 key 一致性的前提）、`RESOLVE_TIMEOUT_MS=10000`（`.env` 生效值；`config.py` 默认 2000 仅为声明性兜底）、`RESOLVE_MAX_TURNS=5`、`RESOLVE_MAX_CHARS_PER_MSG=200`（单条历史截断）、`RESOLVE_MAX_TOKENS=1024`、`RESOLVE_REASONING_EFFORT=none`（**关闭推理**）；超时/空/异常一律降级原句；语气词既不消解也不写缓存。
+- **消解推理与 max_tokens（2026-09-18，`docs/项目问题.md #13`）**：本 provider（deepseek 系）为**推理模型**，`reasoning_tokens` 计入 `completion_tokens`——原 `max_tokens=200` 被推理 token 间歇吃满 → `finish_reason=length` 且 `content` 为空 → 静默降级为残缺 query（生产实测 10 次消解 4 次，集中在省略主语场景）。整改：`RESOLVE_REASONING_EFFORT=none` 关推理（实测 12 用例 A/B：开 9/12 含 3 条空返回，关 12/12 零空返回）+ `RESOLVE_MAX_TOKENS=1024` 兜底。**空返回与"unchanged 原样返回"在返回值上不可区分**，排查时须看日志三态而非比对结果。
 - 实测样本（`logs/app.log`）：2026-09-02 调参期 changed 16 / error 9（当时超时值偏低，超时占多数）；2026-09-18 真实前端多轮会话 2 条均为 **unchanged**（自包含原样返回）——两句都是**无指代词、也非省略触发词开头**的长句（"我想买个性价比高的桌子有什么推荐吗"、"乐歌 E2 电动升降桌 1.2M 灰胡桃木色还有货吗"），按旧正则门控必为 PASS_THROUGH 零调用，可反证入口已按"多轮无条件"调用 LLM。
 - 缓存命中判定为**逐条线性余弦比较**（ZSET 仅提供条目清单与清理排序，非 ANN），命中后 `update_metadata` 刷新 score，支撑 LRU 淘汰。
 - 向量化通道由 `EMBEDDING_TYPE` 决定：现网日志为 qwen text-embedding-v4（DashScope，1024 维 + L2 归一化），可切 ollama/local 兜底（`embed_in_batches` 承担索引侧分批重试）。

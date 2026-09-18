@@ -8,8 +8,8 @@
 设计原则：
     - 只做补全，不做扩展：LLM 只负责把依赖上下文的成分补全为完整独立的问题
     - 消解失败不阻塞：超时/空结果/异常一律降级为原始消息，保证主流程不中断
-    - 与 LLM 后端解耦：通过 generate(messages, temperature=, max_tokens=) 鸭子类型调用，
-      DeepseekService / OllamaService 均可（二者签名一致）
+    - 与 LLM 后端解耦：通过 generate(messages, temperature=, max_tokens=, reasoning_effort=)
+      鸭子类型调用，DeepseekService / OllamaService 均可（二者签名一致）
     - 三态日志：unchanged（自包含原样）/ changed（补全）/ error（降级），供 no-op 率观测
 
 用法:
@@ -24,12 +24,6 @@ from app.core.config import settings
 from app.core.logger import get_logger
 
 logger = get_logger(service="pronoun_resolver")
-
-# 单条历史消息的最大截断长度（防止 prompt 过长）
-RESOLVE_MAX_CHARS_PER_MSG = 200
-
-# 消解 max_tokens：只需返回一个问题文本
-RESOLVE_MAX_TOKENS = 200
 
 RESOLVE_SYSTEM_PROMPT = """你是一个多轮对话的指代消解与语义补全专家。
 你的任务是根据对话历史，把用户当前问题中依赖上下文的成分（指代词、省略的主语/宾语、不完整信息）补全为完整、独立的问题。
@@ -48,7 +42,7 @@ def _format_history(messages: List[Dict], max_turns: int) -> str:
     将消息列表格式化为 LLM 可读的对话历史文本。
 
     只取最近 max_turns 轮（1轮 = 1条用户 + 1条助手），每条截断到
-    RESOLVE_MAX_CHARS_PER_MSG 字，避免历史过长导致 prompt 超长。
+    settings.RESOLVE_MAX_CHARS_PER_MSG 字，避免历史过长导致 prompt 超长。
 
     Args:
         messages: 完整对话消息列表（最后一条为待消解的当前用户消息）
@@ -67,8 +61,8 @@ def _format_history(messages: List[Dict], max_turns: int) -> str:
     for msg in chat_msgs:
         role = "用户" if msg["role"] == "user" else "助手"
         content = msg["content"]
-        if len(content) > RESOLVE_MAX_CHARS_PER_MSG:
-            content = content[:RESOLVE_MAX_CHARS_PER_MSG]
+        if len(content) > settings.RESOLVE_MAX_CHARS_PER_MSG:
+            content = content[:settings.RESOLVE_MAX_CHARS_PER_MSG]
         lines.append(f"{role}: {content}")
 
     return "\n".join(lines)
@@ -99,7 +93,8 @@ async def resolve_pronouns(llm_service, messages: List[Dict], raw_query: str) ->
             llm_service.generate(
                 prompt_messages,
                 temperature=settings.RESOLVE_LLM_TEMPERATURE,
-                max_tokens=RESOLVE_MAX_TOKENS,
+                max_tokens=settings.RESOLVE_MAX_TOKENS,
+                reasoning_effort=settings.RESOLVE_REASONING_EFFORT or None,
             ),
             timeout=settings.RESOLVE_TIMEOUT_MS / 1000,
         )

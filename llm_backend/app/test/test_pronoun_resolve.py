@@ -4,16 +4,19 @@
 
 覆盖:
   §10.1 检测器 10 用例 + 边界词
-  消解器: 正常 / 超时降级 / 空结果降级 / 异常降级 / 参数（temperature=0, max_tokens=200）
+  消解器: 正常 / 超时降级 / 空结果降级 / 异常降级 / 参数（temperature=0 / max_tokens / reasoning_effort 均取 settings）
+  LLM 服务: reasoning_effort 鸭子类型签名 + DeepseekService 透传（stub client）/ 历史截断长度配置化
   缓存层: SKIP_CACHE 不查不写 / NEED_RESOLVE 消解后查找 / 命中返回 / key 基于消解后消息
   真实 Redis 冒烟: lookup/update 全链路（独立 prefix，测试后清理）
 """
 
 import asyncio
 import hashlib
+import inspect
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 # 保证 app 包可导入（脚本位于 app/test/ 下）
@@ -24,8 +27,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 from app.core.config import settings
+from app.services.deepseek_service import DeepseekService
+from app.services.ollama_service import OllamaService
 from app.services.pronoun_detector import detect_pronoun, DetectionDecision
-from app.services.pronoun_resolver import resolve_pronouns
+from app.services.pronoun_resolver import resolve_pronouns, _format_history
 from app.services.redis_semantic_cache import RedisSemanticCache
 
 PASS, FAIL = 0, 0
@@ -81,16 +86,18 @@ def test_detector():
 
 
 class FakeLLM:
-    """mock LLM：记录 temperature/max_tokens，返回预设结果"""
+    """mock LLM：记录 temperature/max_tokens/reasoning_effort，返回预设结果"""
 
     def __init__(self, result="扫地机器人X1有货吗"):
         self.result = result
         self.received_temperature = None
         self.received_max_tokens = None
+        self.received_reasoning_effort = None
 
-    async def generate(self, messages, temperature=None, max_tokens=None):
+    async def generate(self, messages, temperature=None, max_tokens=None, reasoning_effort=None):
         self.received_temperature = temperature
         self.received_max_tokens = max_tokens
+        self.received_reasoning_effort = reasoning_effort
         return self.result
 
 
@@ -107,7 +114,11 @@ async def test_resolver():
     r = await resolve_pronouns(llm, HISTORY, "那个有货吗")
     check("正常消解返回完整问题", r == "扫地机器人X1有货吗", f"got {r}")
     check("temperature=0.0 传入 LLM", llm.received_temperature == 0.0, f"got {llm.received_temperature}")
-    check("max_tokens=200 传入 LLM", llm.received_max_tokens == 200, f"got {llm.received_max_tokens}")
+    check(f"max_tokens 取配置值 settings.RESOLVE_MAX_TOKENS={settings.RESOLVE_MAX_TOKENS}",
+          llm.received_max_tokens == settings.RESOLVE_MAX_TOKENS, f"got {llm.received_max_tokens}")
+    check(f"reasoning_effort 取配置值 {settings.RESOLVE_REASONING_EFFORT!r}",
+          llm.received_reasoning_effort == settings.RESOLVE_REASONING_EFFORT,
+          f"got {llm.received_reasoning_effort}")
 
     r = await resolve_pronouns(FakeLLM(""), HISTORY, "那个有货吗")
     check("空结果 → 降级为原始消息", r == "那个有货吗")
@@ -129,6 +140,65 @@ async def test_resolver():
         check("超时(100ms) → 降级为原始消息", r == "那个有货吗")
     finally:
         settings.RESOLVE_TIMEOUT_MS = old_timeout
+
+
+def test_history_truncation_configurable():
+    """历史单条截断长度取配置值（临时改小 settings 值即可观测，证明未被硬编码）"""
+    print("[消解器] 历史截断长度配置化")
+    old = settings.RESOLVE_MAX_CHARS_PER_MSG
+    settings.RESOLVE_MAX_CHARS_PER_MSG = 5
+    try:
+        hist = [
+            {"role": "user", "content": "问题"},
+            {"role": "assistant", "content": "商" * 50},
+            {"role": "user", "content": "追问"},
+        ]
+        text = _format_history(hist, max_turns=5)
+        body = text.split("助手: ")[1].strip()
+        check("助手消息按 settings.RESOLVE_MAX_CHARS_PER_MSG=5 截断",
+              len(body) == 5, f"got {len(body)} 字")
+    finally:
+        settings.RESOLVE_MAX_CHARS_PER_MSG = old
+
+
+# ==================== 2b. LLM 服务参数透传（方案A/B 回归防线） ====================
+
+
+def test_llm_service_signature():
+    """鸭子类型契约：两个 LLM 服务的 generate 都必须接受 reasoning_effort"""
+    print("[LLM 服务] generate 签名（鸭子类型契约）")
+    for cls in (DeepseekService, OllamaService):
+        params = inspect.signature(cls.generate).parameters
+        check(f"{cls.__name__}.generate 接受 reasoning_effort",
+              "reasoning_effort" in params, f"got {list(params)}")
+
+
+async def test_deepseek_generate_passthrough():
+    """DeepseekService.generate 把 reasoning_effort 透传给 API（stub client，不联网）"""
+    print("[LLM 服务] DeepseekService.generate 参数透传")
+    svc = DeepseekService.__new__(DeepseekService)  # 跳过 __init__，不创建真实 client
+    svc.model = "stub"
+    captured = {}
+
+    class _StubCompletions:
+        async def create(self, **kwargs):
+            captured.clear()
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+
+    svc.client = SimpleNamespace(chat=SimpleNamespace(completions=_StubCompletions()))
+    msg = [{"role": "user", "content": "hi"}]
+
+    await svc.generate(msg, temperature=0.0, max_tokens=1024, reasoning_effort="none")
+    check("reasoning_effort='none' 透传到 API",
+          captured.get("reasoning_effort") == "none", f"got {captured.get('reasoning_effort')}")
+    check("max_tokens 透传到 API", captured.get("max_tokens") == 1024, f"got {captured.get('max_tokens')}")
+
+    await svc.generate(msg, temperature=0.0)
+    check("未配置 reasoning_effort 时不传该参数（不影响其他调用方）",
+          "reasoning_effort" not in captured, f"got {captured.get('reasoning_effort')}")
+    check("未配置 max_tokens 时不传该参数", "max_tokens" not in captured)
 
 
 # ==================== 3. 缓存层（mock redis） ====================
@@ -285,6 +355,9 @@ async def test_redis_smoke():
 async def main():
     test_detector()
     await test_resolver()
+    test_history_truncation_configurable()
+    test_llm_service_signature()
+    await test_deepseek_generate_passthrough()
     await test_cache_skip()
     await test_cache_resolve()
     await test_cache_hit()

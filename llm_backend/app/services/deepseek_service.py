@@ -94,13 +94,16 @@ class DeepseekService:
             error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
             yield f"data: {error_msg}\n\n"
 
-    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None) -> str:
+    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None,
+                       reasoning_effort: str = None) -> str:
         """非流式生成回复
 
         Args:
             messages: OpenAI 格式消息列表
             temperature: 采样温度（None 时用 API 默认值）
-            max_tokens: 最大输出 token 数（None 时用 API 默认值）
+            max_tokens: 最大输出 token 数（None 时用 API 默认值）——本 provider 为推理模型，
+                reasoning_tokens 计入该配额，给小会 finish_reason=length 且 content 为空
+            reasoning_effort: 推理开关（"none" = 关闭推理；None 时不传该参数用 API 默认）
         """
         try:
             kwargs = {}
@@ -108,6 +111,8 @@ class DeepseekService:
                 kwargs["temperature"] = temperature
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
+            if reasoning_effort is not None:
+                kwargs["reasoning_effort"] = reasoning_effort
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,

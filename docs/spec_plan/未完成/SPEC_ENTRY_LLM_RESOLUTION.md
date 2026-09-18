@@ -1,9 +1,10 @@
 # 入口多轮消息 LLM 统一消解（指代消除 + 语义补全）实施规格
-> **归档状态**: 🔶 部分实施（2026-09-02，main 入口侧落地，提交见 git log）
+> **归档状态**: 🔶 部分实施（2026-09-02 main 入口侧落地；2026-09-18 消解参数配置化整改完成，见 `docs/项目问题.md #13`——未落地部分仍为缓存入口侧 #11）
 > **已落地清单（main 入口侧）**：
 > - main.py 入口统一消解：正则门控删除（detect_pronoun/DetectionDecision 不再引用），多轮非语气词消息无条件 LLM 消解、纯语气词/无历史直通；缓存 lookup/update 无条件调用；`_is_filler` 临时借用 pronoun_detector（缓存入口改造后迁入 redis_semantic_cache）
 > - RESOLVE_SYSTEM_PROMPT 重写为 6 规则全文（§3.2，含自包含原样返回主路径、指令类规则、省略示例"需要充电吗"）；消解日志改三态（unchanged/changed/error）供 no-op 率观测
 > - RESOLVE_MODEL 入 config（§4.3，默认空=沿用 CHAT_SERVICE）+ LLMFactory/DeepseekService model 参数化（同 provider 降档）+ .env 注释行
+> - **消解参数配置化整改（2026-09-18，`docs/项目问题.md #13`）**：`RESOLVE_MAX_TOKENS` / `RESOLVE_REASONING_EFFORT` / `RESOLVE_MAX_CHARS_PER_MSG` 入 config+.env（原为 pronoun_resolver.py 硬编码常量）；消解默认**关闭推理**（`reasoning_effort=none`）——原 200 预算被推理 token 吃满导致 content 返回空、静默降级为残缺 query（生产实测 10 次消解 4 次降级，集中在省略主语场景）。注：spec §6 成本模型未预估 reasoning token，实际单次成本高于原估算
 > - evaluation/runner.py apply_entry_resolution 复刻新入口（无历史直通/多轮无条件消解，删除 detect 引用）
 > - test_entry_cache.py 按新入口语义重写（S1 无历史→lookup 执行未命中，20/20 通过）；test_pronoun_resolve.py 45/45 通过（缓存层未动）；全量 pytest 75/76（#8 既有失败）
 > **未落地清单（缓存入口侧，2026-09-02 决策推迟专项处理，见 docs/项目问题.md #11）**：

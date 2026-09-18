@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     RESOLVE_TIMEOUT_MS: int = 2000                          # 消解调用超时（毫秒）——声明性默认，实际值统一由 .env 的 RESOLVE_TIMEOUT_MS 配置（DeepSeek 单次调用约 2s，建议 ≥15000）
     RESOLVE_SKIP_FILLER: bool = True                        # 是否跳过纯语气词（不查不写，避免缓存污染）
     RESOLVE_MODEL: str = ""                                 # 消解专用模型（可选降档，同 provider 换模型名）；空 = 沿用 CHAT_SERVICE 模型；实际生效值由 .env 配置（env 统一入口，内联注释即文档）
+    RESOLVE_MAX_TOKENS: int = 1024                          # 消解输出上限——deepseek 系为推理模型，reasoning_tokens 计入该配额，给小会 finish_reason=length 且 content 为空 → 静默降级为残缺 query
+    RESOLVE_REASONING_EFFORT: str = "none"                  # 消解推理开关——"none"=关闭推理（消解是实体替换+补全，无需推理链；关闭后不再挤占 max_tokens，且结果稳定）；空串 = 沿用模型默认（传参时为空则不传该参数）
+    RESOLVE_MAX_CHARS_PER_MSG: int = 200                    # 消解历史单条消息截断长度（防 prompt 过长）
     
     # Embedding settings
     EMBEDDING_TYPE: EmbeddingServiceType = EmbeddingServiceType.OLLAMA  # 嵌入服务: local / ollama / qwen

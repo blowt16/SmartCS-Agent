@@ -64,13 +64,16 @@ class OllamaService:
             yield f"data: {error_msg}\n\n"
             raise
 
-    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None) -> str:
+    async def generate(self, messages: List[Dict], temperature: float = None, max_tokens: int = None,
+                       reasoning_effort: str = None) -> str:
         """非流式生成回复
 
         Args:
             messages: OpenAI 格式消息列表
             temperature: 采样温度（None 时用默认 0.7）
             max_tokens: 最大输出 token 数（None 时用模型默认）
+            reasoning_effort: 推理开关——Ollama /api/chat 无对应参数，接受但忽略
+                （仅用于对齐 DeepseekService 的鸭子类型签名，推理行为由所选模型决定）
         """
         try:
             options = {"temperature": temperature if temperature is not None else 0.7}
