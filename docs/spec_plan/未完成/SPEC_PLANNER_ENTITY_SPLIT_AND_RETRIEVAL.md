@@ -16,11 +16,12 @@
 > 1. **检索侧改为零 LLM 闭环**——源稿 §4.4 的 HyDE 与 LLM 相关性评分**不实施**：评分器已被 CrossEncoder 精排有意替代（`reranker_service.py:4` docstring 原文"替代原 LLM 相关性评分（grade_relevance）"），重新引入是架构回退；HyDE 当前代码零痕迹，属新建而非"移入"
 > 2. **跨分支去重落在 summarize 节点内**（源稿无明确落点），不新增图节点
 > 3. **`original_question` 字段取消**——原动机"预处理后的 question 被稀释"随预处理管道 2026-08-21 整体删除而消失，`state.question` 现即消解后完整句
-> 4. **新增实体约束检索**（name→sku→sku_codes），源稿无此项；以此替代 HyDE 承担"逐实体覆盖"职责
+> 4. ~~新增实体约束检索（name→sku→sku_codes）~~ **【2026-09-19 实测后否决，见差异 7 与 §4.6/§8 D10；该序号保留仅为与历史记录对账】**
 > 5. **P4（单任务空转 1 次 LLM）决策为保持独立调用**，不改调用结构（§8 D5）
 > 6. **planner 配置环境变量化**（§4.4.1）——新增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两个 `.env` 项，并显式写明动态补全（§4.4.2）不受拆解影响；2026-09-19 据评审确认补充
+> 7. **【2026-09-19 实测后回退】删除实体约束检索（原 §4.6）**——原"name→sku→RRF 后过滤"整层不做。两轮实测（A/B/C 三方案对照 + LLM 端到端作答）结论：约束对单商品事实问有收益（错召回块 25→3，动态区 4~8 行→3~4 行），但对列表/型号类问句反向误杀（丢 1~3 个 SKU，覆盖 9→6），且方向与"拆分"相悖；LLM 在动态区按【商品编码】配对取值的准确率已实测足够（见 §8 D10 与 §4.6 新文）。保留 summarize 装配层去重（§4.5）作为唯一过滤层。
 
-> **用途**: 售前（presale）链路 planner 节点与检索侧的合并改造——planner 从 Cypher 时代通用拆分模板改为商品场景的子问单元拆解（含实体名回填与一致性校验），检索侧在不新增 LLM 调用的前提下完成跨分支证据去重与实体约束
+> **用途**: 售前（presale）链路 planner 节点与检索侧的合并改造——planner 从 Cypher 时代通用拆分模板改为商品场景的子问单元拆解（含主题词产出与一致性校验），检索侧在不新增 LLM 调用、不削减召回的前提下完成跨分支证据去重（实体约束已于 2026-09-19 实测否决，见 §4.6）
 > **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector HNSW + pg_jieba BM25 + RRF + bge-reranker-v2-m3 CrossEncoder + DeepSeek/Ollama
 > **状态**: 设计规格，待实施（前置结构条件已满足：customer_tools 单例化 cf9e37b、子图简化与 planner 直连、子图进程级单例 29e6f73 均已落地）
 > **关联文档**: [[PROJECT_ANALYSIS.md]] §4.4 [[docs/项目问题.md]] #2/#3 [[SPEC_RAG_SKU_METADATA]]（sku_codes/chapter 透出）[[SPEC_ENTRY_LLM_RESOLUTION.md]]（入口消解产物入力）
@@ -62,16 +63,17 @@
 | 拆解可控 | 拆分动机收敛为两类（多实体 / 列表+详情并列）；总数 ≤3；校验失败一律回退单分支，回退率 <10% |
 | 消灭空任务穿透 | 空串 / 重复 / 超限 / LLM 异常 → 全部走同一回退出口，`Send(task="")` 结构性不可达 |
 | 确定性 | planner 拆解 `temperature=0`（对齐 Router 与入口消解） |
-| 逐实体覆盖 | 拆解分支的检索结果限定在实体自身商品块 + 政策/通用块（`sku_codes` 约束，fail-open） |
+| 检索召回不受损 | 拆解分支的检索行为与单分支逐字一致（同一 `search(query)` 签名、同一候选集、同一动态补全），**不施加任何实体过滤**（2026-09-19 实测回退，见 §8 D10） |
 | 不新增 LLM 调用 | 单实体首轮 ≤3 次（Router + planner + summarize）；缓存命中 0 次。**本稿不引入任何新 LLM 调用点** |
-| 证据不重复 | summarize 输入按 `chunk_id` 跨分支去重，同一块只进 prompt 一次 |
+| 证据不重复 | summarize 输入按 `chunk_id` 跨分支去重、动态行按 sku 合并，同一块/同一 sku 只进 prompt 一次 |
 
 ### 1.3 设计原则
 
 1. **宁可少拆，不可错拆**：拆解校验失败一律回退单分支（只损失召回，不产生误导性对比回答）
-2. **零 LLM 优先**：检索侧增强全部用确定性手段（字段过滤、集合去重），不引入新 LLM 调用点
-3. **fail-open**：实体约束解析不到 sku、过滤后候选为空 → 放弃约束继续检索，绝不让增强措施把链路做空
-4. **surgical**：`state["searches"]` 结构不动（`final_answer` history 与 `evaluation/runner.py:124` 依赖它做逐分支追溯），去重结果只影响 summarize 的输入装配
+2. **零 LLM 优先**：检索侧增强全部用确定性手段（集合去重、合并），不引入新 LLM 调用点
+3. **不削减召回**：任何"收窄候选集"的增强都默认不做——收窄与拆分（跨实体/跨型号遍历）方向相悖，且实测会误杀正确块（§4.6）
+4. **相关性交给精排与 LLM**：精排负责排序、LLM 负责按编码配对取值；系统不另造一套相关性判定
+5. **surgical**：`state["searches"]` 结构不动（`final_answer` history 与 `evaluation/runner.py:124` 依赖它做逐分支追溯），去重结果只影响 summarize 的输入装配
 
 ---
 
@@ -99,12 +101,14 @@
 | P5c | **跨分支无去重**：`summarize` 把 N 个分支的 `records` 原样拼进 prompt；而 `records` 含 `hybrid_docs`/`dynamic_rows` 原始 dict，与已渲染的 `result` 文本**重复**——同一块会在 prompt 中出现两次，且原始 dict 整份额外进 prompt | `summarize/node.py:42-49`、`customer_tools/node.py:83-109` |
 | P5d | 跨商品混合块实测占 66%（500 字符贪心切分下 33 块中 22 块跨商品）→ 含 A、B 的混合块会被两条子 query 各召回一次 | `docs/项目问题.md` #3 |
 
+> **本稿的对应关系（2026-09-19 回退后）**：上表 4 项中，**只有 P5c 是本稿要解决的**（由 §4.5 跨分支去重解决）。P5a/P5b 描述的是"无实体过滤"——本稿**有意维持现状**（§4.6 实测否决了加过滤的方案），故 `customer_tools/node.py` 与 `rag_retriever_service.search` 均不改。P5d 的混合块稀释属切分策略专项，不在本稿范围。
+
 ### 2.3 可用的确定性抓手（源稿未记载）
 
 | 抓手 | 位置 | 用途 |
 |---|---|---|
-| 每条 doc 带 `sku_codes`（`[]` = 政策/通用块）、`chapter`、`rerank_score` | `rag_retriever_service.py:55-73`、`:109` | 实体约束与相关性观测的现成字段 |
-| `product_price_stock` 同时有 `sku`（唯一键）与 `product_name`（唯一键），1:1 映射 | `models/product_price_stock.py:13-19` | 商品名 → sku 解析通道 |
+| 每条 doc 带 `sku_codes`（`[]` = 政策/通用块）、`chapter`、`rerank_score` | `rag_retriever_service.py:55-73`、`:109` | 相关性观测与"从 chunk 取 sku"的现成字段 |
+| `product_price_stock` 同时有 `sku`（唯一键）与 `product_name`（唯一键），1:1 映射 | `models/product_price_stock.py:13-19` | 动态区渲染的商品名来源（LLM 按名取值） |
 | `render_doc_blocks` / `render_dynamic_rows` 为两通道共用渲染器 | `app/tools/doc_block_renderer.py:16-56` | summarize 侧重渲染可直接复用，零格式漂移 |
 | `searches` 有 3 个消费方 | `summarize/node.py:42`、`final_answer/node.py:33-38`、`evaluation/runner.py:124` | 决定去重不得改变 `searches` 结构 |
 
@@ -128,13 +132,13 @@ main 入口 /api/langgraph/query
       └─ type=presale → create_research_plan
             └─ 售前子图（进程级单例 get_research_graph）
                  planner（LLM，T=0）
-                   ├─ 拆解通过 → tasks=[EntitySubQuery...]，每 Task 带 entity_name
-                   └─ 否则     → _fallback：单 Task = 原 query 原文（仍保留 LLM 给的 entity_name）
-                 → Send ×N 并行（payload 含 task / entity_name）
+                   ├─ 拆解通过 → tasks=[EntitySubQuery...]，每 Task 带 name（仅日志/观测）
+                   └─ 否则     → _fallback：单 Task = 原 query 原文
+                 → Send ×N 并行（payload 三键不变，无实体约束传入）
                       → customer_tools（零 LLM）
-                           entity_name → resolve_skus_by_product_name → entity_skus
-                           RAGRetrieverService.search(query, entity_skus=...)
-                             HNSW ∥ BM25 → RRF → [实体约束过滤] → 精排 → top_k=5
+                           RAGRetrieverService.search(query)      ← 签名与行为均不变
+                             HNSW ∥ BM25 → RRF → 精排 → top_k=5
+                           命中块 sku_codes → fetch_by_skus → 动态区
                  → summarize（LLM，T=0.7）
                       跨分支装配：chunk_id 去重 + 动态行按 sku 合并 + 统一渲染
                  → final_answer
@@ -170,6 +174,7 @@ class EntitySubQuery(BaseModel):
         description=(
             "本条任务的主题词：商品全名或品类词（如'米家智能晾衣机2'/'智能电动沙发'）。"
             "拆成多条任务（tasks≥2）时必须给出；无法确定实体时留空。"
+            "（仅用于日志与拆解质量观测，不流入检索侧——见 §4.1 说明）"
         ),
     )
     sub_query: str = Field(
@@ -190,22 +195,18 @@ class PlannerOutput(BaseModel):
 ```
 
 ```python
-# —— components/models.py 的 Task 增一个字段（其余不变）——
+# —— components/models.py 的 Task 不改（与现状逐字一致）——
 class Task(BaseModel):
     question: str = Field(..., description="The question to be addressed.")
     parent_task: str = Field(..., description="The parent task this task is derived from.")
-    entity_name: str = Field(
-        default="",
-        description="本条任务的主题词（planner 注入；检索侧实体约束入力，空=不加约束）",
-    )
     data: Optional[Any] = Field(default=None, description="The search result details.")
 ```
 
-> **`name` 的必填性说明（需评审确认）**：字段用 `default=""` 而非 `Field(...)` 强制必填。理由：`entity_count=0` 的合法 query（如"有没有推荐的吗"）不存在实体，schema 级必填会迫使 LLM 编造主题词；而 `with_structured_output` 校验失败会让**整条 query 回退单分支**，代价大于收益。因此"拆解时必填"约束落在**提示词 + 节点校验**两层：
-> - 提示词：拆成多条时每条必须给出主题词
-> - 节点：拆解分支（≥2 任务）若存在空 `name` → 该任务不带实体约束（fail-open）+ 日志记录空名率
+> **`Task` 不增字段**（2026-09-19 回退后确认）：原设计的 `entity_name` 字段随实体约束一并取消（§8 D10）。LLM 产出的主题词 `name` 仍保留在 `EntitySubQuery` 上，但**只用于节点日志与 §7.1 的空名率观测，不流入检索侧**——它不再承担任何检索语义。
+
+> **`name` 的性质（2026-09-19 更新）**：字段用 `default=""` 而非强制必填——`entity_count=0` 的合法 query（如"有没有推荐的吗"）不存在实体，schema 级必填会迫使 LLM 编造，且 `with_structured_output` 校验失败会让**整条 query 回退单分支**，代价大于收益。
 >
-> 若评审认为应改为 schema 级必填，改 `default=""` → `Field(..., min_length=1)` 即可，代价如上。
+> **该字段现已降级为纯观测字段**：实体约束取消（§4.6/§8 D10）后，`name` 不参与任何检索决策，只用于日志与 §7.1 的空名率统计。因此"拆解时空名"不再是 fail-open 场景，**也不再需要节点校验**——空名只影响观测指标，不影响链路行为。若后续专项要做实体识别，此字段是现成的输入口。
 
 ### 4.2 planner 提示词（全文替换）
 
@@ -270,9 +271,9 @@ def create_planner_prompt_template() -> ChatPromptTemplate:
 MAX_TASKS = 3  # 拆解上限：超过一律回退（宁可少拆）
 
 
-def _fallback(question: str, entity_name: str = "") -> List[Task]:
+def _fallback(question: str) -> List[Task]:
     """所有回退的唯一出口：单分支整句检索（question 恒为原 query 原文，不经 LLM）。"""
-    return [Task(question=question, parent_task=question, entity_name=entity_name)]
+    return [Task(question=question, parent_task=question)]
 
 
 async def planner(state: InputState) -> Dict[str, Any]:
@@ -295,21 +296,20 @@ async def planner(state: InputState) -> Dict[str, Any]:
         == len(planner_output.tasks)
     ):
         task_list = [
-            Task(question=t.sub_query.strip(), parent_task=question,
-                 entity_name=t.name.strip())
+            Task(question=t.sub_query.strip(), parent_task=question)
             for t in planner_output.tasks
         ]
         logger.info(
             "planner_decision: split={} (entity_count={}, names={})",
-            len(task_list), entity_count, [t.entity_name for t in task_list],
+            len(task_list), entity_count, [t.name.strip() for t in planner_output.tasks],
         )
     else:
-        # 单任务场景：LLM 的单任务文本一律丢弃（防改写，用原 query 原文），
-        # 但保留其 name 供检索侧实体约束（单实体事实查询同样受益，见 §4.6）
+        # 单任务场景：LLM 的单任务文本一律丢弃（防改写，用原 query 原文）。
+        # name 仅作观测（§7.1 空名率），不流入检索侧——实体约束已于 2026-09-19 取消（§8 D10）。
         single_name = ""
         if planner_output is not None and len(planner_output.tasks) == 1:
             single_name = planner_output.tasks[0].name.strip()
-        task_list = _fallback(question, single_name)
+        task_list = _fallback(question)
         reason = "llm_error" if planner_output is None else f"tasks={len(planner_output.tasks)}"
         logger.info("planner_decision: fallback (reason={}, name='{}')", reason, single_name)
 
@@ -323,12 +323,14 @@ async def planner(state: InputState) -> Dict[str, Any]:
 
 | 场景 | 处置 |
 |---|---|
-| LLM 调用异常 / 结构化输出解析失败 | `_fallback`，`reason=llm_error`，`entity_name=""` |
-| 任务数 < 2（含 LLM 返回单任务文本） | `_fallback`，**任务文本 = 原 query 原文**（不采用 LLM 文本），保留 LLM 的 `name` |
+| LLM 调用异常 / 结构化输出解析失败 | `_fallback`，`reason=llm_error`，日志 `name=''` |
+| 任务数 < 2（含 LLM 返回单任务文本） | `_fallback`，**任务文本 = 原 query 原文**（不采用 LLM 文本）；LLM 的 `name` 仅入日志 |
 | 任务数 > MAX_TASKS（3） | `_fallback`，`reason=tasks=N` |
 | 任一 `sub_query` 为空白 | `_fallback` |
 | 任务 `sub_query` 重复（strip 后集合去重计数不等） | `_fallback` |
 | 任务数 ∈ [2,3] 且全部通过 | 采用拆解，`split=N` |
+
+> 全部分支的 `Task` 只带 `question` / `parent_task` 两个业务字段——回退与拆解**产出结构完全一致**，下游无法也不需要区分自己拿到的是哪种分支。
 
 > `parent_task` 由节点注入（= 原 query），不再由 LLM 生成；`Task.model_dump()` 仍含该字段，`edges.py` 发送逻辑不变。
 
@@ -427,23 +429,25 @@ MAX_TASKS = settings.PLANNER_MAX_TASKS
 
 | 环节 | 现状 | 依据 |
 |---|---|---|
-| 扇出粒度 | `Send × N` 每个 task 一条消息，payload 仅 `task/question/parent_task`（本稿再加 `entity_name`），**无"是否并行分支"标志位** | `multi_tool.py:59-80`、`edges.py:12-21` |
-| 分支执行 | 每条 Send 独立进入 `customer_tools`，各自执行：`retriever.search(query, entity_skus=...)` → 收集本分支命中块的 `sku_codes` → `fetch_by_skus(skus)` → `render_dynamic_rows` + `render_doc_blocks` | `customer_tools/node.py:62-90` |
+| 扇出粒度 | `Send × N` 每个 task 一条消息，payload 仅 `task/question/parent_task`（**本稿不动此结构**），**无"是否并行分支"标志位** | `multi_tool.py:59-80`、`edges.py:12-21` |
+| 分支执行 | 每条 Send 独立进入 `customer_tools`，各自执行：`retriever.search(query)` → 收集本分支命中块的 `sku_codes` → `fetch_by_skus(skus)` → `render_dynamic_rows` + `render_doc_blocks` | `customer_tools/node.py:62-90` |
 | 两个工具的关系 | 动态补全由检索结果门控（方案 A，2026-09-06）：**只对命中文档的 sku 候选集取动态行**，零命中/无 sku 块不查动态库；两支共享同一 `sku_codes → sku` 通道，不是两个独立并行调用 | `customer_tools/node.py:65-81` |
 
 **为什么这条约定必须写明**：
 
 1. **动态信息是唯一来源**——若被误改成"只在单分支路径补全"或"先合并再补全"，价格/库存会整段丢失，且 summarize 的 prompt 规则（"价格/库存只取【商品动态信息区】"）会拿到空区，LLM 只能回"动态信息暂未收录"（**是失败而非降级**）。
-2. **实体约束不影响动态补全**——§4.6 的 `entity_skus` 只作用于 `search` 内部的静态块精排候选；动态补全的 sku 候选集改由**过滤后**的 docs 产出：约束命中实体时候选收窄为"该实体 + 政策块"，政策块 `sku_codes=[]` 不进 `skus` 列表，故实际收窄到该实体，符合预期。
+2. **候选 sku 来自本分支命中的全部块，不做任何收窄**——`docs` 里每块的 `sku_codes` 全部进候选集（`customer_tools/node.py:67-71`），跨商品混合块会把邻居商品的 sku 一并带进来（实测 8 行中 3~4 行与提问无关）。**这是有意保留的设计**，不是遗漏：2026-09-19 实测确认收窄候选集会误杀正确块、且对列表类问句反向有害（§4.6 / §8 D10），而 LLM 在动态区按【商品名 + 商品编码】取值的错配率实测为零（§4.6.1 实验 E）。
 3. **本稿不新增动态检索调用点**——§1.2 指标"不新增 LLM 调用"由本约定保证不被打折：`fetch_by_skus` 是 DB 查询非 LLM，不触发 §3 的三次调用口径。
 
 **跨分支去重的边界**：§4.5 的 `_assemble_evidence` 在 summarize 内对 `hybrid_docs`（按 `chunk_id`）与 `dynamic_rows`（按 sku）做跨分支合并——**去重只发生在证据装配层，不改变"每分支各跑一遍两个工具"的执行层事实**。混合块（`sku_codes=[A,B]`，实测占 66%）被 A/B 两分支各召回一次时，A、B 的动态行被查两遍、在装配处合并为一份，属已接受的少量冗余（DB 查询非 LLM，且 §4.5 合并后进 prompt 只一次）。
 
 **回归守护（对应 §7.2）**：双实体查询下，应能在日志中看到**两条**"动态补全: 候选 N 个 sku,命中 M 行"，且 summarize 的 `{results}` 中动态区全局只有一份、每个 sku 一行。
 
-### 4.5 summarize 跨分支证据去重
+### 4.5 summarize 跨分支证据装配（唯一过滤层）
 
 **文件**：`.../components/summarize/node.py`
+
+**定位（2026-09-19 起）**：实体约束取消后，本节是全链路**唯一的过滤层**，承担三件事——① 跨分支去重（chunk_id / sku）；② 两通道证据统一渲染；③ 把相关性判断完整交给 LLM（§4.6.2 证据 4）。**它不做相关性过滤**，凡是各分支检索到的证据一律保留，由 LLM 依据块前缀与动态区商品名自行取舍。
 
 ```python
 from app.tools.doc_block_renderer import render_doc_blocks, render_dynamic_rows
@@ -456,6 +460,9 @@ def _assemble_evidence(searches: list) -> str:
     各召回一次，现状原样拼接导致同一块进 prompt 两次。
     同时消除现状把 records 整体（含 hybrid_docs/dynamic_rows 原始 dict）塞进 prompt
     的冗余——渲染文本已含全部事实，原始 dict 属重复通道。
+
+    注意：只做去重与合并，不做相关性过滤——相关性由精排排序 + LLM 取值判断承担
+    （§4.6 / §8 D10：实测证明系统侧再做一层相关性收窄会误杀正确块）。
     """
     seen: set = set()
     docs: list = []
@@ -498,114 +505,90 @@ def _assemble_evidence(searches: list) -> str:
 | `{results}` 载荷 | `records` dict 列表的 Python repr——含已渲染文本 **+ `hybrid_docs` 原始 dict 全量 + `dynamic_rows` 全量** | 单一证据字符串（动态区 + 静态块，与两通道同款渲染） |
 | 跨分支重复块 | 出现 N 次 | 1 次 |
 | 动态区 | 每分支各自一份（同 sku 重复） | 全局一份，按 sku 合并 |
+| 相关性过滤 | 无（原样拼接） | **无**——本稿不引入任何相关性收窄（§8 D10），仅去重与合并 |
 | `state["searches"]` | — | **不动**（`final_answer` history 与 `evaluation/runner.py:124` 继续拿到逐分支原始追溯） |
 | `records["result"]` / `hybrid_docs` / `dynamic_rows` 字段 | — | **不动**（`customer_tools` 与 `test_customer_tools_node.py` 的断言继续有效） |
 
 **保留的分组信息**：合并后不保留"哪条子问题命中该块"的分组。判断依据：每块前缀行 `【商品编码:...｜知识类型:...｜来源:...】`（`doc_block_renderer.py:53-55`）已提供商品归属，且 summarize 收到的 `question` 是完整原问题（含对比意图），分组不构成必需信息。**若回归发现对比类回答质量下降，再考虑按 `task` 分组渲染。**
 
-### 4.6 实体约束检索（零 LLM）
+### 4.6 实体约束检索——已实测否决（2026-09-19）
 
-**目标**：拆解分支的检索结果限定在"实体自身商品块 + 政策/通用块"，丢弃归属于其它商品的块。直接对应 `docs/项目问题.md` #2（同品牌多型号竞争导致错召回）。
+> **结论：不做。** 本节保留完整实验记录与数据，供后续复用判断；**实施阶段 2 不包含本节任何内容**。否决理由见 §8 D10。
 
-**链路**：`Task.entity_name` → Send payload → customer_tools 解析 name→sku → `search(entity_skus=...)` → RRF 后、精排前过滤。
+**原设计**：`planner` 产出实体名 → Send 传入 → `customer_tools` 解析 name→sku → `search(entity_skus=...)` 在 RRF 后、精排前过滤掉"归属其它商品"的候选。目标是缓解 `docs/项目问题.md` #2（同品牌多型号竞争错召回）。
 
-#### 4.6.1 商品名 → sku 解析
+#### 4.6.1 实验方法与数据（真实库：47 商品 / 42 块，GPU 精排）
 
-**文件**：`app/services/product_dynamic_service.py`（新增函数，与 `fetch_by_skus` 同表同域）
+**实验 A/B/C（同一 query，三种检索策略，度量静态块与动态区覆盖）**
 
-```python
-async def resolve_skus_by_product_name(name: str) -> List[str]:
-    """商品名 → sku 列表（精确优先，回退模糊）。无匹配或异常返回空列表（调用侧 fail-open）。"""
-    if not name or not name.strip():
-        return []
-    n = name.strip()
-    try:
-        async with AsyncSessionLocal() as session:
-            for stmt in (
-                select(ProductPriceStock.sku).where(ProductPriceStock.product_name == n),
-                select(ProductPriceStock.sku).where(ProductPriceStock.product_name.like(f"%{n}%")),
-            ):
-                rows = (await asyncio.wait_for(
-                    session.execute(stmt.limit(5)), timeout=settings.TOOL_DB_TIMEOUT_SECONDS
-                )).scalars().all()
-                if rows:
-                    return [r.upper() for r in rows]
-        return []
-    except Exception as e:
-        logger.warning("商品名→sku 解析失败，跳过实体约束: {}", e)
-        return []
+| query（列表+详情类） | A 单分支 | B 拆2无约束 | C 拆2带约束 |
+|---|---|---|---|
+| 米家智能晾衣机有哪些型号？分别多少钱？ | 8 sku | **10 sku** | 7 sku ⚠ |
+| 小米智能门锁有哪些型号？分别多少钱？ | 9 sku | **9 sku** | 6 sku ⚠ |
+| 电动升降桌有哪些款式？价格多少？ | 8 sku | **8 sku** | 6 sku ⚠ |
+
+拆分本身三组全赢（不丢任何 sku，多召回 1~2 个；同一块精排分从 0.52~0.86 升到 0.92~0.99）；**约束三组全输**，最多丢掉 3 个 SKU。
+
+**根因**：约束的优化方向（收窄到一个商品）与拆分的动机（跨型号/跨实体遍历）**正好相反**。典型误杀：实体名"电动升降桌"解析只覆盖 6 款中的 2 款（其余 4 款商品名里无此串），"小米智能门锁"受 `limit(5)` 截断只覆盖 9 款中的 5 款——剩余型号被当"别的商品"丢掉，LLM 只能答"只有 2 款"。
+
+**实验 D（约束的收益侧：同品牌多型号竞争场景，5 条单商品事实问）**
+
+| 用例 | 无约束 正确/错召回 | 有约束 正确/错召回 | 动态区行数 |
+|---|---|---|---|
+| 米家智能晾衣机3 最大承重 | 2 / 3 | **2 / 0** | 8 → 4 |
+| 小米M20 大屏猫眼版 开锁方式 | 2 / 3 | **2 / 0** | 7 → 3 |
+| 米家智能晾衣机2 Pro 功能特点 | 1 / 4 | **1 / 0** | 8 → 3 |
+| 乐歌E2 升降范围 | 1 / 4 | **1 / 0** | 10 → 3 |
+| 米家智能晾衣机2 最大承重（截断名） | 2 / 3 | **2 / 1** | 8 → 6 |
+| 智能电动沙发 小户型（品类词） | 1 / 4 | **0 / 2** ⚠ | 8 → 2（目标掉出）⚠ |
+| 米家智能门锁M30 续航（解析失败） | 0 / 4 | 0 / 0 | 8 → **0** ⚠ |
+
+**约束收益真实存在**：精确解析成功时错召回块 14 → 0、正确块零损失、动态区行数减半。**但两个失败模式不可接受**：品类词解析不全时误杀目标商品（目标 sku 掉出动态区 → LLM 连价格都拿不到）；解析失败时约束空转且动态区被清空。
+
+**实验 E（端到端 LLM 作答，真实 summarize prompt + 真实 deepseek）**
+
+| 用例 | 正确答案 | 无约束作答 | 有约束作答 |
+|---|---|---|---|
+| 晾衣机3 承重 | 35kg | ✓（动态区 8 行、含 3 个门类） | ✓（动态区 4 行） |
+| 小米M20 大屏猫眼版 多少钱 | ¥1999 | ✓（动态区 7 行跨门锁/窗帘） | ✓（动态区 3 行） |
+| 米家智能晾衣机有哪些型号+价格 | 5 款带价 | **5 款全对 ✓** | 只给 4 款、且编出库外型号 ⚠ |
+
+**决定性证据**：动态区的渲染格式是 `【动态|商品编码:S｜商品名:N】¥价格｜库存`——**商品名完整出现在每一行**，LLM 是对着名字取值而非靠位置猜。实测跨商品噪音下**零错配**。
+
+#### 4.6.2 否决理由
+
+| # | 理由 | 证据 |
+|---|---|---|
+| 1 | 与拆分动机方向相悖，对一个用户明确要求"遍历"的问句施加"收窄" | 实验 A/B/C：约束丢 1~3 个 SKU |
+| 2 | 输入不可靠：`name` 由 LLM 产出，简称与库内全名不匹配率高 | 实验 D：`米家智能门锁M30` → `[]`；`智能电动沙发` → 仅 1/7 |
+| 3 | 可靠性改造（三级匹配 + 精确/模糊分流 + scope 标记 + 品类词降级）引入的状态量大于收益 | 上述四个补丁缺一不可，且每个都有新的边界 |
+| 4 | LLM 已能正确处理邻居商品噪音，**错配风险实测为零** | 实验 E：跨商品噪音下价格/参数取值全对 |
+| 5 | 原始目标（问题 #2）本就不是它解决的 | 实验 D：目标块 top-5 命中 0 条的用例，约束全程空转；真因是召回质量 |
+
+**保留的唯一收益是 token 精简**（动态区行数约减半），属优化而非正确性，不值得为其承担"误杀正确商品"的风险。
+
+#### 4.6.3 实施范围（本稿据此调整）
+
+| 原计划项 | 处置 |
+|---|---|
+| `product_dynamic_service.resolve_skus_by_product_name` | **不新增** |
+| `Task.entity_name` 字段 | **不新增**（`Task` 与现状逐字一致） |
+| `rag_retriever_service.search` 的 `entity_skus` 参数与过滤块 | **不新增**（签名不变） |
+| `edges.py` Send payload 增 `entity_name` | **不新增**（三键不变） |
+| `customer_tools/node.py` 实体解析逻辑 | **不新增**（节点体不变） |
+
+> **遗留观察（供后续专项参考）**：`resolve_skus_by_product_name` 的 LIKE 分支带 `limit(5)`——实测该截断会让"小米智能门锁"只覆盖 9 款中的 5 款。本稿不实现该函数，但**将来若另做实体识别或定向查询，必须先解决这个截断**，否则同类误杀会重现。
+> **动态区噪音的残余影响**：不做约束后，动态区可能含与提问无关的商品行（实验 E 中 8 行里 3~4 行无关）。实测不影响取值正确性；prompt 侧的兜底规则见 §4.6.4。
+
+#### 4.6.4 summarize prompt 的取值纪律（防错配唯一防线）
+
+实体约束取消后，"价格/库存不得跨商品错配"**完全依赖 prompt 规则**。现有规则（`summarize/prompts.py:40-42`）已含三条：按【商品编码】配对取值、无归属块不得断言动态信息、未收录时如实告知。本稿**新增一条**（2026-09-19 补，理由为动态区噪音在无约束下必然出现）：
+
+```text
+* 动态区中与用户当前询问的商品/品类无关的行，不得出现在回答里（用户问 A 时不得提及 B 的价格/库存）
 ```
 
-> `product_name` 有唯一约束 `uq_product_price_stock_name`（`models/product_price_stock.py:14`），精确分支理论返回 0 或 1 条；`limit(5)` + 列表返回是为 LIKE 分支留余量。sku 统一大写（对齐 `fetch_by_skus` 的 `s.upper()` 归一）。
-
-#### 4.6.2 检索服务签名与过滤
-
-**文件**：`app/services/rag_retriever_service.py`
-
-```python
-async def search(
-    self,
-    query: str,
-    top_k: Optional[int] = None,
-    entity_skus: Optional[Set[str]] = None,
-) -> List[Dict[str, Any]]:
-    ...
-    fused = rrf_fuse(result_lists=[vector_results, bm25_results], id_key="chunk_id", top_k=settings.RRF_TOP_K)
-
-    # 实体约束（零 LLM）：丢弃"归属于其它商品"的候选，保留政策/通用块（sku_codes 空）。
-    # 置于精排前——先净化候选池再让 reranker 排序；过滤后为空则放弃约束（fail-open）。
-    if entity_skus:
-        scoped = [
-            d for d in fused
-            if not d.get("sku_codes")
-            or (set(c.upper() for c in d["sku_codes"]) & entity_skus)
-        ]
-        if scoped:
-            if len(scoped) < len(fused):
-                logger.info("实体约束过滤: {} -> {} 条候选（丢弃 {} 条他商品块）",
-                            len(fused), len(scoped), len(fused) - len(scoped))
-            fused = scoped
-        else:
-            logger.warning("实体约束过滤后候选为空，放弃约束（fail-open）")
-
-    # ③ 精排（原逻辑不变）
-    ...
-```
-
-#### 4.6.3 节点与边
-
-**文件**：`.../workflows/multi_agent/edges.py`、`.../components/customer_tools/node.py`
-
-```python
-# edges.py：Send payload 增 entity_name（保留现有 task/question/parent_task 三键不动）
-Send("customer_tools", {
-    "task": task.question,
-    "question": task.question,
-    "parent_task": task.parent_task,
-    "entity_name": getattr(task, "entity_name", ""),
-})
-```
-
-```python
-# customer_tools/node.py：检索前解析实体（原 query/errors 逻辑不变）
-        query = state.get("task", "")
-        entity_name = state.get("entity_name", "")
-        if not query:
-            errors.append("未提供查询文本")
-        else:
-            retriever = get_rag_retriever_service()
-            entity_skus: set = set()
-            if entity_name:
-                entity_skus = set(await resolve_skus_by_product_name(entity_name))
-                if not entity_skus:
-                    logger.info("实体约束: 商品名 '{}' 未解析到 sku，跳过约束", entity_name)
-            docs = await retriever.search(query, entity_skus=entity_skus or None)
-            logger.info("检索节点返回 {} 条文档", len(docs))
-```
-
-**已知边界（不解决，如实记录）**：混合块 `sku_codes=[A, B]`（占 66%）对 A、B 两边都通过约束，因此本机制**只解决"召回成别的商品"**，不解决混合块稀释——后者属切分策略（`docs/项目问题.md` #3），不在本稿范围。
-
-**不启用约束的情形**：`entity_name` 为空（LLM 未给出 / 解析无匹配 / LLM 调用异常）→ `entity_skus=None` → `search` 行为与现状逐字一致。
+> **决策标注**：该条为**建议性补充**——实验 E 证明不加也不会错配（LLM 自行忽略无关行），加上是为了在长上下文、更多无关行的情况下加固。实施时若发现它引起"漏答"（把用户其实想问的型号漏掉），可直接删除，不影响本稿其余设计。
 
 ### 4.7 rerank 分数分布观测（零行为变更）
 
@@ -647,7 +630,7 @@ def test_planner_node_name_in_internal_nodes():
     assert create_planner_node(llm=_StubLLM()).__name__ in INTERNAL_NODES
 ```
 
-> 清理项仅限本稿触及的 planner 链路。`customer_tools/node.py` 的 `VectorSearchInputState` 若实施时发现与 Send 结构对齐有必要，可改为按实际 payload 修正而非删除——实施时以全局 grep 结果为准（CLAUDE.md 全项目扫描规则）。
+> 清理项仅限本稿触及的 planner 链路。**2026-09-19 回退后**：`edges.py` 的 Send payload 不再新增 `entity_name`，`VectorSearchInputState` 与 payload 的偏差维持现状，可直接按"零引用"处理（删除）；若实施时全局 grep 发现新引用，则按实际 payload 修正而非删除（CLAUDE.md 全项目扫描规则）。
 
 ---
 
@@ -655,13 +638,11 @@ def test_planner_node_name_in_internal_nodes():
 
 | 场景 | 回退行为 | 位置 |
 |---|---|---|
-| planner LLM 调用失败 / 结构化输出解析失败 | `_fallback` → 单任务 = 原 query 原文，`entity_name=""`，日志 `reason=llm_error` | 4.3 |
-| planner 返回单任务 | 丢弃 LLM 文本，任务 = 原 query 原文；保留其 `name` 作实体约束 | 4.3 |
+| planner LLM 调用失败 / 结构化输出解析失败 | `_fallback` → 单任务 = 原 query 原文，日志 `reason=llm_error`、`name=''` | 4.3 |
+| planner 返回单任务 | 丢弃 LLM 文本，任务 = 原 query 原文；其 `name` 仅入日志 | 4.3 |
 | planner 返回空列表 / 空串 sub_query / 重复任务 / >3 条 | 同上，日志 `reason=tasks=N` | 4.3 |
-| `name` 为空（拆解分支） | 该任务不带实体约束，正常检索；日志记录空名 | 4.3 / 4.6.3 |
-| 商品名未解析到 sku / DB 查询异常 | `entity_skus=None`，`search` 行为与现状逐字一致（fail-open） | 4.6.1 |
-| 实体约束过滤后候选为空 | 放弃约束，用原候选池继续精排 | 4.6.2 |
-| 精排失败/关闭 | 沿用融合 top-K（现状逻辑不变） | 4.6.2 |
+| `name` 为空（拆解分支） | 无行为影响（该字段只用于观测）；日志记录空名 | 4.1 / 4.3 |
+| 精排失败/关闭 | 沿用融合 top-K（现状逻辑不变，本稿不改检索服务） | — |
 | 检索全空（某分支） | 该分支 `records.result=""`；summarize 装配后若整体为空 → "No data to summarize." | 4.5 |
 | 检索全空（全部分支） | 同上，`_assemble_evidence` 返回 `""` → 现状兜底分支 | 4.5 |
 | 证据装配异常 | 不预期（纯函数、无 IO）；如发生由子图外层 TimeoutGuard 兜底 | — |
@@ -679,23 +660,23 @@ def test_planner_node_name_in_internal_nodes():
 
 **Files**：`components/planner/models.py`、`components/models.py`、`planner/node.py`、`planner/prompts.py`、`kg_sub_graph/prompts/kg_prompts.py`、`app/core/config.py`、`lg_builder.py`、`workflows/multi_agent/multi_tool.py`、**项目根 `.env`（本地手工，不进 git）**
 
-- [ ] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` 增 `entity_name`（默认空）
+- [ ] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` **不改**（2026-09-19 回退后 `entity_name` 不新增）
 - [ ] **Step 2**：`kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 全文；`planner/prompts.py` 的 human 模板缩减为仅 `问题: {question}`
-- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志 + `entity_name` 注入）
+- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志，`name` 只入日志）
 - [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名增 `planner_llm`
 - [ ] **Step 5**：项目根 `.env` 手工补 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两行（§4.4.1；该文件 gitignore，仅本地生效，提交不含此项）
-- [ ] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 实体名回填 + 一致性校验单分支回退 + 拆解温度收敛为 0`
+- [ ] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 主题词产出 + 一致性校验单分支回退 + 拆解温度收敛为 0`
 
 ### 阶段 2：检索侧零 LLM 闭环
 
-**Files**：`components/summarize/node.py`、`app/services/product_dynamic_service.py`、`app/services/rag_retriever_service.py`、`workflows/multi_agent/edges.py`、`components/customer_tools/node.py`
+**Files**：`components/summarize/node.py`、`app/services/rag_retriever_service.py`、`.../components/summarize/prompts.py`
 
 - [ ] **Step 1**：`summarize/node.py` 增 `_assemble_evidence` 并替换节点体（§4.5）
-- [ ] **Step 2**：`product_dynamic_service.py` 增 `resolve_skus_by_product_name`（§4.6.1）
-- [ ] **Step 3**：`rag_retriever_service.search` 增 `entity_skus` 参数与 RRF 后过滤（§4.6.2）
-- [ ] **Step 4**：`edges.py` Send payload 增 `entity_name`；`customer_tools/node.py` 解析并传入（§4.6.3）
-- [ ] **Step 5**：`search` 增精排分数分布日志与预览补分（§4.7）
-- [ ] **Step 6**：验证（§7.2/§7.3）→ 提交 `[feat] 检索侧零 LLM 闭环：summarize 跨分支证据去重 + 商品实体约束检索 + 精排分数观测`
+- [ ] **Step 2**：`summarize/prompts.py` 增"动态区无关行不得出现在回答里"一条（§4.6.4；建议性，可实施时删）
+- [ ] **Step 3**：`search` 增精排分数分布日志与预览补分（§4.7）
+- [ ] **Step 4**：验证（§7.2/§7.3）→ 提交 `[feat] summarize 跨分支证据装配：chunk_id/sku 去重 + 取值纪律 prompt + 精排分数观测`
+
+> **不在本阶段**（2026-09-19 回退）：实体约束相关的四处改动全部取消——`product_dynamic_service.py`、`rag_retriever_service.search` 签名、`edges.py` Send payload、`customer_tools/node.py` **均不动**。本阶段只改 summarize 一个节点 + 一处日志。
 
 ### 阶段 3：清理、守护测试与文档收尾
 
@@ -747,20 +728,24 @@ def test_planner_node_name_in_internal_nodes():
 
 | # | 场景 | 预期 |
 |---|---|---|
-| 1 | 双实体对比查询 | 2 个并行分支；两分支日志各出现 `实体约束过滤: x -> y 条候选` **与各一条 `动态补全: 候选 N 个 sku,命中 M 行`**（§4.4.2 执行契约）；summarize 回答以对比形式呈现两个产品 |
-| 2 | 单实体事实查询 | 1 分支；若 `name` 解析到 sku 则出现约束日志；检索结果含该商品块 |
-| 3 | 商品名未收录（"XX牌空气炸锅多少钱"） | `未解析到 sku，跳过约束`，检索正常进行，summarize 如实告知未收录 |
-| 4 | 政策类 query（"京东自营怎么退货"） | 无实体约束或约束后政策块（`sku_codes=[]`）保留 |
-| 5 | 三实体查询 | 拆 3 分支（验证不硬编码 2），各分支约束独立生效 |
-| 6 | 同一混合块被两分支召回 | 日志中该 `chunk_id` 只在证据文本出现一次 |
-| 7 | 检索全空 | "No data to summarize." 兜底，无异常中断 |
-| 8 | 流式输出 | 逐 token 正常输出（planner 分片仍被闸门拦截）；无"整段蹦出" |
-| 9 | 重复提问 | 缓存命中，0 次 LLM 调用 |
+| 1 | 双实体对比查询 | 2 个并行分支；两分支日志**各出现一条 `动态补全: 候选 N 个 sku,命中 M 行`**（§4.4.2 执行契约）；summarize 回答以对比形式分别呈现两个产品 |
+| 2 | 单商品事实问 + 同族干扰（"米家智能晾衣机3 四分区晾晒 超薄隐形 的最大承重是多少？"） | 1 分支；证据含多型号噪音；**最终回答只给目标商品的承重值，不出现同族其它型号的参数** |
+| 3 | **错配断言（§4.6.4 唯一防线的直接验证）** | 无约束证据下（动态区必然含多商品行），回答中的每个价格/参数都能对应到正确的商品编码；**不得出现"把 B 的价格安在 A 头上"** |
+| 4 | 商品名未收录（"XX牌空气炸锅多少钱"） | 检索正常进行，summarize 如实告知未收录（无约束后无"跳过约束"日志） |
+| 5 | 政策类 query（"京东自营怎么退货"） | 政策块（`sku_codes=[]`）正常召回；回答不据其它商品动态行编造 |
+| 6 | 三实体查询 | 拆 3 分支（验证不硬编码 2），各分支独立检索与动态补全 |
+| 7 | 同一混合块被两分支召回 | 日志中该 `chunk_id` 只在证据文本出现一次（chunk_id 去重） |
+| 8 | 两分支各自补全的动态区 | 合并后全局一份，同一 sku 只一行 |
+| 9 | 检索全空 | "No data to summarize." 兜底，无异常中断 |
+| 10 | 流式输出 | 逐 token 正常输出（planner 分片仍被闸门拦截）；无"整段蹦出" |
+| 11 | 重复提问 | 缓存命中，0 次 LLM 调用 |
+
+> **场景 3 是本轮验收的核心**：实体约束取消后，"取值不错配"由 prompt 规则唯一承担（§4.6.4）。该场景必须用**真实动态区含多商品行**的证据跑，才能验到实处；若失败则需回到 §4.6.4 的兜底规则或重新评估实体约束。
 
 ### 7.3 回归与指标
 
 - **全量 pytest**：基线 75/76（`#8` 既有失败不算回归）
-- **`test_customer_tools_node.py`**：需全绿——该测试断言 `out["searches"][0].records["result"]`，本稿不改 `searches`/`records` 结构，理论零影响；若失败说明改动越界
+- **`test_customer_tools_node.py`**：需全绿——该测试断言 `out["searches"][0].records["result"]`，本稿不改 `searches`/`records` 结构、不改 `customer_tools` 节点，理论零影响；若失败说明改动越界
 - **LLM 调用次数**：按 §3 口径逐场景统计，实施前后应**完全一致**（本稿不增不减）
 - **summarize 输入 token**：实施前后对比（预期下降——去重 + 去掉 `hybrid_docs`/`dynamic_rows` 原始 dict 冗余），并确认回答质量不回归
 - **`evaluation/runner.py`**：跑一轮确认 `searches` 逐分支追溯仍可用
@@ -776,10 +761,11 @@ def test_planner_node_name_in_internal_nodes():
 | D3 | `state["searches"]` 结构不动 | 2026-09-18 | 有 3 个消费方（summarize / final_answer history / evaluation runner），改结构会波及逐分支追溯与评测 |
 | D4 | 取消 `original_question` 字段 | 2026-09-18 | 原动机（预处理后 question 被稀释）随预处理管道 2026-08-21 删除消失；`state.question` 现即消解后完整句 |
 | D5 | P4（单任务空转 1 次 LLM）保持独立调用，不改调用结构 | 2026-09-18 | Router 服务 6 种 type，扩 schema 输出实体/子 query 有伤路由准确率风险；规则直通需先实测误拆率。本稿以 §7.1 日志采集拆解分布，为后续决策积累依据 |
-| D6 | `entity_name` 用 `default=""` 而非 schema 级必填 | 2026-09-18 | 无实体的合法 query（entity_count=0）若强制必填会迫使 LLM 编造，且结构化输出失败会让整条 query 回退；"拆解时必填"落在提示词 + 节点校验两层 |
-| D7 | 实体约束置于 RRF 后、精排前 | 2026-09-18 | 先净化候选池再让 reranker 排序，优于精排后过滤（后者只能减少、不能改善排序）；过滤后为空即放弃约束 |
-| D8 | 实体约束不做硬过滤，`sku_codes=[]` 的政策块始终保留 | 2026-09-18 | 政策/通用块无商品归属，硬过滤会让"商品+政策"混合 query 失去政策证据 |
+| D6 | ~~`entity_name` 用 `default=""` 而非 schema 级必填~~ **【已作废 2026-09-19】** | 2026-09-18 | 原为新字段必填性决策；字段本身已随实体约束取消（D10）。`EntitySubQuery.name` 保留但降级为纯观测字段（§4.1） |
+| D7 | ~~实体约束置于 RRF 后、精排前~~ **【已作废 2026-09-19】** | 2026-09-18 | 该过滤层整体不实现（D10） |
+| D8 | ~~实体约束不做硬过滤，`sku_codes=[]` 的政策块始终保留~~ **【已作废 2026-09-19】** | 2026-09-18 | 同上；政策块的保留语义仍由 prompt 规则承接（`summarize/prompts.py:41`） |
 | D9 | `RERANK_MIN_SCORE` 阈值本稿不实现，先采分布 | 2026-09-18 | `top_k=5` 下拍脑袋设阈值易砍空分支；bge-reranker 输出 logits 非归一值，阈值必须实测 |
+| **D10** | **取消实体约束检索（原 §4.6 整层不实现）** | **2026-09-19** | 两轮实测（§4.6.1 实验 A~E）结论：① 约束对列表/型号类问句**反向误杀**（丢 1~3 个 SKU，覆盖 9→6）——它与"跨实体/跨型号遍历"的拆分动机方向相悖；② 约束对单商品事实问确有收益（错召回块 25→3、动态区行数减半），但 LLM 端到端作答在**含噪音证据下零错配**（动态区每行带完整商品名，按名取值），收益仅剩 token 精简；③ 要让约束可靠需同时补四个补丁（三级匹配 + 精确/模糊分流 + scope 标记 + 品类词降级），状态量大于收益；④ 其原始目标（问题 #2）本就不由它解决——目标块 top-5 命中 0 条的用例中约束全程空转，真因是召回质量。**决定性判据：不为一个正确性收益为零、又带来误杀风险的优化层增加系统复杂度。** 相关性职责归还精排 + LLM |
 
 ---
 
@@ -787,13 +773,13 @@ def test_planner_node_name_in_internal_nodes():
 
 1. **planner 节点名是隐式契约**：`multi_tool.py:62` 的 `add_node(planner)` 取函数 `__name__`，与 `stream_filter.py:20` 的 `INTERNAL_NODES` 字符串耦合。重命名节点函数（如改成 `plan_tasks`）会让 planner 分片**静默外泄给用户**。§4.8 的守护测试是唯一防线，**必须随阶段 1 一起落地**。
 2. **拆解质量没有数量锚可校验**：v2 起废除 `len(tasks)==entity_count` 硬校验（列表型拆解下任务数可 > entity_count），保障只剩"提示词示例 + 上限约束 + 三态日志观测"。回退率与空名率指标必须真的看。
-3. **实体约束是双刃剑**：`entity_name` 由 LLM 产出，名字错 → 解析到错误 sku → 过滤掉正确块。fail-open 只覆盖"解析不到"与"过滤后为空"，**不覆盖"解析到但解析错"**。缓解：LIKE 分支的 `limit(5)` 限制误伤面；§7.2 场景 3 专门回归；上线后观察"检索结果为空/明显不相关"的日志。
-4. **不解决混合块稀释**：66% 的块跨商品（`docs/项目问题.md` #3），混合块 `sku_codes=[A,B]` 对两边都通过约束。真正的解法是章节感知切分，属另一专项，**不要在本稿里试图用过滤绕开**。
+3. **无约束后的动态区噪音（本稿的有意取舍）**：不做实体约束，动态区必然含与提问无关的商品行（实测 8 行中 3~4 行无关），prompt 变长、token 成本上升。**实测错配率为零**（LLM 按【商品名 + 商品编码】取值），但这条结论建立在"动态区每行都渲染完整商品名"的前提上——**若将来改动 `render_dynamic_rows` 的格式（如去掉商品名只留编码），风险立即回归**。§7.2 场景 3 是该前提的守护者。
+4. **不解决混合块稀释**（已取消过滤层，但结论不变）：66% 的块跨商品（`docs/项目问题.md` #3），问 A 时混在块里的 B 的内容会一并进 prompt。真正的解法是章节感知切分，属另一专项，**不要在本稿里试图用过滤绕开**——2026-09-19 实测已证明那类过滤会误杀正确块（§4.6/§8 D10）。
 5. **summarize 输入形态变化需回归**：去掉 `hybrid_docs`/`dynamic_rows` 原始 dict 后，prompt 变短但 LLM 少看到一份（重复的）数据。虽然渲染文本已含全部事实，仍需按 §7.3 对比回答质量——**这是本稿唯一可能引起质量回归的改动点**。
 6. **温度改造不得打 tags**：2026-09-18 的流式 bug 根因就是共享实例上的 `tags=["research_plan"]`。新造的 planner 模型实例**不加任何 tags**——闸门只认节点名。
 7. **`parent_task` 语义变化**：从"LLM 逐任务生成、可被改写"变为"节点注入原 query"。`edges.py` 发送逻辑与 `Task` 模型不变，但要确认无其它消费方依赖其旧语义（现状仅有 `edges.py:18` 传入即弃）。
 8. **删除前全局检索**：§4.8 三项死代码删除前 grep 确认零引用（CLAUDE.md 全项目扫描规则），避免复现 `error_tool_selection` 式未注册引用。
-9. **`resolve_skus_by_product_name` 的 LIKE 通配符**：用户可控文本进 `LIKE '%...%'`，SQLAlchemy 已参数化（无注入风险），但名称中的 `%`/`_` 会作为通配符生效——属可接受的宽松匹配，fail-open 已兜底。
-10. **每阶段独立提交**：阶段 1（planner）与阶段 2（检索侧）严格分开提交，禁止跨阶段合并——阶段 2 依赖阶段 1 产出的 `entity_name`，但阶段 1 单独可验证（日志断言）。
+9. ~~`resolve_skus_by_product_name` 的 LIKE 通配符~~ **（已取消）**：该函数随实体约束一并取消（§4.6.3）。若后续专项重启实体识别，需重新评估 `LIKE '%...%'` 的通配符行为与 **`limit(5)` 截断**（实测后者会让"小米智能门锁"只覆盖 9 款中的 5 款，是导致误杀的直接原因）。
+10. **每阶段独立提交**：阶段 1（planner）与阶段 2（检索侧）严格分开提交，禁止跨阶段合并。2026-09-19 回退实体约束后，**阶段 2 不再依赖阶段 1 的任何产出**（无 `entity_name` 传递），两阶段已完全解耦，可独立验证、独立发布。
 11. **拆解上限存在三处引用，必须同源（§4.4.1）**：提示词的"总数不超过 N"、`node.py` 的 `MAX_TASKS` 校验、`.env` 的 `PLANNER_MAX_TASKS`。前两处一旦回退为字面量 3，`.env` 调大/调小就只影响其中一处——**提示词与校验打架时不会报错**：提示词仍教 LLM 拆 3 条、校验按 env 放行 5 条，或反之恒回退。实施后必须按 §7.1 配置项断言表逐档验一遍（改 env 值 → 重启 → 看 `fallback(reason=tasks=N)` 是否跟随）。
 12. **`.env` 不进 git（已验证 `.gitignore:24`）**：本稿新增的两个配置项在版本库里只体现为 `config.py` 的默认值声明，`.env` 那两行**无法通过提交同步给其它环境**。部署到新机器时若未补写，行为等同默认值（0.0 / 3），不会报错——需在 README 或部署说明中同步告知，避免"我本地明明是 5"的排查弯路。
