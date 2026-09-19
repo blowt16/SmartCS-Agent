@@ -1,6 +1,7 @@
 from loguru import logger
 import logging
 import sys
+import time
 from pathlib import Path
 import os
 import contextvars
@@ -103,6 +104,36 @@ def get_logger(service: str):
 def log_structured(event_type: str, data: dict):
     """结构化日志记录 — 自动附加 request_id 和服务信息"""
     logger.bind(event_type=event_type).info(data)
+
+
+# ============================================================================
+# 对话轮次边界日志（服务入口 main.py 与 CLI app/lg_agent/main.py 共用一套格式）
+# ============================================================================
+# 单轮内的其余日志由 request_id 自动串联（上方 patcher 注入），
+# 这两条只提供"人眼可见的轮次边界 + 该轮真实耗时"。
+ROUND_SEP = "═" * 72
+
+
+def log_round_start(query: str, **kw) -> float:
+    """单轮对话开始：打分隔线 + 输入摘要，返回 monotonic 起点供 log_round_end 计算耗时。
+
+    kw 为附加上下文（如 user / conv / channel），值为空则跳过。
+    """
+    extra = " ".join(f"| {k}={v}" for k, v in kw.items() if v not in (None, ""))
+    logger.info("{}\n▶ 对话轮次开始 {} | 输入: {}\n{}",
+                ROUND_SEP, extra, (query or "")[:120], ROUND_SEP)
+    return time.monotonic()
+
+
+def log_round_end(t0: float, outcome: str) -> None:
+    """单轮对话结束：耗时以"用户可感知的实际时长"为准。
+
+    流式响应必须在**生成器内部**调用——FastAPI 的 StreamingResponse 在流开始时
+    函数即返回，HTTP 中间件按 call_next 计得的 duration_ms 只覆盖建流阶段
+    （对 SSE 严重低估）；此处按"轮次开始 → 最后一个分片送出"计算。
+    """
+    logger.info("{}\n■ 对话轮次结束 | 耗时 {:.2f}s | 结果: {}\n{}",
+                ROUND_SEP, time.monotonic() - t0, outcome, ROUND_SEP)
 
 
 # ============================================================================

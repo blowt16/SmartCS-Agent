@@ -11,7 +11,7 @@ from app.lg_agent.lg_states import InputState
 from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
 from app.lg_agent.stream_filter import StreamChunkFilter
-from app.core.logger import get_logger
+from app.core.logger import get_logger, log_round_start, log_round_end
 import asyncio
 import builtins
 
@@ -21,7 +21,9 @@ thread = {"configurable": {"thread_id": new_uuid()}}
 
 
 async def process_query(query):
-    logger.info("CLI 查询开始: {}", query[:100])
+    # 轮次边界与耗时用与服务入口同一套 helper（core/logger.py），避免两处格式漂移
+    t0 = log_round_start(query, channel="cli")
+    n_chunks = 0
     try:
         inputState = InputState(messages=query)
 
@@ -30,12 +32,14 @@ async def process_query(query):
         async for c, metadata in graph.astream(input=inputState, stream_mode="messages", config=thread):
             text = chunk_filter.select(c, metadata)
             if text:
+                n_chunks += 1
                 print(text, end="", flush=True)
     except Exception as e:
         logger.exception("CLI 查询处理失败: {}", str(e))
+        log_round_end(t0, "异常")
         raise
 
-    logger.info("CLI 查询完成: {}", query[:100])
+    log_round_end(t0, f"完成（{n_chunks} 分片）")
 
 
 async def main():

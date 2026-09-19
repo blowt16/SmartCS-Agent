@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from app.core.logger import get_logger, log_structured
+from app.core.logger import get_logger, log_structured, log_round_start, log_round_end
 from app.core.middleware import LoggingMiddleware
 from app.core.config import settings
 from app.api import api_router
@@ -32,6 +32,7 @@ from app.services.redis_semantic_cache import RedisSemanticCache
 from langchain_core.messages import HumanMessage, AIMessage
 import json
 import asyncio
+import time
 
 
 # 配置上传目录 - RAG 功能的
@@ -54,15 +55,23 @@ def _get_resolve_llm():
     return _resolve_llm_service
 
 
-async def _stream_cached(response: str, delay: float = None):
-    """模拟流式返回缓存的响应（与 DeepseekService 行为一致，保持前端体验）"""
+async def _stream_cached(response: str, delay: float = None, t0: float = None):
+    """模拟流式返回缓存的响应（与 DeepseekService 行为一致，保持前端体验）
+
+    t0 由调用方传入本轮计时起点时，流结束后补一条轮次耗时日志（缓存路径无图中链路日志，
+    不补的话这一轮在日志里没有结束边界）。
+    """
     if delay is None:
         delay = settings.STREAM_DELAY
     # 每次返回4个字符
     chunks = [response[i:i + 4] for i in range(0, len(response), 4)]
-    for chunk in chunks:
-        await asyncio.sleep(delay)
-        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    try:
+        for chunk in chunks:
+            await asyncio.sleep(delay)
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    finally:
+        if t0 is not None:
+            log_round_end(t0, "缓存命中（短路）")
 
 # 启动时初始化 LangGraph Postgres 检查点（连接池 + 检查点表 + 编译 graph）
 @asynccontextmanager
@@ -334,6 +343,8 @@ async def langgraph_query(
             "query": query[:200],
             "has_image": image is not None,
         })
+        # 轮次计时起点：取在耗时动作（消解/缓存/图执行）之前，故耗时含全链路
+        round_t0 = log_round_start(query, user=user_id, conv=conversation_id or "new")
 
         # 处理图片上传
         image_path = None
@@ -414,8 +425,9 @@ async def langgraph_query(
         )
         if cached_response:
             logger.info("语义缓存命中，短路返回: '{}'", resolved_query)
+            # 缓存路径同样把耗时打在流末尾（前端仍是等分片放完才看到完整回答）
             response = StreamingResponse(
-                _stream_cached(cached_response),
+                _stream_cached(cached_response, t0=round_t0),
                 media_type="text/event-stream"
             )
             response.headers["X-Conversation-ID"] = thread_id
@@ -429,22 +441,34 @@ async def langgraph_query(
         async def process_stream():
             # 收集完整回答，图结束后回写语义缓存
             complete_response = []
+            graph_done = False          # 图是否跑完（区分"正常结束"与"客户端提前断开"）
             # 出口闸门：内部推理（router/planner）不外泄 + 售前容器节点不重复，
             # 见 app/lg_agent/stream_filter.py（旧 tag 黑名单误挡售前 summarize）
             chunk_filter = StreamChunkFilter()
-            async for c, metadata in graph.astream(
-                input=input_state,
-                stream_mode="messages",
-                config=thread_config
-            ):
-                text = chunk_filter.select(c, metadata)
-                if text is None:
-                    if c.additional_kwargs.get("tool_calls"):
-                        tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
-                        logger.debug("Tool call: {}", tool_data)
-                    continue
-                complete_response.append(text)
-                yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+            try:
+                async for c, metadata in graph.astream(
+                    input=input_state,
+                    stream_mode="messages",
+                    config=thread_config
+                ):
+                    text = chunk_filter.select(c, metadata)
+                    if text is None:
+                        if c.additional_kwargs.get("tool_calls"):
+                            tool_data = c.additional_kwargs.get("tool_calls")[0]["function"].get("arguments")
+                            logger.debug("Tool call: {}", tool_data)
+                        continue
+                    complete_response.append(text)
+                    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+                graph_done = True
+            finally:
+                # 轮次结束标记：必须放在生成器内（StreamingResponse 在流开始时即返回，
+                # 路由外层计不到真实耗时），且用 finally 保证客户端中途断开也能落日志
+                log_round_end(
+                    round_t0,
+                    f"完成（{len(complete_response)} 分片 / {sum(len(t) for t in complete_response)} 字）"
+                    if graph_done else
+                    f"中断（客户端断开，已流出 {len(complete_response)} 分片）",
+                )
             # 图完整结束后回写（非空才写，避免空响应/失败响应污染缓存；
             # 纯语气词由缓存内部 _resolve_message 判定跳过，不在此门控）
             if complete_response:
