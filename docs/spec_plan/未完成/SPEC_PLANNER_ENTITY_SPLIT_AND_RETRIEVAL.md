@@ -206,7 +206,9 @@ class Task(BaseModel):
 
 > **`name` 的性质（2026-09-19 更新）**：字段用 `default=""` 而非强制必填——`entity_count=0` 的合法 query（如"有没有推荐的吗"）不存在实体，schema 级必填会迫使 LLM 编造，且 `with_structured_output` 校验失败会让**整条 query 回退单分支**，代价大于收益。
 >
-> **该字段现已降级为纯观测字段**：实体约束取消（§4.6/§8 D10）后，`name` 不参与任何检索决策，只用于日志与 §7.1 的空名率统计。因此"拆解时空名"不再是 fail-open 场景，**也不再需要节点校验**——空名只影响观测指标，不影响链路行为。若后续专项要做实体识别，此字段是现成的输入口。
+> **该字段现已降级为纯观测字段（2026-09-19 决策：保留）**：实体约束取消（§4.6/§8 D10）后，`name` 不参与任何检索决策，只用于日志与 §7.1 的空名率统计。因此"拆解时空名"不再是 fail-open 场景，**也不再需要节点校验**——空名只影响观测指标，不影响链路行为。
+>
+> **为什么保留而不是删**：删掉它能让提示词少一条要求、schema 少一个字段，但换来的是"将来做实体识别时要重新加回去"。实测确认它不产生任何链路风险（节点不校验、下游不消费），而日志里的主题词分布是后续专项的现成输入。**代价仅为每次 planner 调用多输出一个短字符串。** 若上线后发现空名率长期极高（>50%，说明 LLM 给不出稳定主题词），再考虑删除。
 
 ### 4.2 planner 提示词（全文替换）
 
@@ -229,7 +231,7 @@ entity_count = 句中明确提到的商品/品类实体数（"哪款/有没有/�
    拿不准是否该拆时同样合并为 1 条。
 
 所有任务：文本必须自含实体全名或品类词、可脱离原问题独立检索、禁止指代（它/它们/这款）；
-任务间互不重复、互不依赖；总数不超过 3。
+任务间互不重复、互不依赖；总数不超过 3。   ← 实施时此行改为 f-string 派生 {settings.PLANNER_MAX_TASKS}，见 §4.4.1
 每条任务同时给出主题词 name：商品全名或品类词（拆成多条时必填，将用于检索范围限定）。
 
 示例（商品名取自知识库真实在售）：
@@ -367,10 +369,25 @@ _research_graph = create_multi_tool_workflow(
 
 ```python
 # —— multi_tool.py 签名 ——
-def create_multi_tool_workflow(llm: BaseChatModel, planner_llm: BaseChatModel):
+def create_multi_tool_workflow(
+    llm: BaseChatModel,
+    planner_llm: Optional[BaseChatModel] = None,
+):
+    """planner_llm 缺省回退 llm——兼容未同步更新的既有调用方（见下方调用点清单）。"""
     ...
-    planner = create_planner_node(llm=planner_llm)
+    planner = create_planner_node(llm=planner_llm or llm)
 ```
+
+**`create_multi_tool_workflow` 全部调用点（改签名前必须核对）**：
+
+| 调用点 | 现状 | 处置 |
+|---|---|---|
+| `lg_builder.py:437` | `create_multi_tool_workflow(llm=model)` | 本稿改为传两个实例（§4.4 上文） |
+| **`evaluation/__main__.py:112`** | `create_multi_tool_workflow(llm=build_agent_llm())` | **默认值兼容，可不改**；若希望评测也反映 planner 低温，可显式传 `planner_llm=build_agent_llm()` |
+| `workflows/multi_agent/__init__.py:1` | 仅 re-export，无调用 | 不动 |
+
+> **默认值不是可选项**：`evaluation/__main__.py` 是硬调用点，若无默认值，评测脚本一跑就 `TypeError`。本稿 §7.3 要求跑一轮评测验证追溯，故此处必须容错。
+> **需同步补 import**：`multi_tool.py` 当前只 import 了 `BaseChatModel`（`multi_tool.py:1`），**没有 `Optional`**，实施时需补 `from typing import Optional`。
 
 > **与 2026-09-18 流式整改的兼容性**：闸门已由"共享模型实例上的 `tags=["research_plan"]` 黑名单"改为"按 `metadata["langgraph_node"]` 节点名判定"（`stream_filter.py:19-23`），拆两个模型实例不再有任何流式副作用。**实施时不得给新实例打 tags**。
 
@@ -473,9 +490,13 @@ def _assemble_evidence(searches: list) -> str:
             continue
         for d in records.get("hybrid_docs") or []:
             key = d.get("chunk_id") or d.get("id")
-            if key in seen:
+            # 无键块不参与去重：直接保留。若照原写法 key=None，首个无键块占用 None
+            # 后，其余无键块会被整体丢弃（静默丢证据）。现状 chunk_id 恒在
+            # （rag_retriever_service.py:60），此护栏防上游结构变动。
+            if key is not None and key in seen:
                 continue
-            seen.add(key)
+            if key is not None:
+                seen.add(key)
             docs.append(d)
         dynamic_rows.update(records.get("dynamic_rows") or {})
 
@@ -582,6 +603,8 @@ def _assemble_evidence(searches: list) -> str:
 
 #### 4.6.4 summarize prompt 的取值纪律（防错配唯一防线）
 
+> **文件与 §4.2 无关，勿混**：本节改的是 `components/summarize/prompts.py`（生成端 human 模板的规则列表）；§4.2 改的是 `kg_sub_graph/prompts/kg_prompts.py`（planner 的 system 提示词）。两处都写着"全文替换"式的清单，实施时各改各的，不要合并处理。
+
 实体约束取消后，"价格/库存不得跨商品错配"**完全依赖 prompt 规则**。现有规则（`summarize/prompts.py:40-42`）已含三条：按【商品编码】配对取值、无归属块不得断言动态信息、未收录时如实告知。本稿**新增一条**（2026-09-19 补，理由为动态区噪音在无约束下必然出现）：
 
 ```text
@@ -660,10 +683,13 @@ def test_planner_node_name_in_internal_nodes():
 
 **Files**：`components/planner/models.py`、`components/models.py`、`planner/node.py`、`planner/prompts.py`、`kg_sub_graph/prompts/kg_prompts.py`、`app/core/config.py`、`lg_builder.py`、`workflows/multi_agent/multi_tool.py`、**项目根 `.env`（本地手工，不进 git）**
 
+> **`components/models.py` 实际不改**（`Task` 与现状一致，§4.1）；列出它是为提醒实施者"确认不需要改"，而非需要编辑。
+> **`evaluation/__main__.py` 不在 Files 内**：靠 `multi_tool.py` 的 `planner_llm` 默认值兼容，无需编辑，但必须在 §7.3 实跑验证。
+
 - [ ] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` **不改**（2026-09-19 回退后 `entity_name` 不新增）
 - [ ] **Step 2**：`kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 全文；`planner/prompts.py` 的 human 模板缩减为仅 `问题: {question}`
-- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志，`name` 只入日志）
-- [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名增 `planner_llm`
+- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志，`name` 只入日志；`multi_tool.py` 需确认 `Optional` 已 import）
+- [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生（**勿逐字照抄 §4.2 的"总数不超过 3"默认值，`planner_llm` 默认值容错的调用点在下一行**）；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名改为 `planner_llm: BaseChatModel | None = None`（默认回退 `llm`，兼容 `evaluation/__main__.py:112`）
 - [ ] **Step 5**：项目根 `.env` 手工补 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两行（§4.4.1；该文件 gitignore，仅本地生效，提交不含此项）
 - [ ] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 主题词产出 + 一致性校验单分支回退 + 拆解温度收敛为 0`
 
@@ -749,6 +775,7 @@ def test_planner_node_name_in_internal_nodes():
 - **LLM 调用次数**：按 §3 口径逐场景统计，实施前后应**完全一致**（本稿不增不减）
 - **summarize 输入 token**：实施前后对比（预期下降——去重 + 去掉 `hybrid_docs`/`dynamic_rows` 原始 dict 冗余），并确认回答质量不回归
 - **`evaluation/runner.py`**：跑一轮确认 `searches` 逐分支追溯仍可用
+- **`evaluation/__main__.py:112` 的调用点**：签名改造后必须先跑一次评测入口（哪怕只跑 1 题）确认不抛 `TypeError`——该调用点不传 `planner_llm`，靠 §4.4 的默认值容错；它同时也是本稿唯一一处"单测覆盖不到、只能靠实跑发现"的破坏点
 
 ---
 
