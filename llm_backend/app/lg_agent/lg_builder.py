@@ -417,11 +417,30 @@ _research_graph = None
 _research_graph_lock = threading.Lock()
 
 
+def _build_research_model(temperature: float):
+    """子图模型构造（DEEPSEEK / OLLAMA 分支，thinking 关闭）。
+
+    子图内按节点职责拆两个实例：summarize 沿用 LLM_TEMPERATURE，planner 用
+    PLANNER_TEMPERATURE（拆解为确定性任务，收敛为 0，见 SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL §4.4）。
+    **新实例不得打 tags**——闸门按 metadata["langgraph_node"] 节点名判定，
+    共享实例上的 tags 曾是售前不流式的根因（2026-09-18 流式整改）。
+    """
+    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
+        return ChatDeepSeek(
+            api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL,
+            temperature=temperature, extra_body={"thinking": {"type": "disabled"}},
+        )
+    return ChatOllama(
+        model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL,
+        temperature=temperature, extra_body={"thinking": {"type": "disabled"}},
+    )
+
+
 def get_research_graph() -> CompiledStateGraph:
     """懒加载售前 MultiTool 子图单例（双检锁，模式同 get_rag_retriever_service）。
 
     模型按 settings.AGENT_SERVICE 选择，构造参数与原 create_research_plan 内完全一致
-    （temperature=LLM_TEMPERATURE、thinking 关闭）。**不再打 tags**——原 `research_plan`
+    （thinking 关闭）。**不再打 tags**——原 `research_plan`
     标签粒度覆盖 planner+summarize 两个节点（共享实例），曾被 SSE 出口当内部推理误挡，
     致售前整段返不流式，2026-09-18 随流式整改移除（见 app/lg_agent/stream_filter.py）。
     首建竞态由 _research_graph_lock 收口；compile 为同步操作且仅 ~7ms，不阻塞事件循环。
@@ -430,11 +449,10 @@ def get_research_graph() -> CompiledStateGraph:
     if _research_graph is None:
         with _research_graph_lock:
             if _research_graph is None:
-                if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-                    model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=settings.LLM_TEMPERATURE, extra_body={"thinking": {"type": "disabled"}})
-                else:
-                    model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, extra_body={"thinking": {"type": "disabled"}})
-                _research_graph = create_multi_tool_workflow(llm=model)
+                _research_graph = create_multi_tool_workflow(
+                    llm=_build_research_model(settings.LLM_TEMPERATURE),          # summarize 沿用 0.7
+                    planner_llm=_build_research_model(settings.PLANNER_TEMPERATURE),  # planner 收敛为 0
+                )
     return _research_graph
 
 

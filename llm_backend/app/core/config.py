@@ -148,6 +148,10 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7                            # 通用 LLM 温度
     ROUTER_TEMPERATURE: float = 0.0                         # 意图识别/路由温度（分类任务，低温保证确定性）
 
+    # planner settings
+    PLANNER_TEMPERATURE: float = 0.0                        # planner 拆解温度（确定性优先）
+    PLANNER_MAX_TASKS: int = 3                              # 拆解任务数上限；超过一律回退单分支（SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL §4.3）
+
     # Streaming settings
     STREAM_DELAY: float = 0.05                              # 流式响应延迟（秒）
 

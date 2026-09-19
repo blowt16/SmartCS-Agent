@@ -1,3 +1,5 @@
+from typing import Optional
+
 from langchain_core.language_models import BaseChatModel
 from langgraph.constants import END, START
 from langgraph.graph.state import CompiledStateGraph, StateGraph
@@ -31,6 +33,7 @@ class AgentState(InputState):
 
 def create_multi_tool_workflow(
     llm: BaseChatModel,
+    planner_llm: Optional[BaseChatModel] = None,
 ) -> CompiledStateGraph:
     """
     Create a multi tool Agent workflow using LangGraph.
@@ -41,13 +44,17 @@ def create_multi_tool_workflow(
     llm : BaseChatModel
         The LLM to use for processing
 
+    planner_llm : Optional[BaseChatModel]
+        planner（拆解）专用 LLM；缺省回退 llm。
+        兼容未同步更新的既有调用方（evaluation/__main__.py:112）。
+
     Returns
     -------
     CompiledStateGraph
         The workflow.
     """
     # 1. 针对用户的问题进行任务分解
-    planner = create_planner_node(llm=llm)
+    planner = create_planner_node(llm=planner_llm or llm)
 
     # 2. 向量检索节点（每个子任务并发执行一次 pgvector 检索）
     customer_tools = create_vector_search_query_node()
