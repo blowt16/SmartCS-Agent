@@ -1,6 +1,18 @@
 # planner 实体拆解与零 LLM 检索闭环 实施规格
 
-> **归档状态**: ⏳ 待实施（2026-09-18 定稿，依据 main 分支代码实测与两份源 spec 整合）
+> **归档状态**: ✅ 已完成（2026-09-19 实施完毕并归档）
+>
+> **落地证据**：
+> - 阶段 1（planner 改造）—— 提交 `cf73566`。文件：`components/planner/models.py`（`EntitySubQuery` + 重写 `PlannerOutput`）、`kg_sub_graph/prompts/kg_prompts.py`（商品场景提示词，上限经 `<<MAX_TASKS>>` 占位符派生）、`components/planner/prompts.py`（human 缩为占位）、`components/planner/node.py`（`_fallback` 单一出口 + 校验 + 三态日志）、`app/core/config.py`（`PLANNER_TEMPERATURE`/`PLANNER_MAX_TASKS`）、`lg_builder.py`（`_build_research_model` 双实例）、`multi_tool.py`（`planner_llm` 可选参数）、`.env`（本地两行）。测试：`tests/test_planner_node.py` 12 项全绿；真实 LLM 端到端复跑 §7.1 全部 6 个输入，**6/6 符合期望**（含三实体 split=3、多属性细节问与品类选购句正确回退且文本 = 原 query 原文）。
+> - 阶段 2（检索侧装配）—— 提交 `e272873`。文件：`components/summarize/node.py`（`_assemble_evidence`）、`summarize/prompts.py`（无关行纪律）、`app/services/rag_retriever_service.py`（精排分数分布 + 预览补分）。测试：`tests/test_summarize_node.py` 9 项全绿；真实子图端到端复跑 §7.2 场景 1/3/6/8——双实体 split=2、两分支各一条动态补全日志、**原始 10 块去重后 5 块（省 50%）**、动态区全局一份、两商品价格取值正确无错配；精排分数实测呈双峰（max 0.952~0.992 / min 0.018~0.046）。`evaluation/__main__.py:112` 单参调用形态实测兼容。
+> - 阶段 3（清理与收尾）—— 提交见归档提交。删除三处死代码（`lg_builder.py` 死 import `create_planner_node`、`customer_tools/node.py` 的 `VectorSearchInputState`、`multi_tool.py` 局部 `AgentState`）；`tests/test_stream_filter.py` 增 planner 节点名守护测试。
+> - **全量 pytest：151 passed / 1 failed**（唯一失败 `test_bm25_retriever::test_bm25_recalls_docs_with_partial_terms` 为既有失败，见 `docs/项目问题.md` #8，非本稿回归）；`test_customer_tools_node.py` 保持全绿。
+>
+> **实施中修正的两处 spec 未覆盖问题**（已回写正文）：
+> 1. **花括号转义**（§4.2 / §4.4.1）——提示词会进 `ChatPromptTemplate`，字面 JSON `{name: "..."}` 被解析成模板变量名抛 `KeyError`，且该异常**绕过 planner 节点的 try/except**（在 chain 输入校验阶段抛出），表现为静默回退单分支且日志无异常痕迹。最终方案：示例字典写 `{{name: ...}}`、上限用不含花括号的 `<<MAX_TASKS>>` 占位符（原定的 f-string 方案作废）。
+> 2. **去重边界**（§4.5）——`key = d.get("chunk_id") or d.get("id")` 在键缺失时会让首个无键块占用 `None`、其余无键块被整体静默丢弃；改为无键块不参与去重、直接保留。
+>
+> **与源稿的差异 4/6 已于实施前调整**：差异 4（实体约束检索）经实测否决，差异 6（配置环境变量化）已落地；差异 1~3、5 按原样实施。
 
 > **整合来源**（未实施部分全部移交本稿；两份源稿已于 2026-09-18 `git rm` 删除，全文见 git 历史）：
 > - `SPEC_ENTITY_PARALLEL_RAG.md` 阶段 2（planner 改造）/ 阶段 4（检索侧）/ 阶段 6（收尾）——该稿阶段 0/1/3/5 已落地，不属本稿范围
@@ -23,7 +35,7 @@
 
 > **用途**: 售前（presale）链路 planner 节点与检索侧的合并改造——planner 从 Cypher 时代通用拆分模板改为商品场景的子问单元拆解（含主题词产出与一致性校验），检索侧在不新增 LLM 调用、不削减召回的前提下完成跨分支证据去重（实体约束已于 2026-09-19 实测否决，见 §4.6）
 > **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector HNSW + pg_jieba BM25 + RRF + bge-reranker-v2-m3 CrossEncoder + DeepSeek/Ollama
-> **状态**: 设计规格，待实施（前置结构条件已满足：customer_tools 单例化 cf9e37b、子图简化与 planner 直连、子图进程级单例 29e6f73 均已落地）
+> **状态**: ✅ 已实施（2026-09-19；原状态为"设计规格，待实施"，以顶部归档状态行为最新判定）
 > **关联文档**: [[PROJECT_ANALYSIS.md]] §4.4 [[docs/项目问题.md]] #2/#3 [[SPEC_RAG_SKU_METADATA]]（sku_codes/chapter 透出）[[SPEC_ENTRY_LLM_RESOLUTION.md]]（入口消解产物入力）
 
 ---
@@ -698,40 +710,40 @@ def test_planner_node_name_in_internal_nodes():
 > **`components/models.py` 实际不改**（`Task` 与现状一致，§4.1）；列出它是为提醒实施者"确认不需要改"，而非需要编辑。
 > **`evaluation/__main__.py` 不在 Files 内**：靠 `multi_tool.py` 的 `planner_llm` 默认值兼容，无需编辑，但必须在 §7.3 实跑验证。
 
-- [ ] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` **不改**（2026-09-19 回退后 `entity_name` 不新增）
-- [ ] **Step 2**：`kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 全文；`planner/prompts.py` 的 human 模板缩减为仅 `问题: {question}`
-- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志，`name` 只入日志；`multi_tool.py` 需确认 `Optional` 已 import）
-- [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生（**勿逐字照抄 §4.2 的"总数不超过 3"默认值，`planner_llm` 默认值容错的调用点在下一行**）；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名改为 `planner_llm: BaseChatModel | None = None`（默认回退 `llm`，兼容 `evaluation/__main__.py:112`）
-- [ ] **Step 5**：项目根 `.env` 手工补 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两行（§4.4.1；该文件 gitignore，仅本地生效，提交不含此项）
-- [ ] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 主题词产出 + 一致性校验单分支回退 + 拆解温度收敛为 0`
+- [x] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` **不改**（2026-09-19 回退后 `entity_name` 不新增）
+- [x] **Step 2**：`kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 全文；`planner/prompts.py` 的 human 模板缩减为仅 `问题: {question}`
+- [x] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志，`name` 只入日志；`multi_tool.py` 需确认 `Optional` 已 import）
+- [x] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生（**勿逐字照抄 §4.2 的"总数不超过 3"默认值，`planner_llm` 默认值容错的调用点在下一行**）；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名改为 `planner_llm: BaseChatModel | None = None`（默认回退 `llm`，兼容 `evaluation/__main__.py:112`）
+- [x] **Step 5**：项目根 `.env` 手工补 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两行（§4.4.1；该文件 gitignore，仅本地生效，提交不含此项）
+- [x] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 主题词产出 + 一致性校验单分支回退 + 拆解温度收敛为 0`
 
 ### 阶段 2：检索侧零 LLM 闭环
 
 **Files**：`components/summarize/node.py`、`app/services/rag_retriever_service.py`、`.../components/summarize/prompts.py`
 
-- [ ] **Step 1**：`summarize/node.py` 增 `_assemble_evidence` 并替换节点体（§4.5）
-- [ ] **Step 2**：`summarize/prompts.py` 增"动态区无关行不得出现在回答里"一条（§4.6.4；建议性，可实施时删）
-- [ ] **Step 3**：`search` 增精排分数分布日志与预览补分（§4.7）
-- [ ] **Step 4**：验证（§7.2/§7.3）→ 提交 `[feat] summarize 跨分支证据装配：chunk_id/sku 去重 + 取值纪律 prompt + 精排分数观测`
+- [x] **Step 1**：`summarize/node.py` 增 `_assemble_evidence` 并替换节点体（§4.5）
+- [x] **Step 2**：`summarize/prompts.py` 增"动态区无关行不得出现在回答里"一条（§4.6.4；建议性，可实施时删）
+- [x] **Step 3**：`search` 增精排分数分布日志与预览补分（§4.7）
+- [x] **Step 4**：验证（§7.2/§7.3）→ 提交 `[feat] summarize 跨分支证据装配：chunk_id/sku 去重 + 取值纪律 prompt + 精排分数观测`
 
 > **不在本阶段**（2026-09-19 回退）：实体约束相关的四处改动全部取消——`product_dynamic_service.py`、`rag_retriever_service.search` 签名、`edges.py` Send payload、`customer_tools/node.py` **均不动**。本阶段只改 summarize 一个节点 + 一处日志。
 
 ### 阶段 3：清理、守护测试与文档收尾
 
-- [ ] **Step 1**：删除 §4.8 三项死代码（删除前全局 grep 确认零引用）
-- [ ] **Step 2**：新增 planner 节点名守护测试（§4.8）
-- [ ] **Step 3**：全量 `pytest` 回归（基线：75/76，`test_bm25_retriever.py::test_bm25_recalls_docs_with_partial_terms` 为既有失败——`docs/项目问题.md` #8）
-- [ ] **Step 4**：更新 `docs/PROJECT_ANALYSIS.md` §4.4.2（planner 现状边界改为落地后描述）与本稿归档状态行
-- [ ] **Step 5**：提交 `[docs] planner 改造与检索闭环落地后文档同步`
+- [x] **Step 1**：删除 §4.8 三项死代码（删除前全局 grep 确认零引用）
+- [x] **Step 2**：新增 planner 节点名守护测试（§4.8）
+- [x] **Step 3**：全量 `pytest` 回归（基线：75/76，`test_bm25_retriever.py::test_bm25_recalls_docs_with_partial_terms` 为既有失败——`docs/项目问题.md` #8）
+- [x] **Step 4**：更新 `docs/PROJECT_ANALYSIS.md` §4.4.2（planner 现状边界改为落地后描述）与本稿归档状态行
+- [x] **Step 5**：提交 `[docs] planner 改造与检索闭环落地后文档同步`
 
 ### 阶段 4：本稿归档（阶段 1~3 全部落地后执行）
 
 > 两份源稿已随本稿定稿 `git rm`（2026-09-18，未实施内容全部移交本稿、已落地记录转记于本稿头部「已落地前置」），无需再走归档流程。本阶段只处理本稿自身；**阶段 1~3 未落地前不得执行**，否则构成状态不实。
 
-- [ ] **Step 1**：本稿归档状态行更新为 ✅ 已完成（附实施提交 hash、关键文件路径、测试结果）
-- [ ] **Step 2**：`git mv` 本稿至 `docs/spec_plan/已完成/`
-- [ ] **Step 3**：修正仓库内对本稿的导航引用（`docs/PROJECT_ANALYSIS.md` §4.4）——spec 内部 git 命令示例等历史记录不改
-- [ ] **Step 4**：提交 `[docs] planner 实体拆解与检索闭环实施完成，spec 归档`
+- [x] **Step 1**：本稿归档状态行更新为 ✅ 已完成（附实施提交 hash、关键文件路径、测试结果）
+- [x] **Step 2**：`git mv` 本稿至 `docs/spec_plan/已完成/`
+- [x] **Step 3**：修正仓库内对本稿的导航引用（`docs/PROJECT_ANALYSIS.md` §4.4）——spec 内部 git 命令示例等历史记录不改
+- [x] **Step 4**：提交 `[docs] planner 实体拆解与检索闭环实施完成，spec 归档`
 
 ---
 

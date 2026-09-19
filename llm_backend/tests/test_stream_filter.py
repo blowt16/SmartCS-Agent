@@ -123,3 +123,28 @@ def test_presale_answer_delivered_exactly_once():
     passed = [c for c in out if c]
     assert len(passed) == len(per_token)                  # 逐 token 流式(不再整段)
     assert "".join(passed) == answer                      # 逐字相等:不重复不丢失
+
+
+# ==================== 隐式契约：节点名与黑名单字符串同步 ====================
+
+def test_planner_node_name_in_internal_nodes():
+    """planner 节点名由 add_node(函数对象) 取 __name__，与流式黑名单字符串耦合。
+
+    multi_tool.py 的 `add_node(planner)` 取函数 __name__ 作为节点名，与
+    stream_filter.INTERNAL_NODES 里的字符串 "planner" 是两个独立来源。重命名节点
+    函数（如改成 plan_tasks）会让 planner 的结构化输出分片**静默外泄给用户**——
+    本测试是该耦合的唯一防线（SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL §4.8）。
+    """
+    from langchain_core.runnables import RunnableLambda
+
+    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.planner.node import (
+        create_planner_node,
+    )
+    from app.lg_agent.stream_filter import INTERNAL_NODES
+
+    stub = type("_Stub", (), {"with_structured_output": lambda self, _s: RunnableLambda(lambda _m: None)})()
+    node_name = create_planner_node(llm=stub).__name__
+    assert node_name in INTERNAL_NODES, (
+        f"planner 节点函数名 {node_name!r} 不在 stream_filter.INTERNAL_NODES "
+        f"{sorted(INTERNAL_NODES)} 中——重命名会让 planner 分片外泄给用户"
+    )

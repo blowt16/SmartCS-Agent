@@ -12,12 +12,6 @@ logger = get_logger(service="customer_tools")
 
 # ==================== 数据模型 ====================
 
-class VectorSearchInputState(BaseModel):
-    task: str
-    query: str
-    steps: List[str]
-
-
 class VectorSearchOutputState(BaseModel):
     task: str
     query: str

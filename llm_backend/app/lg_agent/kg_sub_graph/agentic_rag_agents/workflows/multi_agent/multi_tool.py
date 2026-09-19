@@ -20,16 +20,6 @@ from ...components.summarize import create_summarization_node
 
 from .edges import map_reduce_planner_to_customer_tools
 
-from dataclasses import dataclass, field
-# 强制要求数据类中的所有字段必须以关键字参数的形式提供。即不能以位置参数的方式传递。
-@dataclass(kw_only=True)
-class AgentState(InputState):
-    """The router's classification of the user's query."""
-    steps: list[str] = field(default_factory=list)
-    """Populated by the retriever. This is a list of documents that the agent can reference."""
-    question: str = field(default_factory=str) # 这个参数用来与子图进行交互
-    answer: str = field(default_factory=str)  # 这个参数用来与子图进行交互
-
 
 def create_multi_tool_workflow(
     llm: BaseChatModel,

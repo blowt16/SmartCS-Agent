@@ -487,6 +487,8 @@ flowchart TD
 ### 4.4 售前导购模块：MultiTool 子图 + ragTool 检索工具链（总 — 分）
 
 > ⚠️ **2026-09-18 同步**：① 子图自 2026-09-02 起为**进程级单例**（`get_research_graph` 懒加载复用），本节原"每请求新建检索子图实例"描述已过期；② 出口流式整改——售前回答由"整段一次性返回"恢复为**逐 token 流式**（SSE 闸门改为按节点判定，见 §4.4.1 末）；③ 补记 planner 的现状边界（提示词/校验/温度，见 §4.4.2）。§4.4.3~§4.4.5 经复核仍与代码一致。
+>
+> ⚠️ **2026-09-19 同步（planner 改造 + 检索侧装配落地）**：① planner 已按上述 spec 完成改造——商品场景拆解提示词、`_fallback` 单一出口校验、`PLANNER_TEMPERATURE=0.0` 独立实例（§4.4.2 planner 条已更新为落地后描述）；② summarize 输入改为 `_assemble_evidence` 单证据串（chunk_id 去重 + 动态行按 sku 合并，§4.4.2 summarize 条已更新）；③ **实体约束检索方案经两轮实测否决、不再实施**（原 spec §4.6，证据见该文档 §4.6.1 实验 A~E 与 §8 D10），`customer_tools`/`RAGRetrieverService` 签名与 `edges.py` Send 结构均未改动；④ 顺带清理三处死代码（`lg_builder` 死 import、`VectorSearchInputState`、`multi_tool` 局部 `AgentState`）。
 
 **模块职责**：承接 `type=presale`（商品参数/价格/推荐/使用咨询）。模块由三层组成：主图节点 `create_research_plan`（容器）→ **Multi-Tool 工作流子图**（planner → 并行检索 → summarize → final_answer 的 map-reduce 编排）→ **检索工具层**（检索节点直接消费 `RAGRetrieverService` 混合检索管线 + `product_dynamic_service` 动态补全；另有两枚 langchain `@tool` 薄封装 `rag_retrieval` / `product_stock_lookup` 按"静态查知识 + sku 动态补全"协议落地并单测，**LLM 编排形态（bind_tools）未接入**——两 tool 的语义组合已由检索节点以确定性形态投入生产（2026-09-06 方案 A：RAG 门控 + sku-only 动态补全 + 静态/动态同码配对供 summarize，见下各节）。其中 ragTool 指向的**混合检索管线**运行流程最为复杂，按"总 → 分"拆解如下。
 
@@ -517,9 +519,9 @@ flowchart TD
     style VS fill:#fff3cd
 ```
 
-- **planner**：把问题拆为独立子任务（map-reduce 的 map 端，1 任务 = 1 并行检索分支），拆不开则保留原问题为单任务。**现状边界**（2026-09-18 实测，详见 `docs/spec_plan/未完成/SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL.md` §2）：提示词仍是 Cypher 时代的通用拆分模板（`kg_prompts.py:8-38`，示例为"北风商贸有哪些饮料""订单10248""供应商 Exotic Liquids"等库表式问句），**无商品实体识别、无意图继承、无实体名回填约束**；输出模型 `PlannerOutput` 仅 `tasks: List[Task]`（无 `entity_count`），节点**只对"空列表"回退**——空串任务/重复任务/超过 3 条均不校验，空串可穿透为 `Send(task="")` → 该分支空记录 → summarize 输出 "No data to summarize."（**是失败而非降级**）；拆解复用 `LLM_TEMPERATURE=0.7` 的研究模型（无确定性约束，同问拆解结果随采样漂移）。spec 阶段 2 已备好可直接执行的替换 prompt 全文与节点校验代码（`_fallback` 单一出口 + 非空/去重/MAX_TASKS=3），**未实施**。
+- **planner**：把问题拆为独立子任务（map-reduce 的 map 端，1 任务 = 1 并行检索分支），拆不开则保留原问题为单任务。**现状**（2026-09-19 改造落地，详见 `docs/spec_plan/已完成/SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL.md` §4.1~§4.4）：提示词已换为商品场景子问拆解（`kg_prompts.py`，拆分动机收敛为两类——多实体 / 列表+详情并列；原 Cypher 时代"北风商贸/订单10248"库表式示例已全部移除）；输出模型 `PlannerOutput` 含 `entity_count` + `tasks: List[EntitySubQuery]`（`EntitySubQuery` 含 `name` 主题词与 `sub_query`，**LLM 不再感知 `parent_task`**）；节点校验 `_fallback` 单一出口——LLM 异常 / 任务数不在 [2, MAX_TASKS] / 空串 `sub_query` / 重复任务一律回退单分支且**任务文本 = 原 query 原文**（不采用 LLM 改写），`Send(task="")` 结构性不可达；拆解用独立模型实例 `PLANNER_TEMPERATURE=0.0`（与 summarize 的 0.7 分离，`lg_builder._build_research_model`），上限 `MAX_TASKS` 与提示词文本同源派生自 `settings.PLANNER_MAX_TASKS`（`.env` 可调）。**注意**：`name` 主题词仅用于日志观测（空名率/拆解分布），**不流入检索侧**——实体约束检索方案经两轮实测否决（同文档 §4.6/§8 D10）。
 - **检索节点**（`customer_tools/node.py`）：每个子任务一次 `RAGRetrieverService.search(task)`（静态检索）→ **RAG 门控动态补全**（2026-09-06 方案 A）：收集命中块 `sku_codes` 候选（去重保序，一次 `WHERE IN` 批量经 `product_dynamic_service.fetch_by_skus`）→ 结果以 `records.result`（= 动态区【商品动态信息区】+ 静态块文本，同 sku 编码配对、免 LLM join）与 `records.hybrid_docs` / `records.dynamic_rows` 进 `searches` 状态。零文档/无 sku 块（政策/通用）**不查动态库**（检索准确性由 rag 负责，宁缺勿错）。
-- **summarize**（= 最终 answer LLM）：子图单例注入的同一模型实例（与 planner 共用；原 `tags=["research_plan"]` 已于 2026-09-18 随流式整改移除，见 `app/lg_agent/stream_filter.py`）；要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
+- **summarize**（= 最终 answer LLM）：子图单例注入的 summarize 模型实例（`LLM_TEMPERATURE=0.7`，与 planner 的 0.0 分离；原 `tags=["research_plan"]` 已于 2026-09-18 随流式整改移除，见 `app/lg_agent/stream_filter.py`）。**输入装配**（2026-09-19 落地）：`_assemble_evidence` 把 N 个分支的 `records` 装配为**单一证据字符串**——按 `chunk_id` 跨分支去重、动态行按 sku 合并（实测双分支原始 10 块 → 去重后 5~6 块）、两通道统一走 `render_*` 渲染器；**只去重不做相关性过滤**（相关性由精排排序 + LLM 取值判断承担，实测系统侧再加一层收窄会误杀正确块）。要求仅基于检索事实、不道歉、不用"根据系统"机械表达、亲和口吻（亲～/emoji）；口径规则：价格只取【商品动态信息区】并按编码与静态块同码配对（禁跨码取价）、**动态区中与当前询问无关的行不得出现在回答里**（防错配唯一防线）、引用商品省略标题 (SKU:) 编码、无归属块仅佐证政策、动态未收录的商品如实告知不得估算或拿同品类替代。
 - 无结果时 `summary="No data to summarize."`，final_answer 原样透传（无显式兜底话术，属已知边界）。
 
 #### 4.4.3 子图②：检索工具层现状（2026-09-06 SKU 对齐 + 方案 A 同步）
