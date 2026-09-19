@@ -155,8 +155,22 @@ class RAGRetrieverService:
         logger.info("混合检索完成: 向量 {} 条 + BM25 {} 条 -> 融合 {} 条 -> 最终 {} 条",
                     len(vector_results), len(bm25_results), len(fused), len(fused))
 
+        # 精排分数分布（观测用，不改变任何过滤行为）——为"是否引入 RERANK_MIN_SCORE 阈值
+        # 过滤"提供数据。bge-reranker-v2-m3 输出为 logits（非 0-1 归一），阈值必须由实测
+        # 分布决定，不得拍脑袋设定（SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL §4.7 / §8 D9）。
+        scores = [d["rerank_score"] for d in fused if d.get("rerank_score") is not None]
+        if scores:
+            logger.info("精排分数分布: n={}, min={:.3f}, max={:.3f}, mean={:.3f}",
+                        len(scores), min(scores), max(scores), sum(scores) / len(scores))
+
         # rerank 后最终结果内容预览: 每条 chunk 的 content 前 200 字符（列表格式、逐条换行, 调试用）
-        final_preview = [str(d.get("text", "")).replace("\n", "\\n")[:200] for d in fused]
+        # 前缀补 rerank_score：便于人工核对"高相关块是否真的排前"与阈值选点
+        final_preview = [
+            f"[{d.get('rerank_score'):.3f}] {str(d.get('text', '')).replace(chr(10), ' ')[:200]}"
+            if d.get("rerank_score") is not None
+            else f"[—] {str(d.get('text', '')).replace(chr(10), ' ')[:200]}"
+            for d in fused
+        ]
         preview_lines = "\n".join(f"  [{i}] {c}" for i, c in enumerate(final_preview))
         logger.info("最终检索结果内容预览(前200字符, 共 {} 条):\n{}", len(final_preview), preview_lines)
         return fused
