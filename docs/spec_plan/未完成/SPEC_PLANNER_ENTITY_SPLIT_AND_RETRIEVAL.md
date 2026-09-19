@@ -18,6 +18,7 @@
 > 3. **`original_question` 字段取消**——原动机"预处理后的 question 被稀释"随预处理管道 2026-08-21 整体删除而消失，`state.question` 现即消解后完整句
 > 4. **新增实体约束检索**（name→sku→sku_codes），源稿无此项；以此替代 HyDE 承担"逐实体覆盖"职责
 > 5. **P4（单任务空转 1 次 LLM）决策为保持独立调用**，不改调用结构（§8 D5）
+> 6. **planner 配置环境变量化**（§4.4.1）——新增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两个 `.env` 项，并显式写明动态补全（§4.4.2）不受拆解影响；2026-09-19 据评审确认补充
 
 > **用途**: 售前（presale）链路 planner 节点与检索侧的合并改造——planner 从 Cypher 时代通用拆分模板改为商品场景的子问单元拆解（含实体名回填与一致性校验），检索侧在不新增 LLM 调用的前提下完成跨分支证据去重与实体约束
 > **技术栈**: LangGraph 0.3.x（Send map-reduce）+ pgvector HNSW + pg_jieba BM25 + RRF + bge-reranker-v2-m3 CrossEncoder + DeepSeek/Ollama
@@ -143,6 +144,8 @@ main 入口 /api/langgraph/query
 **链路结构无变化**：不新增节点、不新增边，`Send` 扇出与 `searches` 累加器保持现状。改动全部落在节点内部逻辑与检索服务签名。
 
 **LLM 调用次数**（无缓存命中）：单实体首轮 3 次（Router + planner + summarize），多轮 4 次（+入口消解），双实体 3 次（拆 N 分支不增 LLM）。**与本稿实施前完全一致**。
+
+**动态信息通道（价格/库存）不受拆解影响**：`create_multi_tool_workflow` 拆分后，动态补全仍由 `customer_tools` 单一节点内的 `fetch_by_skus` 承担，**每个并行分支各自执行一次**（详见 §4.4.2）。本稿不新增、不删减动态检索调用点。
 
 ---
 
@@ -368,6 +371,75 @@ def create_multi_tool_workflow(llm: BaseChatModel, planner_llm: BaseChatModel):
 ```
 
 > **与 2026-09-18 流式整改的兼容性**：闸门已由"共享模型实例上的 `tags=["research_plan"]` 黑名单"改为"按 `metadata["langgraph_node"]` 节点名判定"（`stream_filter.py:19-23`），拆两个模型实例不再有任何流式副作用。**实施时不得给新实例打 tags**。
+
+### 4.4.1 planner 配置项（config.py + .env）
+
+**文件**：`app/core/config.py`（新增两项）、**项目根 `.env`（维护者本地补充）**、`kg_sub_graph/prompts/kg_prompts.py`（`MAX_TASKS` 派生句）
+
+`config.py` 新增两个字段（`PLANNER_TEMPERATURE` 已见 §4.4）：
+
+```python
+# planner settings
+PLANNER_TEMPERATURE: float = 0.0   # planner 拆解温度（确定性优先）
+PLANNER_MAX_TASKS: int = 3         # 拆解任务数上限；超过一律回退单分支（§4.3）
+```
+
+项目根 `.env` 需由维护者补两行（**该文件在 `.gitignore` 内，改动不进 git，实施时须手工添加**），写法对齐现有温度参数分节：
+
+```bash
+# planner 拆解配置（见 docs/spec_plan/未完成/SPEC_PLANNER_ENTITY_SPLIT_AND_RETRIEVAL.md §4.4.1）
+PLANNER_TEMPERATURE=0.0                        # 拆解温度（必须为 0，保证同输入同拆解）
+PLANNER_MAX_TASKS=3                            # 拆解任务数上限；超过一律回退单分支（≥2；设 1 等价于关闭拆解）
+```
+
+**生效机制**：`Settings` 为 pydantic-settings，`ENV_FILE = ROOT_DIR / ".env"`（`config.py:7`）。**未在 `Settings` 声明的键即使写进 `.env` 也不会被读取**，故 `config.py` 字段是前提，`.env` 只是覆盖层；不写 `.env` 时按 `config.py` 默认值运行（`PLANNER_TEMPERATURE=0.0` / `PLANNER_MAX_TASKS=3`），两条链路等价。
+
+**提示词口径不得分裂（关键）**：`PLANNER_SYSTEM_PROMPT` 中"总数不超过 3"（§4.2 全文）为字面文本，环境变量改后不会自动跟随。实施时该句改为由 settings 派生：
+
+```python
+# kg_prompts.py 顶部
+from app.core.config import settings
+
+# 以 §4.2 全文为基准，仅末段这一行改为 f-string 派生（其余内容逐字照抄，不另起稿）
+PLANNER_SYSTEM_PROMPT = f"""你是售前商品问答的任务规划组件。……（§4.2 全文）
+……
+任务间互不重复、互不依赖；总数不超过 {settings.PLANNER_MAX_TASKS}。
+每条任务同时给出主题词 name：商品全名或品类词（拆成多条时必填，将用于检索范围限定）。……"""
+```
+
+节点侧同名常量同步改为派生（§4.3 的 `MAX_TASKS = 3` 字面量替换为下行），保证**提示词、节点校验、日志三处同源**：
+
+```python
+# planner/node.py 顶部（与 §4.3 其余代码一致，仅此行不同）
+from app.core.config import settings
+
+MAX_TASKS = settings.PLANNER_MAX_TASKS
+```
+
+> **常量保持模块级**：项目已有同款先例——`rrf_fusion.py:22` `DEFAULT_K = settings.RRF_FUSION_K`、`memory_cache.py:36` `DEFAULT_SUMMARY_TTL = settings.MEMORY_CACHE_TTL`，均为模块级派生一次。故 `MAX_TASKS = settings.PLANNER_MAX_TASKS` 非每次调用重读；`.env` 变更需重启进程生效。
+> **可选提示（不强制）**：`PLANNER_MAX_TASKS=1` 可一键关闭拆解（校验恒不通过 → 全量单分支），作为拆解质量不达标时的回滚开关；`PLANNER_TEMPERATURE=0.0` 为硬要求，改高会让同输入产生不同拆解，破坏 §7.1 断言可复现性。
+
+### 4.4.2 并行分支的执行契约（动态工具 × rag_tool）
+
+**结论**：拆解不改变 `customer_tools` 节点的执行内容——**rag_tool（混合检索）与商品动态信息工具（价格/库存）照常一起跑，且每个并行分支各自独立跑一遍，行为与单 query 场景逐字一致。**
+
+**依据链**（现有代码，本稿不改）：
+
+| 环节 | 现状 | 依据 |
+|---|---|---|
+| 扇出粒度 | `Send × N` 每个 task 一条消息，payload 仅 `task/question/parent_task`（本稿再加 `entity_name`），**无"是否并行分支"标志位** | `multi_tool.py:59-80`、`edges.py:12-21` |
+| 分支执行 | 每条 Send 独立进入 `customer_tools`，各自执行：`retriever.search(query, entity_skus=...)` → 收集本分支命中块的 `sku_codes` → `fetch_by_skus(skus)` → `render_dynamic_rows` + `render_doc_blocks` | `customer_tools/node.py:62-90` |
+| 两个工具的关系 | 动态补全由检索结果门控（方案 A，2026-09-06）：**只对命中文档的 sku 候选集取动态行**，零命中/无 sku 块不查动态库；两支共享同一 `sku_codes → sku` 通道，不是两个独立并行调用 | `customer_tools/node.py:65-81` |
+
+**为什么这条约定必须写明**：
+
+1. **动态信息是唯一来源**——若被误改成"只在单分支路径补全"或"先合并再补全"，价格/库存会整段丢失，且 summarize 的 prompt 规则（"价格/库存只取【商品动态信息区】"）会拿到空区，LLM 只能回"动态信息暂未收录"（**是失败而非降级**）。
+2. **实体约束不影响动态补全**——§4.6 的 `entity_skus` 只作用于 `search` 内部的静态块精排候选；动态补全的 sku 候选集改由**过滤后**的 docs 产出：约束命中实体时候选收窄为"该实体 + 政策块"，政策块 `sku_codes=[]` 不进 `skus` 列表，故实际收窄到该实体，符合预期。
+3. **本稿不新增动态检索调用点**——§1.2 指标"不新增 LLM 调用"由本约定保证不被打折：`fetch_by_skus` 是 DB 查询非 LLM，不触发 §3 的三次调用口径。
+
+**跨分支去重的边界**：§4.5 的 `_assemble_evidence` 在 summarize 内对 `hybrid_docs`（按 `chunk_id`）与 `dynamic_rows`（按 sku）做跨分支合并——**去重只发生在证据装配层，不改变"每分支各跑一遍两个工具"的执行层事实**。混合块（`sku_codes=[A,B]`，实测占 66%）被 A/B 两分支各召回一次时，A、B 的动态行被查两遍、在装配处合并为一份，属已接受的少量冗余（DB 查询非 LLM，且 §4.5 合并后进 prompt 只一次）。
+
+**回归守护（对应 §7.2）**：双实体查询下，应能在日志中看到**两条**"动态补全: 候选 N 个 sku,命中 M 行"，且 summarize 的 `{results}` 中动态区全局只有一份、每个 sku 一行。
 
 ### 4.5 summarize 跨分支证据去重
 
@@ -605,13 +677,14 @@ def test_planner_node_name_in_internal_nodes():
 
 ### 阶段 1：planner 节点改造（本稿核心）
 
-**Files**：`components/planner/models.py`、`components/models.py`、`planner/node.py`、`planner/prompts.py`、`kg_sub_graph/prompts/kg_prompts.py`、`app/core/config.py`、`lg_builder.py`、`workflows/multi_agent/multi_tool.py`
+**Files**：`components/planner/models.py`、`components/models.py`、`planner/node.py`、`planner/prompts.py`、`kg_sub_graph/prompts/kg_prompts.py`、`app/core/config.py`、`lg_builder.py`、`workflows/multi_agent/multi_tool.py`、**项目根 `.env`（本地手工，不进 git）**
 
 - [ ] **Step 1**：`planner/models.py` 新增 `EntitySubQuery`、重写 `PlannerOutput`（§4.1）；`components/models.py` 的 `Task` 增 `entity_name`（默认空）
 - [ ] **Step 2**：`kg_prompts.py` 的 `PLANNER_SYSTEM_PROMPT` 整体替换为 §4.2 全文；`planner/prompts.py` 的 human 模板缩减为仅 `问题: {question}`
-- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + MAX_TASKS + 非空/去重 + 三态日志 + `entity_name` 注入）
-- [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE: float = 0.0`；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名增 `planner_llm`
-- [ ] **Step 5**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 实体名回填 + 一致性校验单分支回退 + 拆解温度收敛为 0`
+- [ ] **Step 3**：`planner/node.py` 按 §4.3 重写节点体（`_fallback` 单一出口 + try/except + `MAX_TASKS = settings.PLANNER_MAX_TASKS` + 非空/去重 + 三态日志 + `entity_name` 注入）
+- [ ] **Step 4**：`config.py` 增 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两项；`kg_prompts.py` 提示词末句改为 `{settings.PLANNER_MAX_TASKS}` 派生；`lg_builder.py` 抽 `_build_research_model` 并造两个实例；`multi_tool.py` 签名增 `planner_llm`
+- [ ] **Step 5**：项目根 `.env` 手工补 `PLANNER_TEMPERATURE` / `PLANNER_MAX_TASKS` 两行（§4.4.1；该文件 gitignore，仅本地生效，提交不含此项）
+- [ ] **Step 6**：验证（§7.1 的 planner 断言）→ 提交 `[feat] planner 改造：商品子问拆解提示词 + 实体名回填 + 一致性校验单分支回退 + 拆解温度收敛为 0`
 
 ### 阶段 2：检索侧零 LLM 闭环
 
@@ -660,11 +733,21 @@ def test_planner_node_name_in_internal_nodes():
 
 **机制指标**：`fallback` 率（目标 <10%）、`name` 空值率（目标 <20%，超出则需加强提示词）、`split` 分布（1/2/3 三档占比，作为 P4 后续评估依据）。
 
+**配置项生效断言（§4.4.1）**：
+
+| 检查 | 期望 |
+|---|---|
+| 未写 `.env` 两项 | 走 `config.py` 默认（0.0 / 3），§7.1 全部断言行为不变 |
+| `.env` 令 `PLANNER_TEMPERATURE=0.7` | 同一 query 连跑 3 次，拆解结果开始漂移（反证环境变量已生效；验完必须改回 0.0） |
+| `.env` 令 `PLANNER_MAX_TASKS=2` | mock 返回 3 条 → `fallback (reason=tasks=3)`；返回 2 条 → `split=2` |
+| `.env` 令 `PLANNER_MAX_TASKS=5` | mock 返回 4 条 → `split=4`（证明提示词与校验同源跟随，非硬编码 3） |
+| 键名核对 | `.env` 键必须与 `Settings` 字段逐字一致（`PLANNER_MAX_TASKS`，非 `PLANNER_MAX_TASK`）——**pydantic-settings 对未声明/拼错的键既不报错、也不生效，直接按默认值跑**，拼错的表现是"改了没反应" |
+
 ### 7.2 检索侧场景清单（阶段 2，人工回归）
 
 | # | 场景 | 预期 |
 |---|---|---|
-| 1 | 双实体对比查询 | 2 个并行分支；两分支日志各出现 `实体约束过滤: x -> y 条候选`；summarize 回答以对比形式呈现两个产品 |
+| 1 | 双实体对比查询 | 2 个并行分支；两分支日志各出现 `实体约束过滤: x -> y 条候选` **与各一条 `动态补全: 候选 N 个 sku,命中 M 行`**（§4.4.2 执行契约）；summarize 回答以对比形式呈现两个产品 |
 | 2 | 单实体事实查询 | 1 分支；若 `name` 解析到 sku 则出现约束日志；检索结果含该商品块 |
 | 3 | 商品名未收录（"XX牌空气炸锅多少钱"） | `未解析到 sku，跳过约束`，检索正常进行，summarize 如实告知未收录 |
 | 4 | 政策类 query（"京东自营怎么退货"） | 无实体约束或约束后政策块（`sku_codes=[]`）保留 |
@@ -712,3 +795,5 @@ def test_planner_node_name_in_internal_nodes():
 8. **删除前全局检索**：§4.8 三项死代码删除前 grep 确认零引用（CLAUDE.md 全项目扫描规则），避免复现 `error_tool_selection` 式未注册引用。
 9. **`resolve_skus_by_product_name` 的 LIKE 通配符**：用户可控文本进 `LIKE '%...%'`，SQLAlchemy 已参数化（无注入风险），但名称中的 `%`/`_` 会作为通配符生效——属可接受的宽松匹配，fail-open 已兜底。
 10. **每阶段独立提交**：阶段 1（planner）与阶段 2（检索侧）严格分开提交，禁止跨阶段合并——阶段 2 依赖阶段 1 产出的 `entity_name`，但阶段 1 单独可验证（日志断言）。
+11. **拆解上限存在三处引用，必须同源（§4.4.1）**：提示词的"总数不超过 N"、`node.py` 的 `MAX_TASKS` 校验、`.env` 的 `PLANNER_MAX_TASKS`。前两处一旦回退为字面量 3，`.env` 调大/调小就只影响其中一处——**提示词与校验打架时不会报错**：提示词仍教 LLM 拆 3 条、校验按 env 放行 5 条，或反之恒回退。实施后必须按 §7.1 配置项断言表逐档验一遍（改 env 值 → 重启 → 看 `fallback(reason=tasks=N)` 是否跟随）。
+12. **`.env` 不进 git（已验证 `.gitignore:24`）**：本稿新增的两个配置项在版本库里只体现为 `config.py` 的默认值声明，`.env` 那两行**无法通过提交同步给其它环境**。部署到新机器时若未补写，行为等同默认值（0.0 / 3），不会报错——需在 README 或部署说明中同步告知，避免"我本地明明是 5"的排查弯路。
