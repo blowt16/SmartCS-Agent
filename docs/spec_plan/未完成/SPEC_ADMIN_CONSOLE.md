@@ -4,7 +4,7 @@
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
 > **技术栈**: FastAPI + SQLAlchemy async + psycopg + PostgreSQL/pgvector（后端）；Vue3 + Vite + Tailwind + ECharts（前端）。
 > **状态**: ⏳ 待实施（设计已评审，2026-09-22）
-> **修订④**: 2026-09-22 用户变更知识库上传方案——由"上传即入库、取消不撤销"改为**两阶段暂存制**（D7/D17/D18/D19）：`stage` 只存文件 + 取基本信息（**不解析内容、不清洗、不分块、不嵌入、不写 DB**），**「取消」调 `unstage` 真撤销**，点「保存」才 `commit` 走完整索引链路。**连带推翻初稿"复用 `/api/upload`"**（该接口没有"只存不索引"的模式），知识库端点 4 → 6；并删掉初稿计划的"单条详情"端点（`commit` 响应直接返回完整行）。§5.7 / §6.4.5 / §6.7 / §8.5 / §9 / §附 已同步，风险清单增至 33 条。
+> **修订④**: 2026-09-22 用户变更知识库上传方案——由"上传即入库、取消不撤销"改为**两阶段暂存制**（D7/D17/D18/D19）：`stage` 只存文件 + 取基本信息（**不解析内容、不清洗、不分块、不嵌入、不写 DB**），**「取消」调 `unstage` 真撤销**，点「保存」才 `commit` 走完整索引链路。**连带推翻初稿"复用 `/api/upload`"**（该接口没有"只存不索引"的模式），知识库端点 4 → 6；并删掉初稿计划的"单条详情"端点（`commit` 响应直接返回完整行）。§5.7 / §6.4.5 / §6.7 / §8.5 / §9 / §附 已同步。**暂存残留补了清理方案**（§6.4.5.1，机会式清理 + `KNOWLEDGE_STAGE_TTL_HOURS=24`），风险清单增至 34 条。
 > **修订③**: 2026-09-22 用户评审确认全部 5 项待确认事项，其中**订单管理页由卡片网格改为表格**（与工单页同风格，D20）——这也澄清了最初需求里"订单管理参考工单管理界面"指的是表格而非卡片版式。正文 §6.4.4 已重写，§11 改为确认记录，§6.5 注明 `ProductThumb` 收窄为商品页专用。
 > **修订②**: 2026-09-22 按用户要求重构知识库模块——**`documents` 不加 `title` 列**（D16，列表直接用 `original_filename`）、**新增文档改为"上传驱动"表单**（D17：点「上传文件」→ 立即入库解析 → 基本信息自动回填只读区 → 补描述 → 保存）、**「创建时间」为纯展示项**（不在表单字段中，上传成功后出现；为此新增 `GET /api/admin/knowledge/{md5}` 详情端点，D18）。连带更新 §4.4 / §5.7 / §5.9 / §6.4.5 / §8.5 / §9-14 / §附，风险清单增至 32 条。
 > **修订①**: 2026-09-22 完成一轮对抗性审计（自查 + 前端/后端两路独立复核，实测方式：起真实 FastAPI 复现路由与鉴权、连真实库核对数据、建 Vite 探针工程验证多页构建与 Tailwind content 行为、直接构造 pydantic 模型验证空串/None 行为）。结论已合入正文：**2 处阻断**（`require_admin` 缺 `User` 导入 → 服务起不来；`src/admin/main.js` 导入清单缺失 → 管理端无样式无图标）、8 处高危、20+ 处中低，风险清单从 16 条扩到 29 条。**其中 4 处是我原稿的事实错误**（`Decimal` 手搓 dict 其实能序列化 / `App.vue` 行数 / 测试文件数 / 知识库新增表单的标题自相矛盾），已在正文更正并保留了"原稿错在哪"的说明，便于后续复核。
@@ -747,6 +747,7 @@ if keyword:
 
 **做什么**（对应 `indexing_service.process_file` 前 4 步的校验，但**在本端点独立实现，不调用 `process_file`**）：
 
+0. **先做机会式清理**：`_cleanup_stale_staging()` 删掉 `_staging/` 里超 TTL 的残留文件（§6.4.5.1）。放第一行——把"上一次没取消干净的东西"先扫掉，再进新文件
 1. 扩展名白名单校验（`settings.allowed_extensions` = `txt,md,pdf,docx`）→ 不符 `400 {"detail": "不支持的文件格式: .exe"}`
 2. 大小校验（≤ `settings.MAX_FILE_SIZE_MB` = 30MB）→ 超限 `400`
 3. 空文件校验 → `400`
@@ -805,6 +806,7 @@ class KnowledgeCommit(BaseModel):
 **做什么**：
 
 1. 校验暂存文件存在（`uploads/_staging/{md5}{ext}`）→ 不存在 `404 {"detail": "暂存文件不存在或已被清理: <md5>"}`
+1b. **对暂存文件 `os.utime(path)` 刷新 mtime**——防止提交过程中被并发的 `stage` 机会式清理误删（§6.4.5.1 的 30b 风险，一行解决）
 2. 调**既有** `IndexingService().process_file({"path": staged_path, "original_name": original_filename, "user_id": str(admin_id)})`——**索引链路全量复用，一行不改**
 3. 按 `process_file` 的返回分三种情况：
 
@@ -1548,16 +1550,83 @@ onMounted(() => {
 
 **删除**：`confirm('确定删除文档「{original_filename}」？将同时删除其 {chunk_count} 个知识片段，智能客服不再检索到它。')` → `DELETE /api/admin/knowledge/{md5}`。
 
-#### 6.4.5.1 暂存残留的处理（已知取舍，不是遗漏）
+#### 6.4.5.1 暂存残留的清理方案（机会式清理）
 
-「暂存了但没提交也没取消」会留下 `uploads/_staging/{md5}{ext}` 一个文件。三种来源：关掉弹窗没点取消、直接关浏览器、网络断了。
+**残留怎么来的**：三种情况——关掉弹窗没点取消、直接关浏览器、网络断了。共同特征是**前端没机会调 `unstage`**，所以文件留在 `_staging/` 里。
 
-| 项 | 说明 |
+**方案：机会式清理（opportunistic cleanup）**——不引入定时任务，而是在**每次 `stage` 调用开头**扫一遍 `_staging/`，删掉 mtime 超过 TTL 的文件。
+
+**为什么触发时机是完备的**（这是选它的核心理由，不是省事的借口）：
+
+> 残留**只在 `stage` 时产生**。所以只要还有人在用这个功能，清理就会被触发；一旦没人用了，也就不再产生新残留。**泄漏量的上界 = "最后一次使用该功能之前的未提交文件数"**，不随时间无限增长。相比之下，"定时任务"解决的正是"没人用了还要清"这个不存在的问题。
+
+**配置**（`llm_backend/app/core/config.py`，循既有 `*_TTL` 命名惯例，与 `MEMORY_CACHE_TTL` 同类）：
+
+```python
+    # 知识库暂存(管理端两阶段上传)设置
+    KNOWLEDGE_STAGE_TTL_HOURS: int = 24   # 暂存文件存活上限(小时);超过则被下一次 stage 机会式清理
+```
+
+**实现**（放 `llm_backend/app/api/admin/knowledge.py` 模块级）：
+
+```python
+import os
+import time
+from pathlib import Path
+
+from app.core.config import settings
+
+# 解析:knowledge.py → api/admin → api → app → llm_backend,再拼 uploads/_staging
+# 与 main.py:34 的 UPLOAD_DIR(= CWD 下的 "uploads")等价 —— run.py:23 会 chdir 到 llm_backend
+STAGING_DIR = Path(__file__).resolve().parent.parent.parent.parent / "uploads" / "_staging"
+
+
+def _cleanup_stale_staging() -> int:
+    """机会式清理过期暂存文件,返回删除个数。
+
+    在 stage 端点开头调用(见下)。删除失败静默跳过 —— 文件可能正被并发的
+    unstage / commit 处理,那种情况下"没删成"不是错误。
+    """
+    if not STAGING_DIR.exists():
+        return 0
+    cutoff = time.time() - settings.KNOWLEDGE_STAGE_TTL_HOURS * 3600
+    removed = 0
+    for p in STAGING_DIR.iterdir():
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        logger.info("清理过期暂存文件 {} 个(TTL {}h)", removed, settings.KNOWLEDGE_STAGE_TTL_HOURS)
+    return removed
+```
+
+**唯一调用点**：`POST /knowledge/stage` 的**第一行**（在写新文件之前——清理放前面语义更清楚；放后面虽也不会误删刚写的文件，但"先打扫再进门"更好读）。
+
+**防"清理误删正在提交的文件"**（唯一的竞态，一行解决）：`commit` 开头对暂存文件 touch 一次，刷新 mtime：
+
+```python
+    # commit 开头:刷新 mtime。
+    # 否则"暂存后隔了 24h 才点保存"+"恰好有另一次 stage 并发"时,
+    # 正在被 process_file 读的文件可能被机会式清理删掉(PDF 走 MinerU 要几十秒,窗口不小)
+    os.utime(staged_path)
+```
+
+**清理掉了用户还在等的情况**：用户暂存后去开会，隔天回来点「保存」→ `commit` 找不到文件 → 返回 `404 {"detail": "暂存文件不存在或已被清理: <md5>"}`（§5.7 的文案就是为这条路径写的）→ 前端提示"暂存已过期，请重新上传" → 用户重传即可，不会卡住。
+
+**为什么不选其它方案**：
+
+| 方案 | 否决理由 |
 |---|---|
-| 危害 | **低**。只在管理员上传路径产生，频率极低；文件在 gitignore 内、不进仓库；不写任何 DB 行，**不影响检索**（`_staging/` 不在索引管道扫描范围内） |
-| 要不要自动清理 | **不做**。加 TTL 清理要么引入定时任务、要么在 `stage` 时顺手扫目录，都是为"管理员偶尔忘记点取消"这一个低频场景付出的常驻复杂度 |
-| 与现状对比 | **不是本次引入的新问题**：`/api/upload` 上传成功的文件一直留在 `{uuid5}/{timestamp}/` 下**从不删除**，磁盘上早就有这类残留。本次只是把"未提交的暂存"单独放一个目录，反而更容易辨认和手工清理 |
-| 想清理时 | `rm -rf llm_backend/uploads/_staging/*`（没有任何 DB 依赖，随时可删） |
+| asyncio 定时任务（lifespan 里起 task） | 要管生命周期（启动/关闭/异常重启），多 worker 会重复跑；项目现无任何调度设施，为一个低频清理引入是过度设计 |
+| 独立 cron / 系统计划任务 | 部署多一个依赖，与本项目"单服务进程 + 手工脚本"的形态不符 |
+| 放在 `commit` 成功后顺带清 | 触发面比 `stage` 窄——残留也可能产生于"从没成功提交过"的用户，覆盖不全 |
+| 塞进 `init_db.py` 等运维脚本 | 用户得记得跑，等于没有 |
+| 什么都不做（初稿的取舍） | 残留无限累积，虽然是慢性的、也不是本次新引入的问题（`/api/upload` 上传成功的文件同样从不删除），但既然有 10 行就能兜住的方案，没有理由留着 |
+
+**兜底的手工清理**：`rm -rf llm_backend/uploads/_staging/*`——该目录没有任何 DB 依赖，随时可删，删了只影响"尚未提交的暂存"，不影响已入库文档与检索。
 
 #### 6.4.6 工单管理 `TicketView.vue`（表格 + 处理弹窗，对齐参考图）
 
@@ -2227,7 +2296,9 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 16 | 工单管理 | 8 行；点「处理」→ 弹窗字段与参考图一致（工单号/用户原话只读）；改状态为「已解决」+ 保存 → 列表徽章变绿、`resolved_at` 与 `handler` 有值（查库确认） |
 | 17 | 客户端回归 | `http://127.0.0.1:8000/` 客户端页面一切照旧：登录、发消息、知识库面板、上传文档均正常 |
 | 18 | 测试全绿 | `python -m pytest llm_backend/tests/ -q`，仅既有失败项（`test_bm25_retriever`） |
-| 19 | **关闭后端进程** | 验证结束后必须 kill 掉 dev server，否则占用 127.0.0.1:8000 会静默抢走用户 `run.py` 的请求 |
+| 18b | **机会式清理生效** | 手工造残留：`touch -d '2 days ago' llm_backend/uploads/_staging/<某个暂存文件>`（或先暂存一个文件再把系统时间往前拨，或用 Python `os.utime` 把 mtime 改老）→ 再调一次 `stage` 上传任意文件 → 日志出现「清理过期暂存文件 1 个(TTL 24h)」且该文件消失。**再反向验一次**：新建一个暂存文件（mtime 是现在）→ 调 `stage` → 它**不该**被删 |
+| 19 | **手工清一次暂存目录**（可选但建议） | `rm -rf llm_backend/uploads/_staging/*`——验证过程会留下若干测试用的暂存文件，清掉让环境干净。该目录无 DB 依赖，随时可删 |
+| 19b | **关闭后端进程** | 验证结束后必须 kill 掉 dev server，否则占用 127.0.0.1:8000 会静默抢走用户 `run.py` 的请求 |
 
 ---
 
@@ -2240,7 +2311,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 3 | 管理端路由骨架 + 控制台 2 端点 | `api/admin/__init__.py`、`api/admin/console.py`、`api/__init__.py`(改) | `curl /api/admin/console/stats`（管理员 token）→ 200；无 token → 401 |
 | 4 | 商品 5 端点 + `schemas/admin.py` | `api/admin/products.py`、`schemas/admin.py` | curl 冒烟（列表/新增/编辑/删除） |
 | 5 | 订单 4 端点 | `api/admin/orders.py` | 同上 |
-| 6 | 知识库 6 端点（列表 / stage / commit / unstage / PATCH / DELETE） | `api/admin/knowledge.py` | 同上 + 与既有 `/api/documents`、`/api/upload` 并存不冲突；**`stage` 只写磁盘不写库**（§8.5 有断言） |
+| 6 | 知识库 6 端点（列表 / stage / commit / unstage / PATCH / DELETE）+ 暂存清理 + 配置项 | `api/admin/knowledge.py`、`app/core/config.py`(改，加 `KNOWLEDGE_STAGE_TTL_HOURS`) | 同上 + 与既有 `/api/documents`、`/api/upload` 并存不冲突；**`stage` 只写磁盘不写库**（§8.5 有断言）；机会式清理生效（§9-18b） |
 | 7 | 工单 2 端点 | `api/admin/tickets.py` | 同上 |
 | 8 | 种子脚本 3 个 + 占位图脚本 1 个，跑通 | `llm_backend/scripts/seed_admin_account.py`、`llm_backend/scripts/seed_orders.py`、`llm_backend/scripts/seed_tickets.py`、**根** `scripts/build_product_placeholders.py` | §9-2~5 全部判据；**每个脚本连跑两次**核对幂等（订单为 upsert、其余无变化） |
 | 9 | 后端测试 5 个文件 + conftest fixtures | `tests/test_admin_auth.py` 等 5 个、`tests/conftest.py`(改) | 在**项目根**执行 `python -m pytest -q`（`pyproject.toml:60` 的 `testpaths` 指向 `llm_backend/tests`，从 `llm_backend/` 里跑也能因上溯到根 pyproject 而生效）全绿（§9-18） |
@@ -2321,7 +2392,8 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 27 | **SVG 生成物会被静默提交入库** | 实测 `git check-ignore frontend/public/products/x.svg` 无命中，而 §10 步 16 走 `git add .` → 47 个生成物入库，违反项目"docx 不入库、只提交生成脚本"的既有约定 | §6.5 已要求 `frontend/.gitignore` 加 `public/products/`，并说明代价（新克隆仓库需先跑脚本，否则图片走兜底） |
 | 28 | **根 `scripts/` 脚本连不上 DB** | 根 `scripts/` 下没有任何连 DB 的先例（实测 `grep AsyncSessionLocal\|psycopg` → 0 命中），照抄 `PROJECT_ROOT = Path(__file__).parent.parent` 导入不到 `app`（它指向项目根，而 `app` 在 `llm_backend/` 下） | §7.4 已给出完整的 `sys.path.insert(0, PROJECT_ROOT / "llm_backend")` 引导写法 |
 | 29 | **conftest 顶层 `import main` 会连累全部测试** | `main.py:543` 的 `StaticFiles(frontend/dist)` 在目录不存在时构造即抛 `RuntimeError`；`dist` 被 gitignore，没构建过的环境里会让含 `test_cleaner`/`test_rrf` 在内的**整套测试**在 collection 阶段全灭 | §8.1 已改为在 `_login()` 函数内局部导入（与 `tests/test_documents_api.py:5` 的既有做法一致） |
-| 30 | **暂存文件无人清理会留残留** | 「暂存了但既没提交也没取消」会在 `uploads/_staging/` 留文件（关弹窗、关浏览器、断网三种来源） | **接受**：只在管理员低频路径产生；在 gitignore 内、不进仓库；不写 DB、`_staging/` 不在索引扫描范围内（§6.4.5.1 已完整记录取舍）。**且这不是本次引入的新问题**——`/api/upload` 上传成功的文件一直留在磁盘上从不删除，早就有同类残留 |
+| 30 | **暂存文件无人清理会留残留** | 「暂存了但既没提交也没取消」会在 `uploads/_staging/` 留文件（关弹窗、关浏览器、断网三种来源）。**且这是唯一一种前端没机会调 `unstage` 的路径**，光靠前端保证不了 | §6.4.5.1 已给方案：**机会式清理**——`stage` 开头扫一遍 `_staging/`，删 mtime 超 `KNOWLEDGE_STAGE_TTL_HOURS`(24h) 的文件。选它的依据是**残留只在 stage 时产生**，所以"有上传就有清理"在触发时机上完备，泄漏量有上界，不需要定时任务 |
+| 30b | **机会式清理可能误删正在提交的文件** | `commit` 要读暂存文件（PDF 走 MinerU 可能几十秒），若此时另一次 `stage` 触发清理、且该文件 mtime 已超 24h，就会被删掉，`process_file` 读到一半文件没了 | §6.4.5.1 已用一行 `os.utime(staged_path)` 消掉：**`commit` 开头先 touch 刷新 mtime**，使提交中的文件不可能落入清理窗口 |
 | 31 | **`commit` 失败时暂存文件要保留，不能一律删** | 若失败也删，用户重试就得重新上传（PDF 可能几 MB，MinerU 还可能瞬时失败）；若成功也留，则残留累积 | §5.7 已规定差异化清理：`success`/`duplicate` → 删；`failed` → **保留**（弹窗停在暂存态可重试，或点取消走 `unstage` 兜底）。§8.5 有正反两条断言 |
 | 31b | **管理端端点的 4xx 语义与 `/api/upload` 不同** | 后者把处理类失败包进 `200 + status=failed`（客户端依赖该契约），管理端端点用标准 4xx。**若有人图省事把两者合并成一个通用上传器，就会打破客户端契约** | §6.7 已明确警示"两者契约不同，各留各的"；`admin/api.js` 里的 `stageFile` 是独立实现，不复用 `src/api/upload.js`（后者 URL 还硬编码成了 `/api/upload`） |
 | 32 | **表单只读区不要用 `disabled` 的 input** | `disabled` 输入框视觉上仍像"能填但被禁用"，用户会反复点击试图编辑；且 `disabled` 字段虽不进提交体，但容易被后来者接上 `v-model` 而变成可写 | §6.4.5 已规定用**纯文本节点 + 浅灰底**渲染只读信息区；「创建时间」尤其强调是展示项、不进提交体 |
