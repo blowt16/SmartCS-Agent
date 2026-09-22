@@ -88,7 +88,10 @@ uv sync
 # 4. 启动 PostgreSQL、Redis（Docker 仅承载基础服务，应用在本地运行调试）
 docker compose up -d
 
-# 5. 初始化数据库（建表 + 启用 pgvector 扩展 + HNSW 索引）
+# 5. 初始化数据库（建表 + 启用 pgvector 扩展 + HNSW 索引 + 增量列迁移）
+#    ⚠️ 必须在启动服务【之前】跑：模型里的列（users.role / documents.description、status）
+#    与表（orders / tickets）都靠它创建。顺序反了会出现"聊天能用、但登录全 500"的迷惑现象
+#    ——SQLAlchemy 的 select(User) 会显式列出 role 列，库缺列直接抛 UndefinedColumn。
 cd llm_backend
 python -m scripts.init_db
 
@@ -96,6 +99,38 @@ python -m scripts.init_db
 cd llm_backend
 python run.py
 ```
+
+### 初始化管理端数据（首次运行 / 演示前）
+
+```bash
+# 顺序不能换：init_db 最前，种子脚本依赖它建的列与表
+cd llm_backend
+python scripts/init_db.py                 # 1. 建 orders/tickets 表 + 加 4 个增量列
+python scripts/seed_admin_account.py      # 2. 管理员账号 admin_test@test.com（role=admin）
+python scripts/seed_orders.py             # 3. 18 条订单（upsert，可反复跑刷新演示日期）
+python scripts/seed_tickets.py            # 4. 8 条工单（ticket_no 幂等键，跨天重跑仍为 8 条）
+
+# 5. 商品占位图 —— 必须在 npm run build 之前！
+#    这些 SVG 是生成物、不入库（frontend/.gitignore 忽略），新克隆的仓库没有它们；
+#    不先跑这一步，构建后商品列表图片会全走 onerror 兜底（灰块 + 箱子图标）。
+cd ..
+python scripts/build_product_placeholders.py   # 47 个 SVG → frontend/public/products/
+
+# 6. 构建前端（客户端 + 管理端两个入口）
+cd frontend && npm install && npm run build
+```
+
+### 管理端（Admin Console）
+
+入口：**<http://127.0.0.1:8000/admin.html>**（开发模式 `http://localhost:5173/admin.html`）。
+管理员账号由 `seed_admin_account.py` 创建（默认 `admin_test@test.com` / `admin`，已存在的账号只补 `role='admin'`、不改密码）。
+
+五个模块：控制台（统计卡 + 四张图）、商品管理、订单管理、知识库（两阶段上传 + SSE 实时进度条）、工单管理。
+
+两点须知：
+
+- **管理端与客户端共用 `localStorage` 的 `token` 键**（有意的：从管理端点「体验客服」跳过去不用重新登录）。反过来说，在管理端「退出登录」会把客户端的登录态一并清掉。
+- 知识库上传是**两阶段**：点「上传文件」只暂存到磁盘（不解析、不写库），点「取消」能真正撤销；点「保存」才走完整的解析 → 分块 → 嵌入 → 入库链路，进度条实时推进。未提交的暂存文件由 `stage` 触发的机会式清理回收（TTL 24 小时，`KNOWLEDGE_STAGE_TTL_HOURS`）。
 
 ### 准备知识库数据
 
