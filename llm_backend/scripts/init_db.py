@@ -17,7 +17,7 @@ logger.info("Root directory: {}", ROOT_DIR)
 import asyncio
 from sqlalchemy import text
 from app.core.database import engine, Base
-from app.models import User, Conversation, Message, DocumentChunk, Document, ProductPriceStock
+from app.models import User, Conversation, Message, DocumentChunk, Document, ProductPriceStock, Order, Ticket
 
 async def init_db():
     try:
@@ -64,6 +64,16 @@ async def init_db():
             await conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_chunks_tsv "
                 "ON document_chunks USING GIN (content_tsv)"
+            ))
+            # 管理端增量列(幂等)
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS description TEXT"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'enabled'"
             ))
         logger.info("Database initialization completed successfully!")
     except Exception as e:

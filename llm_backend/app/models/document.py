@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, String, func, UniqueConstraint
+from sqlalchemy import Column, DateTime, Integer, String, Text, func, UniqueConstraint
 from app.core.database import Base
 
 
@@ -17,3 +17,5 @@ class Document(Base):
     page_count = Column(Integer, nullable=True)         # MVP 全 null,演进从 MinerU layout.json 解析
     chunk_count = Column(Integer, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+    description = Column(Text, nullable=True)        # 文件描述(参考图"内容"列 → 改为"文件描述"列)
+    status = Column(String(20), nullable=False, default="enabled", server_default="enabled")  # enabled/disabled

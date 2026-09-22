@@ -8,6 +8,12 @@ from app.services.user_service import UserService
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# ⚠️ 必须补这一行导入:security.py 里没有 User 的 import,
+# 而函数注解在 Python 3.13(无 from __future__ import annotations)下于"定义时"求值,
+# 缺它 → NameError → security 导入即抛 → auth → main 全链失败 → uvicorn 起不来,
+# 且 tests/ 里所有 `from main import app` 在 collection 阶段全灭。
+from app.models.user import User
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -41,4 +47,14 @@ async def get_current_user(
     user = await user_service.get_user_by_email(email)
     if user is None:
         raise credentials_exception
-    return user 
+    return user
+
+
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """管理端依赖:复用既有 JWT 校验,再查 role。非管理员 403。"""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return current_user

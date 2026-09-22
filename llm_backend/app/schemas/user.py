@@ -16,6 +16,7 @@ class UserLogin(BaseModel):
 class UserResponse(UserBase):
     id: int
     status: str
+    role: str                       # 新增
     created_at: datetime
     last_login: Optional[datetime] = None
 
@@ -24,4 +25,5 @@ class UserResponse(UserBase):
 
 class Token(BaseModel):
     access_token: str
-    token_type: str = "bearer" 
+    token_type: str = "bearer"
+    role: str = "user"              # 新增,前端据此决定进哪个端

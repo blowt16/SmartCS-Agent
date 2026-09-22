@@ -13,6 +13,7 @@ class User(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     last_login = Column(DateTime, nullable=True)
     status = Column(String(20), default="active")
+    role = Column(String(20), nullable=False, default="user", server_default="user")  # user/admin
     
     # 关系
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")

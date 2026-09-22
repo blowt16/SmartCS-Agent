@@ -171,6 +171,9 @@ class Settings(BaseSettings):
     # Memory & Token settings
     MEMORY_CACHE_TTL: int = 86400                            # 摘要缓存 TTL（秒）
 
+    # 知识库暂存(管理端两阶段上传)设置
+    KNOWLEDGE_STAGE_TTL_HOURS: int = 24   # 暂存文件存活上限(小时);超过则被下一次 stage 机会式清理
+
     @property
     def DATABASE_URL(self) -> str:
         """SQLAlchemy 异步连接串（PostgreSQL + psycopg）"""
