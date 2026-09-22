@@ -4,6 +4,7 @@
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
 > **技术栈**: FastAPI + SQLAlchemy async + psycopg + PostgreSQL/pgvector（后端）；Vue3 + Vite + Tailwind + ECharts（前端）。
 > **状态**: ⏳ 待实施（设计已评审，2026-09-22）
+> **修订⑤**: 2026-09-22 用户新增需求——**索引处理进度条（SSE 实时）**。`commit` 改为返回 `text/event-stream`，边跑边推 `progress` / `done` / `error` 三型事件（D21）；进度条放**页面工具条「新增文档」右侧**，点「保存」弹窗**立即关闭**、索引在页面上跑（D22）；百分比按**阶段加权 + 嵌入批次细分**（D23）。连带：① **推翻初稿的「committed 态」**（弹窗已关，片段数/创建时间改由列表新行承载）；② `process_file` / `embed_in_batches` 各加一个**可选**进度回调参数（默认 `None`，客户端路径行为零变化——这是本模块唯一触及客户端热路径的改动）。新增 §6.4.5.2（进度条与任务 store），风险清单 34 → 38 条。
 > **修订④**: 2026-09-22 用户变更知识库上传方案——由"上传即入库、取消不撤销"改为**两阶段暂存制**（D7/D17/D18/D19）：`stage` 只存文件 + 取基本信息（**不解析内容、不清洗、不分块、不嵌入、不写 DB**），**「取消」调 `unstage` 真撤销**，点「保存」才 `commit` 走完整索引链路。**连带推翻初稿"复用 `/api/upload`"**（该接口没有"只存不索引"的模式），知识库端点 4 → 6；并删掉初稿计划的"单条详情"端点（`commit` 响应直接返回完整行）。§5.7 / §6.4.5 / §6.7 / §8.5 / §9 / §附 已同步。**暂存残留补了清理方案**（§6.4.5.1，机会式清理 + `KNOWLEDGE_STAGE_TTL_HOURS=24`），风险清单增至 34 条。
 > **修订③**: 2026-09-22 用户评审确认全部 5 项待确认事项，其中**订单管理页由卡片网格改为表格**（与工单页同风格，D20）——这也澄清了最初需求里"订单管理参考工单管理界面"指的是表格而非卡片版式。正文 §6.4.4 已重写，§11 改为确认记录，§6.5 注明 `ProductThumb` 收窄为商品页专用。
 > **修订②**: 2026-09-22 按用户要求重构知识库模块——**`documents` 不加 `title` 列**（D16，列表直接用 `original_filename`）、**新增文档改为"上传驱动"表单**（D17：点「上传文件」→ 立即入库解析 → 基本信息自动回填只读区 → 补描述 → 保存）、**「创建时间」为纯展示项**（不在表单字段中，上传成功后出现；为此新增 `GET /api/admin/knowledge/{md5}` 详情端点，D18）。连带更新 §4.4 / §5.7 / §5.9 / §6.4.5 / §8.5 / §9-14 / §附，风险清单增至 32 条。
@@ -37,7 +38,7 @@
 |---|---|---|
 | 1 | 数据层 | 新建 2 表（`orders` / `tickets`）+ 改 2 表（`users` 加 `role`；`documents` 加 `description` / `status` **两列，不加 `title`**） |
 | 2 | 鉴权 | `users.role` 列 + `require_admin` 依赖 + 管理端接口组级鉴权 |
-| 3 | 后端接口 | **19 个**新端点（`/api/admin/*`）+ 2 个既有响应扩展（`Token`/`UserResponse` 加 `role`）。**`/api/upload` 保持原样但管理端不再调用**（D7/D17） |
+| 3 | 后端接口 | **19 个**新端点（`/api/admin/*`，其中 `commit` 是 **SSE 流式**）+ 2 个既有响应扩展（`Token`/`UserResponse` 加 `role`）。**`/api/upload` 保持原样但管理端不再调用**（D7/D17） |
 | 4 | 前端 | 新入口 `admin.html` + `src/admin/` 目录，5 个页面 + 登录页 + 通用弹窗/分页/图表组件 |
 | 5 | 数据 | 4 个幂等脚本：管理员账号、订单种子、工单种子、商品占位图生成 |
 | 6 | 测试 | 5 个测试文件（auth / products / orders / knowledge / console）+ conftest 补 4 个 fixture，重点覆盖越权（401/403）与 CRUD 契约 |
@@ -55,6 +56,7 @@
 | 管理端操作审计日志 | 无人要求；不引入 `admin_logs` 表 |
 | 客户端回归改动 | `index.html` / `App.vue` / `main.js` / `global.css` 一行不动（见 §6.1） |
 | 补全既有端点的鉴权 | `/api/upload`、`/api/documents` 不校验令牌是**既有缺陷**（`docs/项目问题.md` #14）。本次只保证管理端端点有鉴权，不动既有端点行为 |
+| 索引任务的断线重连 / 后台续跑 | 刷新浏览器会中断索引进度（服务端任务被取消）。做"断线后重连 SSE 继续看进度"或"任务落库 + 轮询"都要引入 job 注册表与状态存储，为"管理员偶尔刷新页面"这一个场景付出三样新东西，不值。**原子性已保证不留半成品**，重传即可（§12-33） |
 | 数据库时区迁移 | `timestamptz` 迁移是独立议题（`docs/项目问题.md` #15 附带发现①），本 spec 沿用"约定库时区为 UTC" |
 
 ---
@@ -143,6 +145,9 @@ product_price_stock: 47 行
 | **D18** | 「片段数」「创建时间」何时可得 | **只有 `commit` 之后才有**——它们是索引链路的产物（片段数来自分块，创建时间来自 `documents` 行）。表单在保存成功后切到「完成」态补齐这两项 | 备选"暂存时就解析出片段数"：**与 D17 直接冲突**（分块依内容而定，要分块就得先解析；PDF 解析是 MinerU 云端调用，用户一取消就白跑）。所以暂存态只显示"文件的基本信息"三项，片段数/创建时间标注为"保存后生成" |
 | **D19** | 「创建时间」的接口来源 | **`commit` 的响应直接返回完整文档行**（含 `created_at` / `chunk_count`），**不需要单独的详情接口** | 初稿曾计划加 `GET /api/admin/knowledge/{md5}` 详情接口，用于上传后回填 `created_at`。改成两阶段后，`commit` 本来就由管理端控制、本来就在写这一行，**顺手返回它即可**——详情接口因此删除（编辑弹窗的数据来自列表行，也不需要它） |
 | **D20** | 订单管理页版式 | **表格，与工单页同风格**（用户指定） | 备选"参考图的卡片网格"：**已否决**。注意与 D5/§6.4.3 的区别——**商品管理页仍是卡片网格**（用户另有明确要求「商品管理界面呈现该效果」），只有订单页是表格。两页版式不同是有意为之，不是遗漏 |
+| **D21** | 索引进度的**推送方式** | **SSE 流**：`commit` 改成返回 `text/event-stream`，边跑边推 `{type:"progress", stage, percent, detail}`，结束时推 `{type:"done", document}` 或 `{type:"error"}` | 备选"轮询进度接口"：要引入 job 注册表 + 任务状态存储 + 过期清理，三样新东西；而 POST+SSE 在本项目**已有先例**（`/api/langgraph/query`，前端 `useChat.js:80-125` 就是这套读法）。零新依赖 |
+| **D22** | 进度条的**位置与阻塞性** | **页面上**，知识库工具条「新增文档」按钮右侧；点「保存」**弹窗立即关闭**，进度条在页面上走，完成后自动刷新列表（用户指定） | 备选"弹窗内按钮右侧、阻塞到处理完"：已否决。**连带后果**：初稿的「committed 态」（在弹窗里亮出片段数/创建时间）**取消**——两处不能并存。片段数与创建时间改由**列表新行**承载（完成后自动刷新，就在那一行里）。用户"创建时间在上传成功后展示"的要求仍成立，只是展示位置从弹窗改为列表 |
+| **D23** | 百分比的**算法** | **阶段加权 + 嵌入批次细分**（用户指定）：校验 5% → 解析 45% → 清洗 5% → 分块 5% → **嵌入 35%（细分到批次，如"3/8 批"）**→ 入库 5% | 备选"定时器匀速爬到 90%"：**进度是编的**，解析卡住时进度条还在走，用户会以为快好了——宁可真实地"跳一下再匀速走"，也不给假平滑 |
 
 **D15 的代价（明说）**：`Token.role` 在客户端侧**没有任何消费者**（`src/api/auth.js:44-46` 的 `login()` 只取 `access_token`），是给管理端与外部联调用的。若将来想在客户端做"管理员登录自动跳管理端"，需要动 `LoginView.vue`，届时另开一条改动，不在本次范围。
 
@@ -790,11 +795,11 @@ if keyword:
 
 `_staging/` **已在 gitignore 覆盖范围内**（根 `.gitignore:66` 的 `llm_backend/uploads/`），无需新增规则。
 
-#### `POST /api/admin/knowledge/commit` — 提交索引（**走完整链路**）
+#### `POST /api/admin/knowledge/commit` — 提交索引（**SSE 流式返回**）
 
-**D17 两阶段设计的第 2 步**：这一步才真正解析、清洗、分块、嵌入、落库。
+**D17 两阶段设计的第 2 步**：这一步才真正解析、清洗、分块、嵌入、落库。**D21 起它返回 `text/event-stream`**，边跑边推进度。
 
-请求体：
+请求体（`application/json`）：
 
 ```python
 class KnowledgeCommit(BaseModel):
@@ -803,48 +808,218 @@ class KnowledgeCommit(BaseModel):
     description: Optional[str] = None
 ```
 
-**做什么**：
+**响应**：`StreamingResponse(media_type="text/event-stream")`。
 
-1. 校验暂存文件存在（`uploads/_staging/{md5}{ext}`）→ 不存在 `404 {"detail": "暂存文件不存在或已被清理: <md5>"}`
-1b. **对暂存文件 `os.utime(path)` 刷新 mtime**——防止提交过程中被并发的 `stage` 机会式清理误删（§6.4.5.1 的 30b 风险，一行解决）
-2. 调**既有** `IndexingService().process_file({"path": staged_path, "original_name": original_filename, "user_id": str(admin_id)})`——**索引链路全量复用，一行不改**
-3. 按 `process_file` 的返回分三种情况：
+**注意：这是本项目第二个 SSE 端点**（第一个是 `main.py` 的 `/api/langgraph/query`）。两者的分帧格式一致（`data: {json}\n\n`），前端也用同一套 `getReader()` + 按行切 + 取 `data:` 前缀的读法（`useChat.js:80-125`），**不引入任何新依赖**。
 
-| `status` | 处理 | HTTP |
+**事件契约**（靠 `type` 字段区分，不用 SSE 的 `event:` 名——与既有 `/api/langgraph/query` 的 `data:` 单通道风格一致）：
+
+| `type` | 载荷 | 时机 |
 |---|---|---|
-| `success` | 查回 `Document` 行 → 写 `description`（非空时）→ 返回完整行 | `200` |
-| `duplicate` | 该 `(user_id, md5)` 已有行（可能是暂存期间别处建的）→ **不重复索引**，查回那行 + 更新 `description` → 返回完整行，`duplicate: true` | `200` |
-| `failed` | 按 `error` 转 4xx：`unsupported`/`too_large`/`empty_file` → `400`；`parse_error`/`embedding_failed` → `400` | `4xx` |
+| `progress` | `{"type":"progress","stage":"解析文档","percent":45,"detail":"MinerU 解析中…"}` | 每进入一个阶段 / 嵌入每完成一批 |
+| `done` | `{"type":"done","document":{...完整文档行...}}` | 索引成功，`document` 结构同列表 `items` 元素 |
+| `error` | `{"type":"error","error":"parse_error","detail":"..."}` | 索引失败 |
 
-> **注意 `failed` 的 HTTP 码与 `/api/upload` 不同**：共享端点沿用"处理类错误 200 + `status=failed`"契约（客户端依赖它）。管理端端点**没必要继承这种别扭语义**——管理员调一个端点做索引，失败了就该是 4xx。这是两个端点的**有意差异**，不是不一致。
+**HTTP 状态码的分界（重要）**：
 
-4. **暂存文件的清理规则**：
-
-| 结果 | 暂存文件 | 为什么 |
+| 阶段 | 状态码 | 说明 |
 |---|---|---|
-| `success` | **删** | 已入索引，`_staging` 里那份没用了 |
-| `duplicate` | **删** | 同上（该文件的内容已在库里） |
-| `failed` | **保留** | 让"重试保存"不必重传文件（PDF 可能几 MB，MinerU 还可能瞬时失败）。此时弹窗仍停在暂存态，用户可再点保存，或点「取消」走 `stage` 删除兜底 |
+| **流开始之前**（暂存文件不存在、md5 格式非法、请求体不合法） | `404` / `422` | FastAPI 在 `StreamingResponse` 返回前抛 `HTTPException`，仍是**普通 JSON 错误**，前端走 `request()` 那套 |
+| **流开始之后**（解析失败、嵌入失败、写库异常） | `200` + `error` 事件 | **HTTP 头已经发出去了，改不了状态码**——这是流式响应的固有限制，不是设计缺陷。前端必须同时处理"HTTP 4xx 的 JSON 错误"和"200 流里的 error 事件"两条路径 |
 
-**返回体（完整文档行，与列表 `items` 元素同结构）**：
+**完整实现形态**：
+
+```python
+import asyncio
+import json
+import os
+
+from fastapi.responses import StreamingResponse
+
+from app.core.database import AsyncSessionLocal
+
+
+@router.post("/commit")
+async def commit_knowledge(payload: KnowledgeCommit):
+    staged_path = STAGING_DIR / f"{payload.md5}{_ext_of(payload.original_filename)}"
+
+    # ── 流开始之前的预检:这些走标准 4xx ──
+    if not staged_path.exists():
+        raise HTTPException(404, f"暂存文件不存在或已被清理: {payload.md5}")
+    # 刷新 mtime,防并发机会式清理误删(§6.4.5.1 的 30b)
+    os.utime(staged_path)
+
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_progress(stage: str, percent: int, detail: str = "") -> None:
+            await queue.put({"type": "progress", "stage": stage,
+                             "percent": percent, "detail": detail})
+
+        async def run() -> None:
+            """跑索引 + 后处理,结果塞队列。异常一律转 error 事件(流里改不了状态码)。"""
+            try:
+                result = await IndexingService().process_file(
+                    {"path": str(staged_path),
+                     "original_name": payload.original_filename,
+                     "user_id": str(payload.user_id)},
+                    on_progress=on_progress,          # ← 本 spec 新增的可选参数
+                )
+                event = await _finalize(result, payload)   # 写描述 / 查回完整行 / 清理暂存
+            except Exception as e:
+                logger.exception("commit 失败: {}", e)
+                event = {"type": "error", "error": "internal", "detail": str(e)}
+            await queue.put(event)
+            await queue.put(None)                       # 结束哨兵
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        finally:
+            # 客户端断开(刷新浏览器)→ Starlette 取消生成器 → 顺手取消索引任务。
+            # 安全性:process_file 是"最后一步单事务写入",取消发生在写入前 = 零写入,不留半成品。
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+```
+
+**两个实现细节，都不是随手写的**：
+
+**(1) 不用 `Depends(get_db)`，改用 `AsyncSessionLocal()` 显式开会话。**
+理由：生成器在**路由函数返回之后**才执行，而 FastAPI 的 `yield` 依赖退栈时机与流式响应体发送完成时机的先后关系在各版本间有过调整。走显式会话（`async with AsyncSessionLocal() as s:`）就不依赖那个语义，稳。`main.py` 的既有端点也是这个写法。
+
+**(2) 索引用 `asyncio.create_task` 起独立任务，进度经 `asyncio.Queue` 中转。**
+把"跑索引"和"推事件"解耦：`process_file` 的回调只管往队列 `put`，生成器只管从队列 `get` 并 yield。不需要在业务代码里到处 `yield`（那会要求把 `process_file` 改成 async generator，改动面大得多）。
+
+`_finalize(result, payload)` 的后处理（**表外逻辑，独立于 `process_file`**）：
+
+| `result["status"]` | 处理 |
+|---|---|
+| `success` | 查回 `Document` 行 → 写 `description`（非空时）→ 删暂存文件 → 返回 `{"type":"done","document":{...}}` |
+| `duplicate` | 该 `(user_id, md5)` 已有行 → **不重复索引**，查回那行 + 更新 `description` → 删暂存文件 → 返回 `done`（`document` 带 `duplicate: true`） |
+| `failed` | **保留**暂存文件（便于重试）→ 返回 `{"type":"error","error":<error>,"detail":<detail>}` |
+
+（`failed` 的处理与初稿一致，只是载体从 HTTP 4xx 变成 `error` 事件——见上面的状态码分界表。）
+
+**返回体（`done` 事件里的 `document`，与列表 `items` 元素同结构）**：
 
 ```json
 {
-  "id": 3,
-  "md5": "a1b2c3d4e5f6...",
-  "original_filename": "京东智能家具产品知识文档.docx",
-  "description": "本次上传时填的描述",
-  "file_type": "docx",
-  "file_size": 28416,
-  "chunk_count": 38,
-  "status": "enabled",
-  "owner_id": "6",
-  "created_at": "2026-09-22T10:30:15",
-  "duplicate": false
+  "type": "done",
+  "document": {
+    "id": 3, "md5": "a1b2c3d4e5f6...",
+    "original_filename": "京东智能家具产品知识文档.docx",
+    "description": "本次上传时填的描述",
+    "file_type": "docx", "file_size": 28416, "chunk_count": 38,
+    "status": "enabled", "owner_id": "6",
+    "created_at": "2026-09-22T10:30:15", "duplicate": false
+  }
 }
 ```
 
-**`created_at` / `chunk_count` 就在这个响应里**——写这一行的代码本来就在这个函数里，顺手返回即可。这正是 D19 删掉"单条详情接口"的依据。
+**`created_at` / `chunk_count` 就在这里返回**——写这一行的代码本来就在这个函数里，顺手返回即可（D19 删掉"单条详情接口"的依据）。虽然 D22 之后弹窗已关闭、不再用它回填表单，但**列表刷新后的那一行**要靠它对齐，前端也可据此播一条"已新增 XXX（38 个片段）"的提示。
+
+#### `POST /api/admin/knowledge/commit` 依赖的两处**共享链路改动**
+
+进度要实时，就必须在索引链路里有回调点。改动**两处签名、各加一个可选参数、默认 `None`**，客户端路径（`/api/upload` → `process_file`）不传参，**行为零变化**：
+
+**(1) `app/services/indexing_service.py` — `process_file` 加 `on_progress`**
+
+```python
+from typing import Awaitable, Callable, Optional
+
+# 进度回调:(阶段标签, 百分比 0-100, 细分说明) -> 协程
+ProgressFn = Callable[[str, int, str], Awaitable[None]]
+
+
+async def process_file(
+    self,
+    file_info: Dict[str, Any],
+    on_progress: Optional[ProgressFn] = None,
+) -> Dict[str, Any]:
+```
+
+阶段权重表（放模块级，注释说明它为什么是"拍的"）：
+
+```python
+# 阶段权重(和为 100),按典型耗时占比拍的经验值。
+# 不同文件类型必然有偏差:.md 解析近乎瞬时 → 会先跳到 50% 再慢慢走嵌入;
+# PDF 走 MinerU 云端 → 解析阶段吃掉 45% 的大部分。这是"真实进度"的代价:
+# 宁可真实地跳一下再匀速走,也不用定时器编造平滑假进度(D23)。
+_STAGES = [
+    ("validate", "校验文件",    5),
+    ("parse",    "解析文档",   45),
+    ("clean",    "清洗文本",    5),
+    ("split",    "切分片段",    5),
+    ("embed",    "生成向量",   35),
+    ("store",    "写入知识库",  5),
+]
+```
+
+发射点（累计游标，单调不回退）：
+
+```python
+    _pct = 0
+    async def _emit(key: str, detail: str = "") -> None:
+        nonlocal _pct
+        if on_progress is None:
+            return
+        label = _LABELS[key]
+        _pct += _WEIGHTS[key]
+        await on_progress(label, min(_pct, 100), detail)
+```
+
+| 调用位置 | 发射的 `detail` |
+|---|---|
+| 进 `process_file` 后（过了扩展名/大小/空文件校验） | `""` |
+| 解析前 | PDF 时 `"MinerU 云端解析中…"`，其余 `""` |
+| 清洗 / 分块 各一处 | `""` |
+| 嵌入：每批完成 | `"嵌入中 3/8 批"`（见下） |
+| 单事务提交成功后 | `"38 个片段"` |
+
+**(2) `app/services/embedding_provider.py` — `embed_in_batches` 加 `on_batch`**
+
+```python
+async def embed_in_batches(
+    texts: List[str],
+    batch_size: int = 10,
+    on_batch: Optional[Callable[[int, int], Awaitable[None]]] = None,
+) -> List[List[float]]:
+    provider = get_embedding_provider()
+    results: List[List[float]] = []
+    total = (len(texts) + batch_size - 1) // batch_size
+    for idx, i in enumerate(range(0, len(texts), batch_size)):
+        batch = texts[i : i + batch_size]
+        vecs = await _embed_with_retry(provider, batch)
+        results.extend(vecs)
+        if on_batch is not None:
+            await on_batch(idx + 1, total)      # ← 新增(默认 None 时行为不变)
+    return results
+```
+
+`process_file` 里把批次进度映射进"生成向量"那 35% 的区间：
+
+```python
+        base = _pct_before_embed                      # 进入嵌入阶段时的累计值
+        async def _on_batch(done: int, total: int) -> None:
+            if on_progress is not None:
+                await on_progress(
+                    "生成向量",
+                    min(base + int(35 * done / total), 100),
+                    f"嵌入中 {done}/{total} 批",
+                )
+
+        embeddings = await embed_in_batches(chunks, on_batch=_on_batch)
+```
+
+实测参照：唐 docx 的 38 个片段 → `batch_size=10` → **4 批**，进度会走 `50% → 59% → 68% → 76% → 85%`（每批约 8.75%）。
+
+**改动安全性**：两个参数都是 `Optional[...] = None`，`on_progress is None` 时 `_emit` 直接 return、`on_batch is None` 时跳过回调——**客户端路径的执行路径逐行不变**，只是多一次 `if`。既有测试（`test_documents_api.py`、`test_indexing.py`）不受影响。
 
 #### `DELETE /api/admin/knowledge/stage/{md5}` — 撤销暂存
 
@@ -1125,6 +1300,7 @@ frontend/
     admin.css                         ← Tailwind 三行 + 管理端专用类
     AdminApp.vue                      ← 顶部导航 + 页面切换 + 登录态
     api.js                            ← 管理端接口封装
+    knowledgeJob.js                   ← 索引进度任务 store(模块级单例,见 §6.4.5.2)
     views/
       ConsoleView.vue
       ProductView.vue
@@ -1432,7 +1608,7 @@ onMounted(() => {
 
 #### 6.4.5 知识库管理 `KnowledgeView.vue`（表格 + 暂存式新增表单）
 
-**工具条**：搜索框（placeholder「搜索文档编号/文件名」）+ 「查询」+ 「新增文档」绿按钮。
+**工具条**：搜索框（placeholder「搜索文档编号/文件名」）+ 「查询」+ 「新增文档」绿按钮 + **右侧的索引进度条**（靠 `margin-left:auto` 贴右；空闲时不占位，见 §6.4.5.2）。
 
 **表格**：
 
@@ -1452,14 +1628,15 @@ onMounted(() => {
 
 与其它弹窗（填好字段、点保存才落库）**根本不同**：这个表单分两步——**先暂存文件（不索引），补完描述再提交索引**。
 
-弹窗有**四个状态**，UI 按状态切换：
+弹窗有**三个状态**，UI 按状态切换：
 
 | 状态 | 触发 | 界面 |
 |---|---|---|
 | `idle` | 刚打开 / 暂存失败后 | 只有「上传文件」按钮 + 说明「支持 PDF / Word / TXT / Markdown，单个不超过 30MB」。**下半区的只读信息与描述框都不渲染**；「保存」置灰禁用 |
 | `staging` | 点了上传、请求进行中 | 按钮文案变「上传中…」并禁用；「保存」仍禁用。**这一步很快**——只存文件 + 读大小 + 算 MD5，不解析内容 |
 | `staged` | 暂存成功 | 「上传文件」按钮文案变「重新上传」；只读区出现**文件基本信息三项**；「文件描述」框启用；「保存」启用。命中重复时额外显示黄色提示条 |
-| `committed` | 提交索引成功 | 只读区**补齐「片段数」「创建时间」**；顶部绿色成功条；底部按钮只剩「完成」。**这是「创建时间」第一次出现的地方**（D18：它是索引链路的产物） |
+
+> **没有「committed」态**（D22 变更）：点「保存」后**弹窗立即关闭**，索引在页面上以进度条呈现，完成后自动刷新列表。片段数与创建时间由**列表的新行**承载——用户"创建时间在上传成功后展示"的要求仍成立，只是展示位置从弹窗改到列表行。初稿的「committed 态」与"进度条放页面上"两处不能并存，已按后者执行。
 
 **`staged` 态的完整表单**：
 
@@ -1476,24 +1653,23 @@ onMounted(() => {
 │   文件名     京东智能家具产品知识文档.docx        │  ← 一行截断 + title 全名
 │   文件类型   docx                                │
 │   文件大小   27.8 KB                             │
-│   片段数     —                                   │  ← 保存后生成
-│   创建时间   —                                   │  ← 保存后生成
+│   片段数     —                                   │  ← 保存后生成(见下方说明)
+│   创建时间   —                                   │  ← 保存后生成(见下方说明)
 │                                                  │
 │   文件描述   ┌─────────────────────────────┐     │  ← 唯一可编辑项
 │              │                             │     │
 │              └─────────────────────────────┘     │
 │                                                  │
-│                            [ 取消 ]  [ 保存 ]    │
+│                    [ 取消 ]  [ 保存 ]            │
 └──────────────────────────────────────────────────┘
 ```
 
-**`committed` 态**：同样的框，`片段数` 变成 `38`、`创建时间` 变成 `2026-09-22 10:30`，顶部一条绿底「已保存，智能客服现在可以检索到它」，按钮变「完成」。
+**片段数 / 创建时间在弹窗里始终是 `—`**——因为点「保存」弹窗就关了，这两项走的是列表。之所以还留着这两行（而不是删掉），是为了让用户在上传后就知道"还有两项要等保存才出来"，而不是以为表单就这些内容。标签后加浅灰小字「保存后生成」。
 
 **只读信息区的实现约定**（不要用 `disabled` 的 input）：
 
 - 两列布局（`grid grid-cols-[80px_1fr] gap-y-3`），左列标签灰色小字，右列值
 - 值是**纯文本节点**。理由：`disabled` 输入框视觉上仍像"能填但被禁用了"，用户会反复点击试图编辑；纯文本 + 浅灰底（`bg-gray-50 rounded px-3 py-1.5`）才是"这就是个信息展示"的语义
-- `片段数` / `创建时间` 在 `staged` 态显示 `—`，**不显示"加载中"**——它们不是"正在取"，而是"还没产生"，用破折号表达更准
 - **没有任何一项进提交体**（除了描述），它们全是展示
 
 **流程（四个动作，对应 §5.7 的四个端点）**：
@@ -1512,18 +1688,20 @@ onMounted(() => {
 
 > 该文件已存在于知识库（{existing.chunk_count} 个片段，创建于 {existing.created_at 截取}）。继续保存只会**更新它的文件描述**，不会新增一条记录。
 
-**不阻止继续**——用户可能就是想给已有文档补描述。这与初稿"检测到重复就终止"不同，因为现在能拿到 `existing` 的信息，提示可以说得很具体。
+**不阻止继续**——用户可能就是想给已有文档补描述。
 
-**③ 点「保存」→ `commit`**
+**③ 点「保存」→ 关弹窗 + 触发 `commit`（SSE）**
 
-`POST /api/admin/knowledge/commit`，body `{md5, original_filename, description}`（`description` 为空则省略该键，配合 §6.7 的 `cleanBody`）。
+```
+点「保存」
+  → 立即关闭弹窗（不等索引）
+  → knowledgeJob.start({md5, original_filename, description})   // §6.4.5.2 的模块级 store
+  → 工具条右侧出现进度条，实时走
+  → 完成：进度条变绿「已完成」，1.5s 后淡出；列表自动刷新（新行出现，含片段数与创建时间）
+  → 失败：进度条变红 + 错误文案 + 「×」关闭；列表不刷新；用户可重新「新增文档」再传一次
+```
 
-| 结果 | 行为 |
-|---|---|
-| `200` | 存下返回的完整行（含 `chunk_count` / `created_at`）→ **切到 `committed` 态**（不立即关窗） |
-| `4xx` | 弹窗**不关闭**，顶部红色错误条 + 保留已填描述。**暂存文件保留**，用户可直接再点「保存」重试（不必重传）；也可以点「取消」走 `unstage` 清掉 |
-
-**为什么要 `committed` 态而不是保存完就关窗**：索引是这条链路里**唯一耗时且可能失败**的一步（PDF 走 MinerU 云端，超时上限 300s）。保存成功后停一下、把「片段数 / 创建时间」亮出来 + 给一句"智能客服现在可以检索到它"，是对这个耗时动作的交代。顺带也满足用户「创建时间在上传成功后显示供展示」的要求（D18：它只能在这时出现）。
+**弹窗为什么立即关闭**：索引是整条链路里唯一耗时的一步（PDF 走 MinerU 云端，超时上限 300s）。把它关在弹窗里等于强迫用户盯着一个不能动的窗口；放到页面上，用户可以翻页、搜别的、甚至切到商品管理页，进度照样在走（见 §6.4.5.2 的 store 设计）。
 
 **④ 点「取消」→ `unstage`**
 
@@ -1533,20 +1711,19 @@ onMounted(() => {
 |---|---|
 | `idle` | 直接关闭，**不发任何请求**（什么都没发生） |
 | `staging` | 按钮禁用，等请求结束（避免删一个正在写的文件） |
-| `staged` | 调 `DELETE /api/admin/knowledge/stage/{md5}` → 删掉暂存文件 → 关闭。**数据库里从头到尾没有过痕迹，不需要确认弹窗**——没什么可丢的（除了用户敲的描述，那段长度有限，可不确认） |
-| `committed` | 直接关闭（文档已入库，此时"取消"没有意义，故该状态下按钮已变成「完成」） |
+| `staged` | 调 `DELETE /api/admin/knowledge/stage/{md5}` → 删掉暂存文件 → 关闭。**数据库里从头到尾没有过痕迹，不需要确认弹窗**——没什么可丢的（除了用户敲的描述，长度有限，可不确认） |
 
-> **与初稿的关键差异**：初稿是"上传即入库，取消不撤销"，需要在取消时弹确认说"文件已入库不会撤销"。**现在不需要了**——取消真的撤销。这是这个改动最直接的收益。
+> **注意**：点「保存」之后**没有"取消"这一步**了——弹窗已经关闭，索引已在跑。若此时想中止，只能刷新页面（会取消服务端任务，见 §6.4.5.2 的边界说明）。这是"非阻塞"换来的代价，已知且可接受。
 
 **编辑弹窗**（表格里点「编辑」）：与新增弹窗**共用同一个组件**，通过 `mode` 区分：
 
 | 项 | 新增（`create`） | 编辑（`edit`） |
 |---|---|---|
 | 「上传文件」按钮 | 显示 | **隐藏**（不提供"替换文件"——换文件等于换一条记录，语义上是删了重建） |
-| 文件名 / 类型 / 大小 / 片段数 / 创建时间 | 暂存后填入 | 直接由列表行 `record` 填入 |
+| 文件名 / 类型 / 大小 / 片段数 / 创建时间 | 暂存后填入三项，另两项为 `—` | 直接由列表行 `record` 填入**全部五项** |
 | 文件描述 | textarea，`staged` 后可编辑 | textarea，可编辑 |
 | 状态 | **不显示**（新建一律 `enabled`） | select（启用 / 停用），可编辑 |
-| 「保存」 | 调 `commit` | 调 `PATCH` |
+| 「保存」 | 关弹窗 + `knowledgeJob.start()`（SSE） | 调 `PATCH`（普通 JSON 请求，瞬时完成，不涉及 SSE） |
 
 **删除**：`confirm('确定删除文档「{original_filename}」？将同时删除其 {chunk_count} 个知识片段，智能客服不再检索到它。')` → `DELETE /api/admin/knowledge/{md5}`。
 
@@ -1627,6 +1804,159 @@ def _cleanup_stale_staging() -> int:
 | 什么都不做（初稿的取舍） | 残留无限累积，虽然是慢性的、也不是本次新引入的问题（`/api/upload` 上传成功的文件同样从不删除），但既然有 10 行就能兜住的方案，没有理由留着 |
 
 **兜底的手工清理**：`rm -rf llm_backend/uploads/_staging/*`——该目录没有任何 DB 依赖，随时可删，删了只影响"尚未提交的暂存"，不影响已入库文档与检索。
+
+#### 6.4.5.2 处理进度条与任务 store（D22/D23）
+
+**位置**：知识库页工具条，「新增文档」按钮的右侧（用户指定）。**不在弹窗里**——弹窗在点保存那一刻已经关了。
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ [搜索文档编号/文件名] [查询] [新增文档]   ▓▓▓▓▓░░░░░ 45%    │
+│                                              解析中…       │
+├────────────────────────────────────────────────────────────┤
+│ 文档编号 │ 文件名 │ 文件描述 │ 片段数 │ 状态 │ 创建时间 │操作│
+```
+
+**工具条布局**：`.toolbar { display:flex; align-items:center; gap:12px }`，进度条块加 `margin-left:auto` 靠右；进度块**不占位**（`v-if`），未处理时不存在，不会让「新增文档」按钮左右跳动。
+
+**进度块三态**：
+
+| 态 | 外观 |
+|---|---|
+| 进行中 | 160px 宽、6px 高的圆角条，主色渐变填充（`from-primary to-primary-light`，与客户端上传进度条同款）；右侧 `{percent}%`（`w-9 text-right` 防数字位数变化时抖动）；第二行小字 `{stage}{detail ? ' · ' + detail : ''}` |
+| 已完成 | 条变绿满格 + 「已完成 · 38 个片段」；**1.5s 后自动淡出**（`transition-opacity`），并刷新列表 |
+| 失败 | 条变红（`bg-red-500`）+ 「处理失败」+ 错误文案（单行截断，`title` 存全文）+ 一个「×」按钮手动关闭 |
+
+**任务 store：`src/admin/knowledgeJob.js`（模块级单例，不是组件状态）**
+
+```js
+import { reactive } from 'vue';
+
+// ⚠️ 模块级单例,【不是】KnowledgeView 的组件状态 —— 这是关键设计点:
+// 用户在处理中切到商品管理页,KnowledgeView 会卸载;若状态与请求都挂在组件上,
+// 要么状态丢失,要么被 abort。挂在模块作用域则:
+//   - 组件卸载不影响它(普通 fetch 的 promise 本来就不随组件生命周期销毁)
+//   - 切回来还能看到进度
+//   - 完成后由 store 通知列表刷新
+// 代价:刷新浏览器仍会中断(HTTP 连接随页面销毁)。
+// 服务端侧安全 —— Starlette 取消生成器 → 取消索引任务;而 process_file 是
+// "最后一步单事务写入",取消在写入前 = 零写入,不留半成品,重传即可。
+export const knowledgeJob = reactive({
+  active: false,       // 是否正在处理
+  percent: 0,          // 0-100
+  stage: '',           // 阶段标签:"解析文档" / "生成向量" …
+  detail: '',          // 细分说明:"嵌入中 3/8 批" / "MinerU 云端解析中…"
+  error: null,         // 失败时的错误文案;非 null 即失败态
+  done: false,         // 成功完成(用于列表刷新与淡出)
+  doneId: null,        // 完成后写入的文档 id,KnowledgeView watch 它来刷新列表
+});
+
+let seq = 0;   // 每次 start 自增;用于丢弃过期流的回调
+
+export async function startCommit({ md5, original_filename, description }) {
+  const my = ++seq;
+  Object.assign(knowledgeJob, {
+    active: true, percent: 0, stage: '准备中', detail: '', error: null, done: false, doneId: null,
+  });
+
+  // 1) 发起请求:这一步可能直接返回 4xx(暂存过期/md5 非法),那是普通 JSON 错误
+  let res;
+  try {
+    res = await fetch('/api/admin/knowledge/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(cleanBody({ md5, original_filename, description })),
+    });
+  } catch {
+    return fail('网络错误，请重试', my);
+  }
+  if (handleUnauthorized(res)) return fail('登录已失效', my);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));   // 流没开始,还是普通 JSON
+    return fail(data.detail || `提交失败: ${res.status}`, my);
+  }
+
+  // 2) 读 SSE 流:分帧格式与 useChat.js:80-125 一致(reader + 按行切 + 取 data: 前缀)
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith('data:')) continue;
+        const raw = t.slice(5).trim();
+        if (!raw) continue;
+        let evt;
+        try { evt = JSON.parse(raw); } catch { continue; }
+        if (my !== seq) return;                     // 有更新的一次 start,丢弃本次
+        applyEvent(evt);
+      }
+    }
+  } catch {
+    return fail('连接中断，请重试', my);
+  }
+}
+
+function applyEvent(evt) {
+  if (evt.type === 'progress') {
+    knowledgeJob.percent = evt.percent;
+    knowledgeJob.stage = evt.stage;
+    knowledgeJob.detail = evt.detail || '';
+  } else if (evt.type === 'done') {
+    knowledgeJob.active = false;
+    knowledgeJob.done = true;
+    knowledgeJob.percent = 100;
+    knowledgeJob.detail = `${evt.document.chunk_count} 个片段`;
+    knowledgeJob.doneId = evt.document.id;          // ← KnowledgeView watch 这个
+  } else if (evt.type === 'error') {
+    fail(evt.detail || evt.error || '处理失败');
+  }
+}
+
+function fail(msg, expect = seq) {
+  if (expect !== seq) return;
+  Object.assign(knowledgeJob, { active: false, error: msg, percent: 0, stage: '', detail: '' });
+}
+
+export function dismissJob() {
+  Object.assign(knowledgeJob, {
+    active: false, percent: 0, stage: '', detail: '', error: null, done: false, doneId: null,
+  });
+}
+```
+
+**KnowledgeView 侧只需三件事**：
+
+```js
+// 1) 完成后刷新列表(拉到当前页)
+watch(() => knowledgeJob.doneId, (id) => { if (id) load(); });
+
+// 2) 成功态 1.5s 后自动清掉(给用户看一眼"已完成 · 38 个片段"的时间)
+watch(() => knowledgeJob.done, (v) => { if (v) setTimeout(dismissJob, 1500); });
+
+// 3) 处理中禁用「新增文档」按钮 —— 一次只允许一个任务
+//    (按钮 :disabled="knowledgeJob.active",样式置灰)
+```
+
+**为什么用模块级 `reactive` 而不是 Pinia**：管理端只需要这一个跨组件状态，引入状态管理库是为 1 个对象付出一个依赖 + 一套样板。Vue 的 `reactive` 在模块作用域天然就是全局单例,`import` 到哪都是同一个对象。
+
+**为什么用 `seq` 序号而不是 AbortController**：用户可能在一次失败后马上重试,此时旧流的回调若还在飞,会把新任务的状态覆盖掉。`seq` 自增 + 回调里比对,一行解决。**不用 AbortController 主动断开**——旧流让它自然结束,反正服务端侧取消已有原子性保证。
+
+**边界情况（都要处理，逐条列明）**：
+
+| 情况 | 行为 |
+|---|---|
+| 处理中切到别的页（商品/订单…） | **进度继续**（store 在模块作用域，请求不随组件卸载中断）。切回知识库页，进度条还在走 |
+| 处理中刷新浏览器 | **中断**。服务端取消索引任务（`process_file` 单事务收尾 → 零写入，无半成品）。重传即可。**这是已知取舍**，不做断线重连 |
+| 处理中再点「新增文档」 | 按钮禁用（`knowledgeJob.active`），不给并发入口。**服务端本身支持并发**（不同 md5 各跑各的），但页面上只显示一个进度条，同时跑两个会让用户看到哪个都对不上——所以在前端限制为一次一个 |
+| 同一文件并发提交两次 | 第二次在服务端命中 `duplicate`（`process_file` 的查重或唯一约束兜底），返回 `done` + `duplicate: true`，不产生重复行 |
+| `done` 后自动刷新列表时用户正在第 3 页 | **保持当前页与筛选条件**刷新（§6.4.8）。新增的文档按 `created_at DESC` 排在第一页，第 3 页看不到它——**因此成功提示里要带上文档名**（「已完成 · 京东智能家具产品知识文档.docx · 38 个片段」），让用户知道成功的是哪个，而不是去列表里找 |
 
 #### 6.4.6 工单管理 `TicketView.vue`（表格 + 处理弹窗，对齐参考图）
 
@@ -1852,7 +2182,6 @@ export const createOrder = (b)      => request('/api/admin/orders', { method: 'P
 export const updateOrder = (id, b)  => request(`/api/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(b) });
 export const deleteOrder = (id)     => request(`/api/admin/orders/${id}`, { method: 'DELETE' });
 export const listKnowledge = (p)    => request(`/api/admin/knowledge?${qs(p)}`);
-export const commitKnowledge = (b)  => request('/api/admin/knowledge/commit', { method: 'POST', body: JSON.stringify(cleanBody(b)) });
 export const unstageKnowledge = (md5)=> request(`/api/admin/knowledge/stage/${encodeURIComponent(md5)}`, { method: 'DELETE' });
 export const updateKnowledge = (md5,b) => request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'PATCH', body: JSON.stringify(cleanBody(b)) });
 export const deleteKnowledge = (md5)=> request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'DELETE' });
@@ -1861,6 +2190,15 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 ```
 
 `qs(obj)`：过滤掉 `undefined` / `null` / `''` 的键后用 `URLSearchParams` 拼串。
+
+**知识库的两个长连接动作都不走 `request()`**：
+
+| 动作 | 为什么不能走 `request()` | 走哪 |
+|---|---|---|
+| `stage` 上传 | 要 XHR 上传进度；且 `src/api/upload.js` 把 URL 硬编码成了 `/api/upload`（`upload.js:31`） | `admin/api.js` 的 `stageFile`（下方） |
+| `commit` 索引 | 返回 SSE 流，要 `res.body.getReader()` 逐帧读；`request()` 只会 `res.json()` | `src/admin/knowledgeJob.js` 的 `startCommit`（§6.4.5.2） |
+
+`stage` 的封装：
 
 **知识库暂存不走 `request()`，也不复用 `src/api/upload.js`**——后者把 URL 硬编码成了 `/api/upload`（`upload.js:31`），管理端要打的是 `/api/admin/knowledge/stage`。所以在 `admin/api.js` 里自带一个改名版：
 
@@ -2212,12 +2550,18 @@ async def normal_token(normal_user):
 | **`unstage` 真的撤销** | 暂存后调 `DELETE /knowledge/stage/{md5}` → `deleted: true`；**暂存文件消失**；`documents` 计数仍与最初一致（从头到尾没写过库） |
 | **`unstage` 幂等** | 连调两次 → 第二次 `deleted: false` 且 **HTTP 200**（不是 404） |
 | **`stage` 校验** | 传 `.exe` → `400` 且 detail 含「不支持」；传一个 0 字节文件 → `400`。**两种情况都不该在 `_staging/` 留下文件** |
-| **`commit` 走完整链路** | 暂存临时 md → `commit` → 返回完整行且含 `chunk_count > 0`、`created_at` 非空、`description` 为提交时传的值；列表能查到；`document_chunks` 有对应行 |
+| **`commit` 走完整链路** | 暂存临时 md → `commit`（读完整条 SSE 流）→ `done` 事件的 `document` 含 `chunk_count > 0`、`created_at` 非空、`description` 为提交时传的值；列表能查到；`document_chunks` 有对应行 |
+| **`commit` 是 SSE**（D21） | 响应头 `content-type` 以 `text/event-stream` 开头；响应用 `httpx` 的**流式读法**（`client.stream("POST", ...)` + `aiter_lines()`），不能直接 `.json()` |
+| **进度事件单调递增且到 100** | 把流里所有 `type == "progress"` 的 `percent` 收集起来，断言**非递减**且最后一个 `< 100`（100 只出现在 `done` 事件里）。**这条是 D23"不倒退"的验收** |
+| **进度事件覆盖全部 6 个阶段** | 收集到的 `stage` 去重后应含「校验文件 / 解析文档 / 清洗文本 / 切分片段 / 生成向量 / 写入知识库」。**用稍长的 md（≥ 25 个片段，即 ≥3 个嵌入批次）**才能看到「生成向量」的批次细分，断言存在 `detail` 形如 `嵌入中 N/M 批` 且 `M > 1` |
+| **`done` 事件带完整文档行** | `document` 的字段集与列表 `items` 元素完全一致 |
 | **`commit` 成功后删暂存文件** | `commit` 后 `uploads/_staging/{md5}.md` **不存在** |
-| **`commit` 失败保留暂存文件** | 暂存一个**内容为空**的 md（能过 stage 的空文件校验吗？——0 字节会被 stage 挡掉，改用只含空白字符的 md 让它过 stage、倒在 commit 的 `empty_file`）→ `commit` 返回 `4xx` → **暂存文件仍在**（可重试） |
-| **`commit` 暂存文件不存在** | 用一个格式合法但没暂存过的 md5 → `404` |
-| `commit` 的 `md5` 格式非法 | 传 `"xyz"` → `422` |
-| **`commit` 命中重复** | 同一个临时 md 暂存两次、`commit` 两次 → 第二次 `duplicate: true` 且 `documents` **不新增行** |
+| **`commit` 失败走 `error` 事件、不是 HTTP 4xx** | 暂存一个**只含空白字符**的 md（能过 stage 的空文件校验，倒在 commit 的 `empty_file`）→ 响应的 **HTTP 状态是 200**（流已经开始了，改不了状态码），末帧是 `{"type":"error","error":"empty_file",...}` |
+| **`commit` 失败保留暂存文件** | 同上用例里再断言：**暂存文件仍在**（可重试） |
+| **`commit` 暂存文件不存在 → 普通 404**（流开始前的预检） | 用一个格式合法但没暂存过的 md5 → **HTTP `404`** + JSON `detail`（**不是** SSE）。这条与上一条配对，把"流前 vs 流中"的错误分界钉死 |
+| `commit` 的 `md5` 格式非法 | 传 `"xyz"` → **`422`**（同样在流开始前） |
+| **`commit` 命中重复** | 同一个临时 md 暂存两次、`commit` 两次 → 第二次 `done` 事件里 `document.duplicate == true` 且 `documents` **不新增行** |
+| **共享链路回归**（本 spec 动了两个签名） | `test_indexing.py` / `test_documents_api.py` **零改动全过**——`on_progress` / `on_batch` 都是 `Optional[...] = None`，不传时执行路径逐行不变。**这条必须显式跑**，因为 §5.7 动了客户端也在用的两个文件 |
 | 测试后还原 | 用 `json={"description": None}`（**不是 `""`**）把两行种子文档还原为 NULL 原值；`""` 会留下空串而非 NULL，属静默污染演示数据（前端 `description \|\| '—'` 恰好能兜住，所以**看不出问题**） |
 | PATCH 不存在 md5 | `404` |
 | PATCH status 非法值 | `422` |
@@ -2289,7 +2633,11 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 11 | 「体验客服」按钮 | 新标签页打开客户端页面 |
 | 12 | 商品管理 | 47 条商品卡片、图片显示为 SVG 占位图；搜索「门锁」→ 12 条；新增一条测试商品 → 出现在列表且**图片走 fallback 图标**；改价格 → 重新查询值已变；删除 → 消失 |
 | 13 | 订单管理 | 18 行**表格**（8 列：订单号/商品/品类/买家/金额/状态/下单日期/操作）；**与工单页并排对比，表头样式、行高、徽章、操作按钮、分页条肉眼一致**；金额显示两位小数（`¥9957.50` 不是 `¥9957.5`）；新增一条（选商品后金额自动带出）→ 出现在列表；改状态 → 徽章颜色变；删除 → 消失 |
-| 14 | 知识库管理 | 2 行，文件名显示 `.docx` 全名、片段数 4 / 38、创建时间 `2026-09-06`。点「新增文档」→ 弹窗**只有「上传文件」按钮**（保存置灰）→ 上传一个 md → **只读区出现文件名/类型/大小三项**，片段数与创建时间为 `—`、「文件描述」框启用 → 填描述 → 保存 → 弹窗切到**完成态**（片段数变具体数字、创建时间出现、绿条「已保存，智能客服现在可以检索到它」）→ 点「完成」→ 列表变 3 行且描述为所填。再点该行「编辑」→ **没有「上传文件」按钮**、只读区五项直接有值，改描述与状态 → 生效；删除 → 回到 2 行 |
+| 14 | 知识库管理 | 2 行，文件名显示 `.docx` 全名、片段数 4 / 38、创建时间 `2026-09-06`。点「新增文档」→ 弹窗**只有「上传文件」按钮**（保存置灰）→ 上传一个 md → **只读区出现文件名/类型/大小三项**，片段数与创建时间为 `—`、「文件描述」框启用 → 填描述 → 保存 → **弹窗立即关闭**，工具条右侧出现进度条并实时走（见 14d）→ 列表变 3 行且描述为所填。再点该行「编辑」→ **没有「上传文件」按钮**、只读区五项直接有值，改描述与状态 → 生效；删除 → 回到 2 行 |
+| 14d | **进度条真的在实时走**（D21/D23 的核心验收） | 上传一个**较大的文件**（如 `llm_backend/knowledge_data/product_knowledge_docx/` 下的产品知识文档，38 个片段 → 4 个嵌入批次）。观察：① 进度条**分段前进**而不是一步到底；② 经过「解析文档」时 PDF 会停在 `MinerU 云端解析中…`（用 md 则瞬时跳过）；③ 到「生成向量」时第二行文字变为 `嵌入中 1/4 批` → `2/4` → …；④ 走完变绿「已完成 · 38 个片段」，1.5s 后淡出，列表自动刷新出现新行。**浏览器 DevTools 的 Network 面板**里该请求应是 `text/event-stream`，EventStream 标签页能看到逐帧事件 |
+| 14e | **处理中切页不中断** | 上传大文件后，进度条刚开始走就切到「商品管理」页，等 10 秒再切回「知识库」→ 进度条**还在走**（或已走到更后面的阶段）。**反向验**：处理中刷新浏览器 → 进度条消失；查库确认 `documents` 行数未增加（服务端任务被取消 + `process_file` 单事务收尾 = 零写入，无半成品） |
+| 14f | **处理中「新增文档」按钮禁用** | 进度条走的时候，「新增文档」按钮应为置灰不可点状态 |
+| 14g | **处理失败可见** | 上传一个内容全空白的 md（能过暂存、倒在索引的 `empty_file`）→ 进度条变**红** + 显示错误文案 + 「×」可关闭；列表**不新增行**；`uploads/_staging/` 下该文件**仍在**（保留备重试） |
 | 14b | 知识库新增的**重复文件**路径 | 用第 14 步同一个 md 再点一次「新增文档」上传 → 出现黄色提示「该文件已存在于知识库（{N} 个片段，创建于 {日期}）」→ 保存只更新描述，列表**仍为 3 行**（不新增第 4 行） |
 | 14c | **「取消」真的撤销**（两阶段设计的核心验收） | 上传一个**新的** md → 暂存成功后点「取消」→ 弹窗直接关闭（**不弹确认**）→ 列表**行数不变**；查库 `SELECT COUNT(*) FROM documents` 与暂存前一致；`llm_backend/uploads/_staging/` 下该 md5 文件**已消失**。**对比**：若此时直接关浏览器（不点取消），该暂存文件仍在磁盘上——这是 §6.4.5.1 记录的已知取舍 |
 | 15 | **知识库上传后确实可检索** | 在客户端聊天里问一个只有新上传文档才有的问题，确认能召回（这是知识库管理最重要的验收点——证明**索引链路真的跑通了**。注意：管理端已不复用 `/api/upload`，走的是 `stage`→`commit`→`process_file`，所以这条验收要重跑一遍才算数） |
@@ -2311,7 +2659,8 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 3 | 管理端路由骨架 + 控制台 2 端点 | `api/admin/__init__.py`、`api/admin/console.py`、`api/__init__.py`(改) | `curl /api/admin/console/stats`（管理员 token）→ 200；无 token → 401 |
 | 4 | 商品 5 端点 + `schemas/admin.py` | `api/admin/products.py`、`schemas/admin.py` | curl 冒烟（列表/新增/编辑/删除） |
 | 5 | 订单 4 端点 | `api/admin/orders.py` | 同上 |
-| 6 | 知识库 6 端点（列表 / stage / commit / unstage / PATCH / DELETE）+ 暂存清理 + 配置项 | `api/admin/knowledge.py`、`app/core/config.py`(改，加 `KNOWLEDGE_STAGE_TTL_HOURS`) | 同上 + 与既有 `/api/documents`、`/api/upload` 并存不冲突；**`stage` 只写磁盘不写库**（§8.5 有断言）；机会式清理生效（§9-18b） |
+| 6a | **共享链路加进度回调**（客户端路径行为零变化） | `app/services/indexing_service.py`(改，`process_file` 加 `on_progress` + 阶段权重表)、`app/services/embedding_provider.py`(改，`embed_in_batches` 加 `on_batch`) | `test_indexing.py` / `test_documents_api.py` **不改一行全过**（§8.5 末条） |
+| 6b | 知识库 6 端点（列表 / stage / **commit(SSE)** / unstage / PATCH / DELETE）+ 暂存清理 + 配置项 | `api/admin/knowledge.py`、`app/core/config.py`(改，加 `KNOWLEDGE_STAGE_TTL_HOURS`) | 同上 + 与既有 `/api/documents`、`/api/upload` 并存不冲突；**`stage` 只写磁盘不写库**（§8.5 有断言）；机会式清理生效（§9-18b）；`commit` 是 SSE 且事件契约正确（§9-14d） |
 | 7 | 工单 2 端点 | `api/admin/tickets.py` | 同上 |
 | 8 | 种子脚本 3 个 + 占位图脚本 1 个，跑通 | `llm_backend/scripts/seed_admin_account.py`、`llm_backend/scripts/seed_orders.py`、`llm_backend/scripts/seed_tickets.py`、**根** `scripts/build_product_placeholders.py` | §9-2~5 全部判据；**每个脚本连跑两次**核对幂等（订单为 upsert、其余无变化） |
 | 9 | 后端测试 5 个文件 + conftest fixtures | `tests/test_admin_auth.py` 等 5 个、`tests/conftest.py`(改) | 在**项目根**执行 `python -m pytest -q`（`pyproject.toml:60` 的 `testpaths` 指向 `llm_backend/tests`，从 `llm_backend/` 里跑也能因上溯到根 pyproject 而生效）全绿（§9-18） |
@@ -2319,7 +2668,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 11 | 控制台页 + 3 个图表组件 | `ConsoleView.vue`、`charts/*.vue` | §9-9~11 |
 | 12 | 商品管理页 + 通用组件（Modal/分页/缩略图/徽章） | `ProductView.vue`、`components/*.vue` | §9-12 |
 | 13 | 订单管理页（表格，复用 §6.4.6 的表头/行样式） | `OrderView.vue` | §9-13 |
-| 14 | 知识库管理页 + 暂存式表单组件 | `KnowledgeView.vue`、`components/KnowledgeFormModal.vue` | §9-14 / 14b / 14c / 15 |
+| 14 | 知识库管理页 + 暂存式表单组件 + 进度条与任务 store | `KnowledgeView.vue`、`components/KnowledgeFormModal.vue`、`src/admin/knowledgeJob.js` | §9-14 / 14b / 14c / 14d / 14e / 14f / 14g / 15 |
 | 15 | 工单管理页 | `TicketView.vue` | §9-16 |
 | 16 | 客户端回归 + 全量测试 + 文档同步 + Git 提交 | — | §9-17~19 |
 
@@ -2396,7 +2745,11 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 30b | **机会式清理可能误删正在提交的文件** | `commit` 要读暂存文件（PDF 走 MinerU 可能几十秒），若此时另一次 `stage` 触发清理、且该文件 mtime 已超 24h，就会被删掉，`process_file` 读到一半文件没了 | §6.4.5.1 已用一行 `os.utime(staged_path)` 消掉：**`commit` 开头先 touch 刷新 mtime**，使提交中的文件不可能落入清理窗口 |
 | 31 | **`commit` 失败时暂存文件要保留，不能一律删** | 若失败也删，用户重试就得重新上传（PDF 可能几 MB，MinerU 还可能瞬时失败）；若成功也留，则残留累积 | §5.7 已规定差异化清理：`success`/`duplicate` → 删；`failed` → **保留**（弹窗停在暂存态可重试，或点取消走 `unstage` 兜底）。§8.5 有正反两条断言 |
 | 31b | **管理端端点的 4xx 语义与 `/api/upload` 不同** | 后者把处理类失败包进 `200 + status=failed`（客户端依赖该契约），管理端端点用标准 4xx。**若有人图省事把两者合并成一个通用上传器，就会打破客户端契约** | §6.7 已明确警示"两者契约不同，各留各的"；`admin/api.js` 里的 `stageFile` 是独立实现，不复用 `src/api/upload.js`（后者 URL 还硬编码成了 `/api/upload`） |
-| 32 | **表单只读区不要用 `disabled` 的 input** | `disabled` 输入框视觉上仍像"能填但被禁用"，用户会反复点击试图编辑；且 `disabled` 字段虽不进提交体，但容易被后来者接上 `v-model` 而变成可写 | §6.4.5 已规定用**纯文本节点 + 浅灰底**渲染只读信息区；「创建时间」尤其强调是展示项、不进提交体 |
+| 32 | **表单只读区不要用 `disabled` 的 input** | `disabled` 输入框视觉上仍像"能填但被禁用"，用户会反复点击试图编辑；且 `disabled` 字段虽不进提交体，但容易被后来者接上 `v-model` 而变成可写 | §6.4.5 已规定用**纯文本节点 + 浅灰底**渲染只读信息区 |
+| **33** | **SSE 流开始后错误改不了 HTTP 状态码** | 索引失败的 `parse_error` / `empty_file` 发生时，响应头早已发出（HTTP 200），**不可能再改成 4xx**。若前端只处理 `!res.ok`，失败会被静默吞掉——进度条停在 45% 然后永远不动 | §5.7 已给出「流前 → 4xx JSON / 流中 → `error` 事件」的**双路径分界表**；§6.4.5.2 的前端代码两条路径都处理；§8.5 有配对测试（`404` 那条与 `200 + error` 那条必须同时过） |
+| **34** | **进度回调若漏掉 `await` 会让事件乱序/丢失** | `on_progress` 是协程，`await` 一次就多一个挂起点。若某处写成 `on_progress(...)` 忘了 `await`，事件可能晚于后续阶段发出，进度条会**倒退** | §5.7 的实现把发射收敛到唯一的 `_emit` 辅助函数里（内部 `await`），发射点只调 `_emit`；§8.5 有「percent 非递减」的断言兜底 |
+| **35** | **动了共享索引链路，客户端路径必须回归** | `process_file` 与 `embed_in_batches` 是 `/api/upload` 与客户端上传共用的。虽只加可选参数（默认 `None`），但这是本模块**唯一触及客户端热路径**的改动 | §5.7 已说明"不传时执行路径逐行不变"；§8.5 末条要求 `test_indexing.py` / `test_documents_api.py` **零改动全过**；§9-17 客户端回归 |
+| **36** | **进度条占位会让工具条元素跳动** | 进度块若用固定占位（`visibility:hidden`）而不是 `v-if`，空闲时「新增文档」按钮左边会凭空多出一块空白；反之若用 `v-if` 且进度块宽度随文字变，按钮会在进度出现时左移 | §6.4.5.2 已定：**`v-if` 不占位** + 进度块 `margin-left:auto` 且内部各元素给固定宽度（百分比 `w-9 text-right`） |
 
 ---
 
@@ -2417,7 +2770,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 11 | DELETE | `/api/admin/orders/{id}` | require_admin |
 | 12 | GET | `/api/admin/knowledge` | require_admin |
 | 13 | POST | `/api/admin/knowledge/stage` | require_admin |
-| 14 | POST | `/api/admin/knowledge/commit` | require_admin |
+| 14 | POST | `/api/admin/knowledge/commit` — **返回 `text/event-stream`** | require_admin |
 | 15 | DELETE | `/api/admin/knowledge/stage/{md5}` | require_admin |
 | 16 | PATCH | `/api/admin/knowledge/{md5}` | require_admin |
 | 17 | DELETE | `/api/admin/knowledge/{md5}` | require_admin |
