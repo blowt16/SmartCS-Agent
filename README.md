@@ -122,8 +122,8 @@ cd frontend && npm install && npm run build
 
 ### 管理端（Admin Console）
 
-入口：**<http://127.0.0.1:8000/admin.html>**（开发模式 `http://localhost:5173/admin.html`）。
-管理员账号由 `seed_admin_account.py` 创建（默认 `admin_test@test.com` / `admin`，已存在的账号只补 `role='admin'`、不改密码）。
+入口：**<http://127.0.0.1:8000/admin.html>**（开发模式 `http://localhost:5173/admin.html`），或从客户端登录页底部的「进入管理端」链接进入。
+管理员账号由 `seed_admin_account.py` 创建（默认 `admin_test@test.com` / `admin`，已存在的账号只补 `role='admin'`、不改密码）。管理端登录页可勾选「记住账号」——**只记住邮箱，不保存密码**（密码不入任何浏览器存储）。
 
 五个模块：控制台（统计卡 + 四张图）、商品管理、订单管理、知识库（两阶段上传 + SSE 实时进度条）、工单管理。
 

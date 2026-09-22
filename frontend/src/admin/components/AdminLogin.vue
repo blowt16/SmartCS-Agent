@@ -25,6 +25,16 @@
           >
         </div>
 
+        <div class="mb-4 flex items-center">
+          <input
+            id="remember"
+            v-model="remember"
+            type="checkbox"
+            class="mr-2 accent-primary cursor-pointer"
+          >
+          <label for="remember" class="text-sm text-gray-500 cursor-pointer">记住账号</label>
+        </div>
+
         <p v-if="error" class="text-red-500 text-sm mb-3">{{ error }}</p>
 
         <button
@@ -51,7 +61,9 @@ import { login as apiLogin } from '../../api/auth.js';
 
 // 与客户端 LoginView 的差异(见 spec §6.3.1):
 //   - 取【浅色】:管理端是独立站点,登录页是它的第一屏,与后面 5 个浅色页面一致更重要
-//   - 【不做】「记住账号密码」:客户端那个把密码明文写进 localStorage,管理端不复制这个做法
+//   - 「记住账号」只存【邮箱】,不存密码:客户端那个把密码明文写进 localStorage
+//     (docs/项目问题.md #15 附带发现②),管理端不复制;管理员账号能增删商品/订单/知识库/工单,
+//     泄露代价远高于普通账号,所以只记账号、密码交给浏览器密码管理器
 //   - 【不做】「注册」入口:管理员账号由种子脚本创建
 //   - 错误提示【不区分】"密码错"和"非管理员":避免泄露账号是否存在;
 //     非管理员由登录后的 role 判断给出(AdminApp 的 denied 态)
@@ -61,6 +73,17 @@ const email = ref('');
 const password = ref('');
 const error = ref('');
 const loading = ref(false);
+const remember = ref(false);
+
+// 只存邮箱,键名与客户端的 remembered-credentials 区分开,互不覆盖
+const REMEMBER_KEY = 'remembered-admin-email';
+
+// 页面加载时恢复记住的邮箱(密码不恢复)
+const savedEmail = localStorage.getItem(REMEMBER_KEY);
+if (savedEmail) {
+  email.value = savedEmail;
+  remember.value = true;
+}
 
 async function submit() {
   error.value = '';
@@ -71,6 +94,12 @@ async function submit() {
   try {
     // login() 内部会 setToken
     await apiLogin(email.value, password.value);
+    // 仅登录成功后记录,避免把打错的邮箱记住
+    if (remember.value) {
+      localStorage.setItem(REMEMBER_KEY, email.value);
+    } else {
+      localStorage.removeItem(REMEMBER_KEY);
+    }
     emit('logged-in');
   } catch (e) {
     error.value = e.message || '登录失败，请重试';

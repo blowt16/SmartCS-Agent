@@ -99,6 +99,11 @@
           {{ mode === 'login' ? '登 录' : '注 册' }}
         </button>
       </form>
+
+      <!-- 管理端入口：管理员从此处进入，管理端登录页有对应的「返回客服端」链接互为退路 -->
+      <div class="text-center mt-5">
+        <a href="/admin.html" class="login-link">进入管理端</a>
+      </div>
     </div>
   </div>
 </template>
