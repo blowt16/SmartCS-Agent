@@ -4,7 +4,8 @@
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
 > **技术栈**: FastAPI + SQLAlchemy async + psycopg + PostgreSQL/pgvector（后端）；Vue3 + Vite + Tailwind + ECharts（前端）。
 > **状态**: ⏳ 待实施（设计已评审，2026-09-22）
-> **修订③**: 2026-09-22 用户评审确认全部 5 项待确认事项，其中**订单管理页由卡片网格改为表格**（与工单页同风格，D19）——这也澄清了最初需求里"订单管理参考工单管理界面"指的是表格而非卡片版式。正文 §6.4.4 已重写，§11 改为确认记录，§6.5 注明 `ProductThumb` 收窄为商品页专用。
+> **修订④**: 2026-09-22 用户变更知识库上传方案——由"上传即入库、取消不撤销"改为**两阶段暂存制**（D7/D17/D18/D19）：`stage` 只存文件 + 取基本信息（**不解析内容、不清洗、不分块、不嵌入、不写 DB**），**「取消」调 `unstage` 真撤销**，点「保存」才 `commit` 走完整索引链路。**连带推翻初稿"复用 `/api/upload`"**（该接口没有"只存不索引"的模式），知识库端点 4 → 6；并删掉初稿计划的"单条详情"端点（`commit` 响应直接返回完整行）。§5.7 / §6.4.5 / §6.7 / §8.5 / §9 / §附 已同步，风险清单增至 33 条。
+> **修订③**: 2026-09-22 用户评审确认全部 5 项待确认事项，其中**订单管理页由卡片网格改为表格**（与工单页同风格，D20）——这也澄清了最初需求里"订单管理参考工单管理界面"指的是表格而非卡片版式。正文 §6.4.4 已重写，§11 改为确认记录，§6.5 注明 `ProductThumb` 收窄为商品页专用。
 > **修订②**: 2026-09-22 按用户要求重构知识库模块——**`documents` 不加 `title` 列**（D16，列表直接用 `original_filename`）、**新增文档改为"上传驱动"表单**（D17：点「上传文件」→ 立即入库解析 → 基本信息自动回填只读区 → 补描述 → 保存）、**「创建时间」为纯展示项**（不在表单字段中，上传成功后出现；为此新增 `GET /api/admin/knowledge/{md5}` 详情端点，D18）。连带更新 §4.4 / §5.7 / §5.9 / §6.4.5 / §8.5 / §9-14 / §附，风险清单增至 32 条。
 > **修订①**: 2026-09-22 完成一轮对抗性审计（自查 + 前端/后端两路独立复核，实测方式：起真实 FastAPI 复现路由与鉴权、连真实库核对数据、建 Vite 探针工程验证多页构建与 Tailwind content 行为、直接构造 pydantic 模型验证空串/None 行为）。结论已合入正文：**2 处阻断**（`require_admin` 缺 `User` 导入 → 服务起不来；`src/admin/main.js` 导入清单缺失 → 管理端无样式无图标）、8 处高危、20+ 处中低，风险清单从 16 条扩到 29 条。**其中 4 处是我原稿的事实错误**（`Decimal` 手搓 dict 其实能序列化 / `App.vue` 行数 / 测试文件数 / 知识库新增表单的标题自相矛盾），已在正文更正并保留了"原稿错在哪"的说明，便于后续复核。
 > **关联文档**: `CLAUDE.md` §6（spec 生命周期）§商品知识文档编写规范（知识分层原则）、[[SPEC_SKU_ALIGNMENT.md]]（商品 sku 对齐键，本 spec 风险 §12-1 的依据）、[[SPEC_FRONTEND_VUE3_REFACTOR.md]]（客户端前端结构 = 本 spec 的隔离对象；亦是 D8 历史注脚的出处）、`docs/项目问题.md` #14（知识库归属）/#15（浏览器实测）、`docs/PROJECT_ANALYSIS.md` §10.1（业务端点鉴权现状）
@@ -36,7 +37,7 @@
 |---|---|---|
 | 1 | 数据层 | 新建 2 表（`orders` / `tickets`）+ 改 2 表（`users` 加 `role`；`documents` 加 `description` / `status` **两列，不加 `title`**） |
 | 2 | 鉴权 | `users.role` 列 + `require_admin` 依赖 + 管理端接口组级鉴权 |
-| 3 | 后端接口 | **17 个**新端点（`/api/admin/*`）+ 1 个复用端点（`POST /api/upload`）+ 2 个既有响应扩展（`Token`/`UserResponse` 加 `role`） |
+| 3 | 后端接口 | **19 个**新端点（`/api/admin/*`）+ 2 个既有响应扩展（`Token`/`UserResponse` 加 `role`）。**`/api/upload` 保持原样但管理端不再调用**（D7/D17） |
 | 4 | 前端 | 新入口 `admin.html` + `src/admin/` 目录，5 个页面 + 登录页 + 通用弹窗/分页/图表组件 |
 | 5 | 数据 | 4 个幂等脚本：管理员账号、订单种子、工单种子、商品占位图生成 |
 | 6 | 测试 | 5 个测试文件（auth / products / orders / knowledge / console）+ conftest 补 4 个 fixture，重点覆盖越权（401/403）与 CRUD 契约 |
@@ -126,7 +127,7 @@ product_price_stock: 47 行
 | **D4** | 订单数据来源 | 新建 `orders` 表 + 种子脚本（用户指定） | 备选"把商品当订单展示"：订单号/买家/状态全是编的，语义对不上，否决 |
 | **D5** | 商品写权限 | **完整 CRUD**（用户指定） | 备选"只改价格库存"：参考图的新增按钮就没了 |
 | **D6** | 管理端知识库列表 | 新建 `/api/admin/knowledge`，**不做 user_id 过滤** | 备选"复用 `/api/documents`"：该接口强制 `user_id` 过滤（`main.py:191`），管理员看不到别人的文档，也看不到 `docs/项目问题.md` #14 修复后挂在 id=6 的那 2 份 |
-| **D7** | 知识库上传 | **直接复用 `POST /api/upload`**（用户指定） | 该接口本身无鉴权（既有缺陷），管理端页面会带管理员令牌；上传归属用管理员自己的 `user_id` |
+| **D7** | 知识库上传 | **不复用 `POST /api/upload`**，管理端新增**两阶段**端点：`stage`（暂存，只存文件+基本信息）与 `commit`（索引，走完整链路） | **此项推翻了初稿"复用当前接口"的说法**（用户 2026-09-22 变更需求）。理由：`/api/upload` 的语义就是"上传即索引"——收文件 → 解析 → 清洗 → 分块 → 嵌入 → 落库，**没有"只存不索引"的模式**。而新需求要求"取消能撤销"，只有在索引前拦一道才可能。详见 D17 |
 | **D8** | 前端组织 | 独立 `admin.html` 多页入口（用户指定） | 备选"装 vue-router 统一 SPA"：要重构 `App.vue`（**实测 330 行**，登录态/会话/文档/聊天状态全堆在一个文件），客户端有回归风险 |
 
 **D8 的历史注脚（值得知道）**：这个项目**曾经有过两个前端入口**，并在 `SPEC_FRONTEND_VUE3_REFACTOR.md`（已完成）里**特意收敛成一个**。但那次收敛的理由与本方案无关——当时是"两个**互相独立、其中一个仓库里连源码都没有**的代码库"（旧 Vue 产物 `/` + 手写 1434 行 `/chat.html`），收敛是为了消灭不可维护的重复代码库，并把 `/chat.html` 的 `FileResponse` 路由一并删除。本方案的两个入口是**同一个标准 Vite 工程内的两个页面**，共享 `src/api/`、`package.json`、Tailwind 配置，不存在重复代码库问题。区别记在这里，免得后来者看到"又变回两个入口了"困惑。
@@ -138,9 +139,10 @@ product_price_stock: 47 行
 | **D14** | 订单状态取值 | `处理中` / `已发货` / `已送达`（三值） | 对齐参考图（徽章 + 环形图图例；本实现用表格行内徽章，取值与配色不变） |
 | **D15** | 管理端入口的**发现路径** | 写进 README + 控制台不重复提供入口；**客户端一行不改**（登录成功不按 role 跳转） | 备选"客户端登录后 `if (role==='admin') location.href='/admin.html'`"：要改 `LoginView.vue`，与 §6.1 的"客户端零改动"直接冲突（§6.1 冻结了 `App.vue`/`main.js`/`components/*`，改了就没有文件能承载这个跳转）。管理端登录页已有「返回客服端」链接，反向路径是通的；正向路径靠 README 与书签 |
 | **D16** | 文档标识 | **不给 `documents` 加 `title` 列**，列表直接用 `original_filename`，列头叫「文件名」 | 备选"加 title 列"：存量 2 行无标题要靠 `title \|\| original_filename` 回退；上传表单里"标题"与"文件名"语义重叠；列表两列显示同一内容浪费宽度（详见 §4.4） |
-| **D17** | 新增文档的**交互形态** | **上传驱动**：点「上传文件」→ 立即入库解析 → 基本信息回填只读区 → 补描述 → 保存 | 备选"先把字段填完再上传"：那需要"暂存后一次性提交"的接口，而 `POST /api/upload`（用户要求复用）没有"只上传不入库"的模式。**代价已在 §6.4.5 明说**：上传即入库，「取消」不撤销上传 |
-| **D18** | 上传后「创建时间」的来源 | 新增 `GET /api/admin/knowledge/{md5}` 详情接口，上传成功后回填 | 备选"塞进 `/api/upload` 响应"：要改客户端与管理端共用的 `process_file` 返回契约，且两条 `duplicate` 路径拿不到 `created_at`（详见 §5.7） |
-| **D19** | 订单管理页版式 | **表格，与工单页同风格**（用户指定） | 备选"参考图的卡片网格"：**已否决**。注意与 D5/§6.4.3 的区别——**商品管理页仍是卡片网格**（用户另有明确要求「商品管理界面呈现该效果」），只有订单页是表格。两页版式不同是有意为之，不是遗漏 |
+| **D17** | 新增文档的**交互形态** | **暂存制（两阶段）**：点「上传文件」→ **只存文件 + 取基本信息（文件名/类型/大小/MD5），不解析内容、不清洗、不分块、不嵌入、不落库** → 基本信息回填只读区 → 补描述 → 点「保存」才走完整索引链路 → 成功后才建 `documents` 行 | **用户方案（2026-09-22）**，取代初稿的"上传即入库"。核心收益：**「取消」能真正撤销**（删掉暂存文件即可，什么都没留下）。备选"上传即索引 + 取消时反向删除"：要在取消路径上调索引删除接口，一旦删除失败就留下半成品，且索引已经跑完（PDF 走 MinerU 云端，白花钱和时间） |
+| **D18** | 「片段数」「创建时间」何时可得 | **只有 `commit` 之后才有**——它们是索引链路的产物（片段数来自分块，创建时间来自 `documents` 行）。表单在保存成功后切到「完成」态补齐这两项 | 备选"暂存时就解析出片段数"：**与 D17 直接冲突**（分块依内容而定，要分块就得先解析；PDF 解析是 MinerU 云端调用，用户一取消就白跑）。所以暂存态只显示"文件的基本信息"三项，片段数/创建时间标注为"保存后生成" |
+| **D19** | 「创建时间」的接口来源 | **`commit` 的响应直接返回完整文档行**（含 `created_at` / `chunk_count`），**不需要单独的详情接口** | 初稿曾计划加 `GET /api/admin/knowledge/{md5}` 详情接口，用于上传后回填 `created_at`。改成两阶段后，`commit` 本来就由管理端控制、本来就在写这一行，**顺手返回它即可**——详情接口因此删除（编辑弹窗的数据来自列表行，也不需要它） |
+| **D20** | 订单管理页版式 | **表格，与工单页同风格**（用户指定） | 备选"参考图的卡片网格"：**已否决**。注意与 D5/§6.4.3 的区别——**商品管理页仍是卡片网格**（用户另有明确要求「商品管理界面呈现该效果」），只有订单页是表格。两页版式不同是有意为之，不是遗漏 |
 
 **D15 的代价（明说）**：`Token.role` 在客户端侧**没有任何消费者**（`src/api/auth.js:44-46` 的 `login()` 只取 `access_token`），是给管理端与外部联调用的。若将来想在客户端做"管理员登录自动跳管理端"，需要动 `LoginView.vue`，届时另开一条改动，不在本次范围。
 
@@ -687,7 +689,7 @@ for attempt in range(3):          # 重算 max 再试,最多 3 次
 
 `404` 若不存在；成功 `{"id": 18, "deleted": true}`。
 
-### 5.7 知识库管理（4 个新端点 + 1 个复用）
+### 5.7 知识库管理（6 个新端点，**不复用 `/api/upload`**）
 
 文件：`llm_backend/app/api/admin/knowledge.py`
 
@@ -732,36 +734,132 @@ if keyword:
 
 `owner_id` 一并返回（管理端要知道这份文档属于谁），前端在本轮不做展示，留作信息完整性。
 
-#### `GET /api/admin/knowledge/{md5}` — 单条详情
+#### `POST /api/admin/knowledge/stage` — 暂存文件（**不索引**）
 
-**为上传后的表单回填而加**（§6.4.5 的表单在上传成功后要展示「创建时间」，而该值不在 `/api/upload` 的响应里——见下方说明）。按 `md5` 全表查找，`404` 若不存在。返回**单个对象，结构与列表的 `items` 元素完全一致**（不是分页对象、不是数组）。
+**D17 两阶段设计的第 1 步**：只把文件落到磁盘并取出基本信息，**不解析内容、不清洗、不分块、不嵌入、不写任何 DB 行**。
 
-**为什么不直接把 `created_at` 塞进 `/api/upload` 的响应**（更省一次请求，但要改共享链路）：`indexing_service.process_file` 有三条返回路径——`success` / `duplicate`（查重提前返回）/ `duplicate`（唯一约束冲突）——后两条发生在 INSERT 之前或冲突之后，**拿不到本次写入的 `created_at`**；要覆盖得改 `process_file` 的返回契约 + 加一次回读。而 `process_file` 是**客户端与管理端共用**的索引链路，本 spec 的边界是"复用上传接口、不改一行"（§3 D7）。用详情接口则两条路径**统一处理**：上传成功与"文件已存在"都拿到 md5，都能回填表单。
+请求：`multipart/form-data`
 
-**`owner_id` 的返回类型是字符串**（`documents.user_id` 是 `String(50)`），测试里别拿它跟 `users.id`（int）比。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `file` | UploadFile | 必填 |
+| `user_id` | Form(str) | 管理员自己的 id（从 `/api/users/me` 拿），与 `/api/upload` 同口径 |
 
-#### `POST /api/upload` — **直接复用，不改一行**
+**做什么**（对应 `indexing_service.process_file` 前 4 步的校验，但**在本端点独立实现，不调用 `process_file`**）：
 
-调用方（管理端前端）传 `file` + `user_id`（管理员自己的 id，从 `/api/users/me` 拿）。
+1. 扩展名白名单校验（`settings.allowed_extensions` = `txt,md,pdf,docx`）→ 不符 `400 {"detail": "不支持的文件格式: .exe"}`
+2. 大小校验（≤ `settings.MAX_FILE_SIZE_MB` = 30MB）→ 超限 `400`
+3. 空文件校验 → `400`
+4. 读一次文件字节，算 MD5
+5. 落盘到暂存目录 `llm_backend/uploads/_staging/{md5}{ext}`
+6. 查重：`SELECT id, created_at, chunk_count, description FROM documents WHERE user_id=:uid AND md5=:md5`
+7. 返回
 
-**为什么不加鉴权**：该端点属既有共享端点，客户端也在用。给它加 `require_admin` 会连带屏蔽客户端上传（客户端登录的是普通用户），属破坏性变更。已在 §12-6 记录该既有缺陷，本次不修。
-
-返回值（既有契约，`indexing_service.process_file` 的真实返回）：
+**返回体**（无重复）：
 
 ```json
-{ "index_result": { "status": "success", "md5": "a1b2...", "chunks": 38,
-                    "original_filename": "xxx.docx", "user_id": "6" } }
+{
+  "md5": "a1b2c3d4e5f6...",
+  "original_filename": "京东智能家具产品知识文档.docx",
+  "file_type": "docx",
+  "file_size": 28416,
+  "duplicate": false,
+  "existing": null
+}
 ```
 
-失败态：
+**返回体**（命中重复——查重是**为了提前告知**，不是阻止）：
 
-| `status` | `error` | HTTP |
+```json
+{
+  "md5": "a1b2c3d4e5f6...", "original_filename": "...", "file_type": "docx", "file_size": 28416,
+  "duplicate": true,
+  "existing": { "id": 1, "created_at": "2026-09-06T08:54:50", "chunk_count": 38, "description": null }
+}
+```
+
+**暂存目录为什么是 `uploads/_staging/{md5}{ext}`**（而不是照搬 `/api/upload` 的 `{uuid5(user_id)}/{timestamp}/`）：
+
+| 理由 | 说明 |
+|---|---|
+| **无状态** | 服务端没有会话。用 md5 当键，`commit` / `unstage` 只需带上 md5 就能定位文件，不必为此引入 session 表 |
+| **无路径穿越** | md5 是 32 位十六进制，服务端用 `^[0-9a-f]{32}$` 校验后才拼路径——**绝不接受客户端回传任意路径**。若照搬带时间戳的目录结构，就必须让客户端回传路径，那是个目录穿越面 |
+| **天然幂等** | 同一文件重复暂存 = 覆盖同一路径，不产生多份 |
+| **与正式文件分流** | 暂存文件在 `_staging/` 下，一眼可辨哪些没提交；`/api/upload` 的正式文件仍在 `{uuid5}/{timestamp}/`，互不干扰 |
+
+`_staging/` **已在 gitignore 覆盖范围内**（根 `.gitignore:66` 的 `llm_backend/uploads/`），无需新增规则。
+
+#### `POST /api/admin/knowledge/commit` — 提交索引（**走完整链路**）
+
+**D17 两阶段设计的第 2 步**：这一步才真正解析、清洗、分块、嵌入、落库。
+
+请求体：
+
+```python
+class KnowledgeCommit(BaseModel):
+    md5: str = Field(..., pattern=r"^[0-9a-f]{32}$")
+    original_filename: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+```
+
+**做什么**：
+
+1. 校验暂存文件存在（`uploads/_staging/{md5}{ext}`）→ 不存在 `404 {"detail": "暂存文件不存在或已被清理: <md5>"}`
+2. 调**既有** `IndexingService().process_file({"path": staged_path, "original_name": original_filename, "user_id": str(admin_id)})`——**索引链路全量复用，一行不改**
+3. 按 `process_file` 的返回分三种情况：
+
+| `status` | 处理 | HTTP |
 |---|---|---|
-| `failed` | `unsupported` / `too_large` / `empty_file` | `400` |
-| `failed` | `parse_error` / `embedding_failed` | `200`（契约：处理类错误 200+status） |
-| `duplicate` | — | `200`（同 `(user_id, md5)` 已存在） |
+| `success` | 查回 `Document` 行 → 写 `description`（非空时）→ 返回完整行 | `200` |
+| `duplicate` | 该 `(user_id, md5)` 已有行（可能是暂存期间别处建的）→ **不重复索引**，查回那行 + 更新 `description` → 返回完整行，`duplicate: true` | `200` |
+| `failed` | 按 `error` 转 4xx：`unsupported`/`too_large`/`empty_file` → `400`；`parse_error`/`embedding_failed` → `400` | `4xx` |
 
-管理端前端必须处理 `duplicate`：提示"该文件已存在"，并**跳过**后续 PATCH（md5 已存在，此时 PATCH 反而会改到旧记录的标题）。
+> **注意 `failed` 的 HTTP 码与 `/api/upload` 不同**：共享端点沿用"处理类错误 200 + `status=failed`"契约（客户端依赖它）。管理端端点**没必要继承这种别扭语义**——管理员调一个端点做索引，失败了就该是 4xx。这是两个端点的**有意差异**，不是不一致。
+
+4. **暂存文件的清理规则**：
+
+| 结果 | 暂存文件 | 为什么 |
+|---|---|---|
+| `success` | **删** | 已入索引，`_staging` 里那份没用了 |
+| `duplicate` | **删** | 同上（该文件的内容已在库里） |
+| `failed` | **保留** | 让"重试保存"不必重传文件（PDF 可能几 MB，MinerU 还可能瞬时失败）。此时弹窗仍停在暂存态，用户可再点保存，或点「取消」走 `stage` 删除兜底 |
+
+**返回体（完整文档行，与列表 `items` 元素同结构）**：
+
+```json
+{
+  "id": 3,
+  "md5": "a1b2c3d4e5f6...",
+  "original_filename": "京东智能家具产品知识文档.docx",
+  "description": "本次上传时填的描述",
+  "file_type": "docx",
+  "file_size": 28416,
+  "chunk_count": 38,
+  "status": "enabled",
+  "owner_id": "6",
+  "created_at": "2026-09-22T10:30:15",
+  "duplicate": false
+}
+```
+
+**`created_at` / `chunk_count` 就在这个响应里**——写这一行的代码本来就在这个函数里，顺手返回即可。这正是 D19 删掉"单条详情接口"的依据。
+
+#### `DELETE /api/admin/knowledge/stage/{md5}` — 撤销暂存
+
+「取消」调它：删掉 `uploads/_staging/{md5}{ext}`。
+
+| 情况 | 响应 |
+|---|---|
+| 文件存在，已删 | `200 {"md5": "...", "deleted": true}` |
+| 文件不存在 | `200 {"md5": "...", "deleted": false}` |
+
+**为什么"文件不存在"返回 200 而不是 404**：取消是**幂等**操作——"文件本来就不在"和"刚被我删掉"对调用方是同一个结果（都已达成"不留暂存文件"的目标）。前端一律当成功处理，不弹错误。
+
+**只删暂存文件，不碰任何 DB**——这正是两阶段设计的全部意义：**撤销时数据库里从来就没有过痕迹**。
+
+#### `POST /api/upload` — 保留原样，**管理端不再调用**
+
+该端点仍是**客户端**的知识库上传接口（`docs/项目问题.md` #14 记录其不校验令牌是既有缺陷，本次不修，见 §12-6）。管理端改用上面的两阶段端点，**不再复用**——理由见 D7 / D17。
 
 #### `PATCH /api/admin/knowledge/{md5}` — 写描述/状态
 
@@ -915,6 +1013,12 @@ class OrderUpdate(BaseModel):
     order_date: Optional[date] = None
 
 
+class KnowledgeCommit(BaseModel):
+    md5: str = Field(..., pattern=r"^[0-9a-f]{32}$")
+    original_filename: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
 class KnowledgeUpdate(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = Field(None, pattern=r"^(enabled|disabled)$")
@@ -932,7 +1036,7 @@ class TicketUpdate(BaseModel):
 **刻意不用 `response_model`**，但理由要说准：
 
 - 事实是**两种风格项目里都有**——`main.py` 的端点全部手搓 dict；`api/auth.py:16,27,44` 三处用了 `response_model`（正是本次要改的 `UserResponse` / `Token`）。
-- 管理端 17 个端点**统一手搓 dict**，与 `main.py` 那批保持一致（管理端更接近 `main.py` 的业务端点，而非 auth 的 schema 端点）。
+- 管理端 19 个端点**统一手搓 dict**，与 `main.py` 那批保持一致（管理端更接近 `main.py` 的业务端点，而非 auth 的 schema 端点）。
 - **不是为了绕开序列化问题**——`Decimal` / `datetime` 在 FastAPI 手搓 dict 返回路径上是**能正常序列化**的。实测（FastAPI 0.141.1 + `TestClient`）：返回 `{"price": Decimal("9957.50"), "when": datetime(...), "day": date(...)}` → `HTTP 200`，body 为 `{"price":9957.5,"when":"2026-09-22T10:30:00","day":"2026-09-14"}`，**不会抛 `Object of type Decimal is not JSON serializable`**。
 - 代价：手搓 dict **漏字段不会报错**。所以 §8 的测试必须逐字段断言关键字段存在（尤其 `current_price` / `amount` 是 number 而不是字符串）。
 
@@ -1324,7 +1428,7 @@ onMounted(() => {
 
 **加载/空态/保存禁用/前端校验**：全部走 §6.4.8 的通用约定，不在本页另定。
 
-#### 6.4.5 知识库管理 `KnowledgeView.vue`（表格 + 上传式新增表单）
+#### 6.4.5 知识库管理 `KnowledgeView.vue`（表格 + 暂存式新增表单）
 
 **工具条**：搜索框（placeholder「搜索文档编号/文件名」）+ 「查询」+ 「新增文档」绿按钮。
 
@@ -1342,19 +1446,20 @@ onMounted(() => {
 
 行样式与表头：见 §6.4.8 的「表格统一规格」，**不在本页另写**。
 
-**新增文档弹窗 —— 上传驱动式表单**
+**新增文档弹窗 —— 暂存式表单（两阶段）**
 
-与其它弹窗（先把字段填好、点保存才落库）**根本不同**：这个表单是「**先上传，再补描述**」。用户点「新增文档」→ 弹窗里点「上传文件」→ 文件立刻入库并解析 → 解析结果自动回填到表单的只读区 → 用户补充「文件描述」→ 保存。
+与其它弹窗（填好字段、点保存才落库）**根本不同**：这个表单分两步——**先暂存文件（不索引），补完描述再提交索引**。
 
-弹窗有**三个状态**，UI 按状态切换：
+弹窗有**四个状态**，UI 按状态切换：
 
 | 状态 | 触发 | 界面 |
 |---|---|---|
-| `idle` | 刚打开 / 上传失败后 | 只有「上传文件」按钮 + 一行说明「支持 PDF / Word / TXT / Markdown，单个不超过 30MB」。**下半区的只读信息与描述框都不渲染**；「保存」置灰禁用 |
-| `uploading` | 点了上传、XHR 进行中 | 按钮文案变「上传中… {progress}%」并禁用；进度条（`DocsPanel.vue` 同款渐变条）；「保存」仍禁用 |
-| `uploaded` | 上传成功（含 `duplicate`） | 「上传文件」按钮文案变「重新上传」；**只读信息区出现**（见下）；「文件描述」框启用；「保存」启用 |
+| `idle` | 刚打开 / 暂存失败后 | 只有「上传文件」按钮 + 说明「支持 PDF / Word / TXT / Markdown，单个不超过 30MB」。**下半区的只读信息与描述框都不渲染**；「保存」置灰禁用 |
+| `staging` | 点了上传、请求进行中 | 按钮文案变「上传中…」并禁用；「保存」仍禁用。**这一步很快**——只存文件 + 读大小 + 算 MD5，不解析内容 |
+| `staged` | 暂存成功 | 「上传文件」按钮文案变「重新上传」；只读区出现**文件基本信息三项**；「文件描述」框启用；「保存」启用。命中重复时额外显示黄色提示条 |
+| `committed` | 提交索引成功 | 只读区**补齐「片段数」「创建时间」**；顶部绿色成功条；底部按钮只剩「完成」。**这是「创建时间」第一次出现的地方**（D18：它是索引链路的产物） |
 
-**`uploaded` 态的完整表单**：
+**`staged` 态的完整表单**：
 
 ```
 ┌─ 新增文档 ───────────────────────────────────── × ┐
@@ -1364,13 +1469,13 @@ onMounted(() => {
 │   │   支持 PDF / Word / TXT / Markdown       │    │
 │   └─────────────────────────────────────────┘    │
 │                                                  │
-│   ── 以下为上传后自动解析的信息，不可编辑 ──       │
+│   ── 以下为上传后自动解析的基本信息，不可编辑 ──   │
 │                                                  │
 │   文件名     京东智能家具产品知识文档.docx        │  ← 一行截断 + title 全名
 │   文件类型   docx                                │
 │   文件大小   27.8 KB                             │
-│   片段数     38                                  │
-│   创建时间   2026-09-22 10:30                    │  ← 仅展示，不在表单字段中
+│   片段数     —                                   │  ← 保存后生成
+│   创建时间   —                                   │  ← 保存后生成
 │                                                  │
 │   文件描述   ┌─────────────────────────────┐     │  ← 唯一可编辑项
 │              │                             │     │
@@ -1380,100 +1485,79 @@ onMounted(() => {
 └──────────────────────────────────────────────────┘
 ```
 
+**`committed` 态**：同样的框，`片段数` 变成 `38`、`创建时间` 变成 `2026-09-22 10:30`，顶部一条绿底「已保存，智能客服现在可以检索到它」，按钮变「完成」。
+
 **只读信息区的实现约定**（不要用 `disabled` 的 input）：
 
-- 用两列布局（`grid grid-cols-[80px_1fr] gap-y-3`），左列标签灰色小字，右列值
-- 值是**纯文本节点**（不是 `disabled` 的 `<input>`）。理由：`disabled` 输入框视觉上仍像"可以填但被禁用了"，用户会反复点击试图编辑；纯文本 + 浅灰底（`bg-gray-50 rounded px-3 py-1.5`）才是"这就是个信息展示"的语义
-- **创建时间这一行不属于表单字段**——它不进提交体，只是展示（用户明确要求「该字段不在文件上传表单中，仅在上传成功后显示用于展示」）
+- 两列布局（`grid grid-cols-[80px_1fr] gap-y-3`），左列标签灰色小字，右列值
+- 值是**纯文本节点**。理由：`disabled` 输入框视觉上仍像"能填但被禁用了"，用户会反复点击试图编辑；纯文本 + 浅灰底（`bg-gray-50 rounded px-3 py-1.5`）才是"这就是个信息展示"的语义
+- `片段数` / `创建时间` 在 `staged` 态显示 `—`，**不显示"加载中"**——它们不是"正在取"，而是"还没产生"，用破折号表达更准
+- **没有任何一项进提交体**（除了描述），它们全是展示
 
-**上传流程（必须按序）**：
+**流程（四个动作，对应 §5.7 的四个端点）**：
 
-1. 点「上传文件」→ 隐藏的 `<input type="file" accept=".pdf,.doc,.docx,.txt,.md">`
-2. **本地预检**（避免必然失败的请求）：扩展名对照后端 `settings.allowed_extensions`（`txt,md,pdf,docx`，**注意 `.md` 在前端 accept 里但后端白名单是 `txt,md,pdf,docx`——两边一致，别写错**）；大小 ≤ 30MB（`MAX_FILE_SIZE_MB`）。不符 → 弹窗内红字提示，**不发请求**，停在 `idle`
-3. `POST /api/upload`（**复用接口**，`uploadFileWithProgress({file, userId: me.id, onProgress})`，XHR 带进度）
-4. 判断 `index_result.status`：
+**① 点「上传文件」→ `stage`**
 
-   | `status` | 处理 |
-   |---|---|
-   | `success` | 取 `index_result.md5` / `index_result.chunks`，进第 5 步 |
-   | `duplicate` | **照样进第 5 步**（md5 是同一个），但在表单顶部显示一条黄色提示「该文件已存在于知识库，继续保存只会更新它的文件描述」。**不再像初稿那样"终止"**——因为详情接口按 md5 查得到那条已有记录，回填后让用户直接补描述更顺 |
-   | `failed` | 展示错误（见下方 400 说明），**退回 `idle`** |
+1. 隐藏的 `<input type="file" accept=".pdf,.doc,.docx,.txt,.md">`
+2. **本地预检**（避免必然失败的请求）：扩展名对照 `settings.allowed_extensions`（`txt,md,pdf,docx`）；大小 ≤ 30MB。不符 → 弹窗内红字提示，**不发请求**，停在 `idle`
+3. `POST /api/admin/knowledge/stage`（multipart，`file` + `user_id: me.id`）
+4. 成功 → 存下 `{md5, original_filename, file_type, file_size, duplicate, existing}`，进 `staged`
+5. 失败（`400`）→ 显示后端返回的 `detail`（管理端端点用标准 4xx 语义，**能拿到具体原因**，不像 `/api/upload` 的 400 会把响应体丢掉），退回 `idle`
 
-   **⚠️ `failed` 分两种 HTTP 形态，前端能拿到的信息不一样**（既有接口 `main.py:170-176` 的契约）：
+**② 命中重复（`duplicate: true`）时**
 
-   | `error` | HTTP | 前端能拿到的信息 |
-   |---|---|---|
-   | `unsupported` / `too_large` / `empty_file` | **`400`** | **只有状态码** |
-   | `parse_error` / `embedding_failed` | `200` | 完整 `index_result.detail` |
+表单顶部显示黄色提示条：
 
-   **这是既有代码的真实限制**：`src/api/upload.js:42-51` 的 `uploadFileWithProgress` 只在 2xx 时 `resolve(JSON.parse(xhr.responseText))`，401 单独分支，**其余状态码一律 `reject(new Error('上传失败: ' + status))`，响应体直接丢弃**。
+> 该文件已存在于知识库（{existing.chunk_count} 个片段，创建于 {existing.created_at 截取}）。继续保存只会**更新它的文件描述**，不会新增一条记录。
 
-   **选定做法（二选一，本 spec 取 a）**：
-   - **(a) 接受限制**：400 时显示通用文案「文件格式不支持、超过 30MB 或内容为空，请检查后重试」（三种可能都列出），不改 `upload.js`。第 2 步的本地预检已把绝大部分 400 挡在请求之前。
-   - **(b) 改 `upload.js`**：在 `xhr.onload` 的 else 分支解析响应体并把 `detail` 挂到 Error 上。但该文件**客户端也在用**，改它违背 §6.1 的"客户端零改动"。
+**不阻止继续**——用户可能就是想给已有文档补描述。这与初稿"检测到重复就终止"不同，因为现在能拿到 `existing` 的信息，提示可以说得很具体。
 
-5. **回填只读信息**。`success` 的四种值直接来自上传响应，不用再请求：
+**③ 点「保存」→ `commit`**
 
-   | 表单行 | 取值 |
-   |---|---|
-   | 文件名 | `index_result.original_filename` |
-   | 文件类型 | `index_result` 的扩展名（或顶层 `file_info.type`） |
-   | 文件大小 | 顶层 `file_info.size` → `formatFileSize()`（复用 `src/utils/format.js`） |
-   | 片段数 | `index_result.chunks` |
+`POST /api/admin/knowledge/commit`，body `{md5, original_filename, description}`（`description` 为空则省略该键，配合 §6.7 的 `cleanBody`）。
 
-   **但「创建时间」不在上传响应里**，需补一次请求：
-
-   ```js
-   // GET /api/admin/knowledge/{md5}  → 结构同列表 item,含 created_at
-   try {
-     const detail = await getKnowledge(index_result.md5);   // §5.7
-     form.createdAt = detail.created_at;                    // "2026-09-22T10:30:00"
-   } catch {
-     form.createdAt = null;   // fail-open:该行显示 "—",不阻断上传流程
-   }
-   ```
-
-   **为什么加这个详情接口而不是改 `/api/upload` 的返回**：`process_file` 的三条返回路径里，两条 `duplicate` 发生在 INSERT 之前或冲突之后，**拿不到本次写入的 `created_at`**；要覆盖得改共用索引链路的返回契约。详情接口让 `success` 与 `duplicate` **两条路径统一处理**，且不碰共享链路（理由详见 §5.7）。
-
-6. 用户填「文件描述」→ 点「保存」
-
-**保存行为**：
-
-| 情况 | 行为 |
+| 结果 | 行为 |
 |---|---|
-| 描述**非空** | `PATCH /api/admin/knowledge/{md5}`，body `{description}`（配合 §6.7 的 `cleanBody` 与 §5.7 的 `exclude_unset`）→ 关闭弹窗 + 刷新列表 + 成功提示 |
-| 描述**为空**（含只填空格） | **跳过 PATCH**（省一次往返，改了跟没改一样）→ 直接关闭 + 刷新列表。此时 `description` 保持 NULL，列表显示 `—` |
-| PATCH 失败 | 弹窗**不关闭**，顶部红色错误条 + 保留已填内容。**提示文案要写清楚**：「文件已上传成功并入库，但文件描述保存失败，请在列表中点「编辑」补填」——此时 `documents` 行已落库、chunks 已入库、智能客服**已经能检索到它**，"上传"这个主目的已达成，报「新增失败」是误导 |
+| `200` | 存下返回的完整行（含 `chunk_count` / `created_at`）→ **切到 `committed` 态**（不立即关窗） |
+| `4xx` | 弹窗**不关闭**，顶部红色错误条 + 保留已填描述。**暂存文件保留**，用户可直接再点「保存」重试（不必重传）；也可以点「取消」走 `unstage` 清掉 |
 
-**「取消」的语义（必须在设计里说清，否则是个坑）**：点「上传文件」那一刻文件就已经入库了，`documents` 行与 chunks 都已写入、检索已生效。所以：
+**为什么要 `committed` 态而不是保存完就关窗**：索引是这条链路里**唯一耗时且可能失败**的一步（PDF 走 MinerU 云端，超时上限 300s）。保存成功后停一下、把「片段数 / 创建时间」亮出来 + 给一句"智能客服现在可以检索到它"，是对这个耗时动作的交代。顺带也满足用户「创建时间在上传成功后显示供展示」的要求（D18：它只能在这时出现）。
 
-- `idle` 态点「取消」→ 直接关闭（什么都没发生）
-- `uploaded` 态点「取消」→ 先 `confirm('文件已上传并入库，智能客服已可检索到它。未保存的文件描述将丢失，确定关闭？')`，确认后关闭 + 刷新列表（**不撤销上传**——撤销要调删除接口，属另一件事，不做）
+**④ 点「取消」→ `unstage`**
 
-**编辑弹窗**（表格里点「编辑」）：与新增弹窗**共用同一个组件**，但只开放两个可编辑项，其余走只读信息区：
+这是两阶段设计的核心收益：
 
-| 项 | 状态 |
+| 当前状态 | 点「取消」的行为 |
 |---|---|
-| 文件名 / 文件类型 / 文件大小 / 片段数 / 创建时间 | 只读信息区（同新增弹窗的样式） |
-| 文件描述 | textarea，可编辑 |
-| 状态 | select（启用 / 停用），可编辑 |
+| `idle` | 直接关闭，**不发任何请求**（什么都没发生） |
+| `staging` | 按钮禁用，等请求结束（避免删一个正在写的文件） |
+| `staged` | 调 `DELETE /api/admin/knowledge/stage/{md5}` → 删掉暂存文件 → 关闭。**数据库里从头到尾没有过痕迹，不需要确认弹窗**——没什么可丢的（除了用户敲的描述，那段长度有限，可不确认） |
+| `committed` | 直接关闭（文档已入库，此时"取消"没有意义，故该状态下按钮已变成「完成」） |
 
-**编辑弹窗里不出现「上传文件」按钮**——不提供"替换文件"能力（换文件等于换一条记录，语义上应删除后重新上传）。
+> **与初稿的关键差异**：初稿是"上传即入库，取消不撤销"，需要在取消时弹确认说"文件已入库不会撤销"。**现在不需要了**——取消真的撤销。这是这个改动最直接的收益。
+
+**编辑弹窗**（表格里点「编辑」）：与新增弹窗**共用同一个组件**，通过 `mode` 区分：
+
+| 项 | 新增（`create`） | 编辑（`edit`） |
+|---|---|---|
+| 「上传文件」按钮 | 显示 | **隐藏**（不提供"替换文件"——换文件等于换一条记录，语义上是删了重建） |
+| 文件名 / 类型 / 大小 / 片段数 / 创建时间 | 暂存后填入 | 直接由列表行 `record` 填入 |
+| 文件描述 | textarea，`staged` 后可编辑 | textarea，可编辑 |
+| 状态 | **不显示**（新建一律 `enabled`） | select（启用 / 停用），可编辑 |
+| 「保存」 | 调 `commit` | 调 `PATCH` |
 
 **删除**：`confirm('确定删除文档「{original_filename}」？将同时删除其 {chunk_count} 个知识片段，智能客服不再检索到它。')` → `DELETE /api/admin/knowledge/{md5}`。
 
-> **设计说明：为什么"新增"实际发生在点「上传文件」那一刻**
-> 这是"复用 `/api/upload`"（用户明确要求）的必然结果——该接口的职责就是"收文件 + 解析 + 建索引 + 落库"，没有"只上传不入库"的模式。所以「新增文档」弹窗的语义是「**上传并登记**」：上传即入库，弹窗里剩下的只是给这条记录补一段人工描述。上面的「保存行为」与「取消语义」两处都已按这个事实设计，不留"以为点了保存才入库"的误解空间。
+#### 6.4.5.1 暂存残留的处理（已知取舍，不是遗漏）
 
-#### 6.4.5.1 表格里「编辑」与「新增」的关系（避免实现歧义）
+「暂存了但没提交也没取消」会留下 `uploads/_staging/{md5}{ext}` 一个文件。三种来源：关掉弹窗没点取消、直接关浏览器、网络断了。
 
-两个入口共用 `KnowledgeFormModal.vue`，通过 `mode` prop 区分：
-
-```js
-props: { mode: 'create' | 'edit', record: Object|null }
-// create: 显示「上传文件」按钮,只读区初始为空,上传后填充
-// edit:   隐藏「上传文件」按钮,只读区直接由 record 填充,描述/状态直接可编辑
-```
+| 项 | 说明 |
+|---|---|
+| 危害 | **低**。只在管理员上传路径产生，频率极低；文件在 gitignore 内、不进仓库；不写任何 DB 行，**不影响检索**（`_staging/` 不在索引管道扫描范围内） |
+| 要不要自动清理 | **不做**。加 TTL 清理要么引入定时任务、要么在 `stage` 时顺手扫目录，都是为"管理员偶尔忘记点取消"这一个低频场景付出的常驻复杂度 |
+| 与现状对比 | **不是本次引入的新问题**：`/api/upload` 上传成功的文件一直留在 `{uuid5}/{timestamp}/` 下**从不删除**，磁盘上早就有这类残留。本次只是把"未提交的暂存"单独放一个目录，反而更容易辨认和手工清理 |
+| 想清理时 | `rm -rf llm_backend/uploads/_staging/*`（没有任何 DB 依赖，随时可删） |
 
 #### 6.4.6 工单管理 `TicketView.vue`（表格 + 处理弹窗，对齐参考图）
 
@@ -1699,7 +1783,8 @@ export const createOrder = (b)      => request('/api/admin/orders', { method: 'P
 export const updateOrder = (id, b)  => request(`/api/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(b) });
 export const deleteOrder = (id)     => request(`/api/admin/orders/${id}`, { method: 'DELETE' });
 export const listKnowledge = (p)    => request(`/api/admin/knowledge?${qs(p)}`);
-export const getKnowledge = (md5)   => request(`/api/admin/knowledge/${encodeURIComponent(md5)}`);  // 上传后回填表单用(§6.4.5 第 5 步)
+export const commitKnowledge = (b)  => request('/api/admin/knowledge/commit', { method: 'POST', body: JSON.stringify(cleanBody(b)) });
+export const unstageKnowledge = (md5)=> request(`/api/admin/knowledge/stage/${encodeURIComponent(md5)}`, { method: 'DELETE' });
 export const updateKnowledge = (md5,b) => request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'PATCH', body: JSON.stringify(cleanBody(b)) });
 export const deleteKnowledge = (md5)=> request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'DELETE' });
 export const listTickets = (p)      => request(`/api/admin/tickets?${qs(p)}`);
@@ -1708,7 +1793,43 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 
 `qs(obj)`：过滤掉 `undefined` / `null` / `''` 的键后用 `URLSearchParams` 拼串。
 
-**知识库上传不走 `request()`**——它需要 XHR 上传进度，复用 `src/api/upload.js` 的 `uploadFileWithProgress({ file, userId, onProgress })`（直接 import，**不改这个文件**，理由与代价见 §6.4.5 的 400 说明）。
+**知识库暂存不走 `request()`，也不复用 `src/api/upload.js`**——后者把 URL 硬编码成了 `/api/upload`（`upload.js:31`），管理端要打的是 `/api/admin/knowledge/stage`。所以在 `admin/api.js` 里自带一个改名版：
+
+```js
+// 管理端专用的带进度上传。与 src/api/upload.js:25 的 uploadFileWithProgress 结构相同,
+// 两点差异:(1) URL 指向管理端 stage 端点;(2) 【非 2xx 时解析响应体】把 detail 带出来 ——
+// 后者是管理端端点用标准 4xx 语义换来的好处,客户端那个版本的 400 是把响应体丢掉的
+export function stageFile({ file, userId, onProgress }) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('user_id', userId);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/admin/knowledge/stage');
+    const token = localStorage.getItem('token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch { /* 非 JSON,下面按状态码兜底 */ }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body);
+      if (xhr.status === 401) {
+        window.dispatchEvent(new Event('auth:unauthorized'));
+        return reject(new Error('登录已失效'));
+      }
+      reject(new Error(body?.detail || `上传失败: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.send(fd);
+  });
+}
+```
+
+**同一文件里注意**：`/api/upload` 与本端点对 4xx 的处理不同（前者把失败包进 200 的 `status=failed`），所以**不要**把这个函数改成通用上传器去服务客户端——两者契约不同，各留各的。
 
 **`request()` 的附加职责：请求体空串归一化**（实测坑，不加必炸）：
 
@@ -2018,14 +2139,23 @@ async def normal_token(normal_user):
 | 两行种子的 `chunk_count` | 分别为 `4` 与 `38`（实测值，§2.1） |
 | PATCH 描述 | 成功后重查值已变 |
 | **PATCH 能把 description 还原为 NULL** | 发 `json={"description": None}` → 重查 `description IS NULL`。**这条是 §5.7「用 `exclude_unset` 而非 `is not None`」的直接验收**——写成后者这条必挂 |
-| **详情接口 `GET /knowledge/{md5}`** | 返回单对象且字段与列表 item 完全一致；含 `created_at`（§6.4.5 的表单回填依赖它）；不存在的 md5 → `404` |
+| **`stage` 不写库**（**两阶段设计的核心断言**） | 暂存一个临时 md 文件 → 响应含 `md5`/`file_type`/`file_size`/`duplicate: false`；**同时断言 `SELECT COUNT(*) FROM documents` 与暂存前一致、`document_chunks` 也一致**——这是 D17"暂存不索引"的直接验收。再断言磁盘上出现了 `uploads/_staging/{md5}.md` |
+| **`unstage` 真的撤销** | 暂存后调 `DELETE /knowledge/stage/{md5}` → `deleted: true`；**暂存文件消失**；`documents` 计数仍与最初一致（从头到尾没写过库） |
+| **`unstage` 幂等** | 连调两次 → 第二次 `deleted: false` 且 **HTTP 200**（不是 404） |
+| **`stage` 校验** | 传 `.exe` → `400` 且 detail 含「不支持」；传一个 0 字节文件 → `400`。**两种情况都不该在 `_staging/` 留下文件** |
+| **`commit` 走完整链路** | 暂存临时 md → `commit` → 返回完整行且含 `chunk_count > 0`、`created_at` 非空、`description` 为提交时传的值；列表能查到；`document_chunks` 有对应行 |
+| **`commit` 成功后删暂存文件** | `commit` 后 `uploads/_staging/{md5}.md` **不存在** |
+| **`commit` 失败保留暂存文件** | 暂存一个**内容为空**的 md（能过 stage 的空文件校验吗？——0 字节会被 stage 挡掉，改用只含空白字符的 md 让它过 stage、倒在 commit 的 `empty_file`）→ `commit` 返回 `4xx` → **暂存文件仍在**（可重试） |
+| **`commit` 暂存文件不存在** | 用一个格式合法但没暂存过的 md5 → `404` |
+| `commit` 的 `md5` 格式非法 | 传 `"xyz"` → `422` |
+| **`commit` 命中重复** | 同一个临时 md 暂存两次、`commit` 两次 → 第二次 `duplicate: true` 且 `documents` **不新增行** |
 | 测试后还原 | 用 `json={"description": None}`（**不是 `""`**）把两行种子文档还原为 NULL 原值；`""` 会留下空串而非 NULL，属静默污染演示数据（前端 `description \|\| '—'` 恰好能兜住，所以**看不出问题**） |
 | PATCH 不存在 md5 | `404` |
 | PATCH status 非法值 | `422` |
 | DELETE 不存在 md5 | `404` |
-| **上传→详情→PATCH→删除 全链路** | 用 `test_user_id` 风格的新 md5，上传一个临时 md 文件 → `GET /knowledge/{md5}` 能查到且 `created_at` 非空 → PATCH 描述 → 列表能查到 → DELETE → `document_chunks` 也清空 |
+| **stage→commit→PATCH→DELETE 全链路** | 用 `test_user_id` 风格的新 user_id：暂存临时 md → `commit`（带描述）→ 列表能查到且描述正确 → `PATCH` 改状态为 `disabled` → `DELETE` → `documents` 与 `document_chunks` 都清空 |
 
-全链路用例的清理复用既有 `cleanup_test_data` fixture（它已按 `user_id` 删 documents + chunks）。
+全链路用例的清理复用既有 `cleanup_test_data` fixture（它已按 `user_id` 删 documents + chunks）。**但暂存文件不在它的清理范围内**——测试要在 `finally` 里补一句 `unstage`，或断言失败时手工 `rm -rf llm_backend/uploads/_staging/`。测试用的暂存文件名是 md5，与生产文件**不会重名**（内容不同），但仍应清掉避免堆积。
 
 **重要**：`PATCH` 用例必须还原种子文档的 `description` 原值（初始为 `NULL`），否则跑完测试会污染演示数据。
 
@@ -2090,10 +2220,10 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 11 | 「体验客服」按钮 | 新标签页打开客户端页面 |
 | 12 | 商品管理 | 47 条商品卡片、图片显示为 SVG 占位图；搜索「门锁」→ 12 条；新增一条测试商品 → 出现在列表且**图片走 fallback 图标**；改价格 → 重新查询值已变；删除 → 消失 |
 | 13 | 订单管理 | 18 行**表格**（8 列：订单号/商品/品类/买家/金额/状态/下单日期/操作）；**与工单页并排对比，表头样式、行高、徽章、操作按钮、分页条肉眼一致**；金额显示两位小数（`¥9957.50` 不是 `¥9957.5`）；新增一条（选商品后金额自动带出）→ 出现在列表；改状态 → 徽章颜色变；删除 → 消失 |
-| 14 | 知识库管理 | 2 行，文件名显示 `.docx` 全名、片段数 4 / 38、创建时间 `2026-09-06`。点「新增文档」→ 弹窗**只有「上传文件」按钮**（保存置灰）→ 上传一个 md → **只读区自动出现**文件名/类型/大小/片段数/创建时间五项、「文件描述」框启用 → 填描述 → 保存 → 列表变 3 行且描述为所填。再点该行「编辑」→ **没有「上传文件」按钮**，改描述与状态 → 生效；删除 → 回到 2 行 |
-| 14b | 知识库新增的**重复文件**路径 | 用第 14 步同一个 md 再点一次「新增文档」上传 → 出现黄色提示「该文件已存在于知识库」+ **只读区照样回填**（含创建时间）→ 保存只更新描述，列表**仍为 3 行**（不新增第 4 行） |
-| 14c | 「取消」语义 | 上传成功后直接点「取消」→ 弹确认「文件已上传并入库…」→ 确认后列表**仍包含该行**（上传不撤销） |
-| 15 | **知识库上传后确实可检索** | 在客户端聊天里问一个只有新上传文档才有的问题，确认能召回（这是知识库管理最重要的验收点——证明"复用上传接口"真的打通了检索） |
+| 14 | 知识库管理 | 2 行，文件名显示 `.docx` 全名、片段数 4 / 38、创建时间 `2026-09-06`。点「新增文档」→ 弹窗**只有「上传文件」按钮**（保存置灰）→ 上传一个 md → **只读区出现文件名/类型/大小三项**，片段数与创建时间为 `—`、「文件描述」框启用 → 填描述 → 保存 → 弹窗切到**完成态**（片段数变具体数字、创建时间出现、绿条「已保存，智能客服现在可以检索到它」）→ 点「完成」→ 列表变 3 行且描述为所填。再点该行「编辑」→ **没有「上传文件」按钮**、只读区五项直接有值，改描述与状态 → 生效；删除 → 回到 2 行 |
+| 14b | 知识库新增的**重复文件**路径 | 用第 14 步同一个 md 再点一次「新增文档」上传 → 出现黄色提示「该文件已存在于知识库（{N} 个片段，创建于 {日期}）」→ 保存只更新描述，列表**仍为 3 行**（不新增第 4 行） |
+| 14c | **「取消」真的撤销**（两阶段设计的核心验收） | 上传一个**新的** md → 暂存成功后点「取消」→ 弹窗直接关闭（**不弹确认**）→ 列表**行数不变**；查库 `SELECT COUNT(*) FROM documents` 与暂存前一致；`llm_backend/uploads/_staging/` 下该 md5 文件**已消失**。**对比**：若此时直接关浏览器（不点取消），该暂存文件仍在磁盘上——这是 §6.4.5.1 记录的已知取舍 |
+| 15 | **知识库上传后确实可检索** | 在客户端聊天里问一个只有新上传文档才有的问题，确认能召回（这是知识库管理最重要的验收点——证明**索引链路真的跑通了**。注意：管理端已不复用 `/api/upload`，走的是 `stage`→`commit`→`process_file`，所以这条验收要重跑一遍才算数） |
 | 16 | 工单管理 | 8 行；点「处理」→ 弹窗字段与参考图一致（工单号/用户原话只读）；改状态为「已解决」+ 保存 → 列表徽章变绿、`resolved_at` 与 `handler` 有值（查库确认） |
 | 17 | 客户端回归 | `http://127.0.0.1:8000/` 客户端页面一切照旧：登录、发消息、知识库面板、上传文档均正常 |
 | 18 | 测试全绿 | `python -m pytest llm_backend/tests/ -q`，仅既有失败项（`test_bm25_retriever`） |
@@ -2110,7 +2240,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 3 | 管理端路由骨架 + 控制台 2 端点 | `api/admin/__init__.py`、`api/admin/console.py`、`api/__init__.py`(改) | `curl /api/admin/console/stats`（管理员 token）→ 200；无 token → 401 |
 | 4 | 商品 5 端点 + `schemas/admin.py` | `api/admin/products.py`、`schemas/admin.py` | curl 冒烟（列表/新增/编辑/删除） |
 | 5 | 订单 4 端点 | `api/admin/orders.py` | 同上 |
-| 6 | 知识库 4 端点（列表 / 详情 / PATCH / 删除） | `api/admin/knowledge.py` | 同上 + 与既有 `/api/documents` 并存不冲突 |
+| 6 | 知识库 6 端点（列表 / stage / commit / unstage / PATCH / DELETE） | `api/admin/knowledge.py` | 同上 + 与既有 `/api/documents`、`/api/upload` 并存不冲突；**`stage` 只写磁盘不写库**（§8.5 有断言） |
 | 7 | 工单 2 端点 | `api/admin/tickets.py` | 同上 |
 | 8 | 种子脚本 3 个 + 占位图脚本 1 个，跑通 | `llm_backend/scripts/seed_admin_account.py`、`llm_backend/scripts/seed_orders.py`、`llm_backend/scripts/seed_tickets.py`、**根** `scripts/build_product_placeholders.py` | §9-2~5 全部判据；**每个脚本连跑两次**核对幂等（订单为 upsert、其余无变化） |
 | 9 | 后端测试 5 个文件 + conftest fixtures | `tests/test_admin_auth.py` 等 5 个、`tests/conftest.py`(改) | 在**项目根**执行 `python -m pytest -q`（`pyproject.toml:60` 的 `testpaths` 指向 `llm_backend/tests`，从 `llm_backend/` 里跑也能因上溯到根 pyproject 而生效）全绿（§9-18） |
@@ -2118,7 +2248,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 11 | 控制台页 + 3 个图表组件 | `ConsoleView.vue`、`charts/*.vue` | §9-9~11 |
 | 12 | 商品管理页 + 通用组件（Modal/分页/缩略图/徽章） | `ProductView.vue`、`components/*.vue` | §9-12 |
 | 13 | 订单管理页（表格，复用 §6.4.6 的表头/行样式） | `OrderView.vue` | §9-13 |
-| 14 | 知识库管理页 + 上传驱动表单组件 | `KnowledgeView.vue`、`components/KnowledgeFormModal.vue` | §9-14 / 14b / 14c / 15 |
+| 14 | 知识库管理页 + 暂存式表单组件 | `KnowledgeView.vue`、`components/KnowledgeFormModal.vue` | §9-14 / 14b / 14c / 15 |
 | 15 | 工单管理页 | `TicketView.vue` | §9-16 |
 | 16 | 客户端回归 + 全量测试 + 文档同步 + Git 提交 | — | §9-17~19 |
 
@@ -2148,6 +2278,9 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 3 | 控制台「活跃用户」口径 | ✅ **`COUNT(*) FROM users`**（全部注册用户） | 近 7 日有会话的用户数 | §5.4 `stats.users.total` |
 | 4 | 订单种子选品范围 | ✅ **`ORDER BY sku LIMIT 18`**（只覆盖 4 个品类） | 跨品类抽样 | §7.2 |
 | 5 | 订单弹窗的商品下拉 | ✅ **`GET /products?page_size=100` 一次拉取**，不加新接口 | 精简的 `/products/options` | §6.4.4 |
+| 6 | 知识库新增的**上传语义** | ✅ **改两阶段**：`stage` 只存文件+基本信息（不索引），「取消」调 `unstage` 真撤销，点「保存」才 `commit` 走完整索引 | 初稿的"上传即入库、取消不撤销"（**已否决**） | §3 D7/D17/D18/D19、§5.7、§6.4.5 |
+
+**第 6 项的连带影响（重要）**：这一项**推翻了初稿"复用 `/api/upload`"的做法**——那个接口的语义就是"上传即索引"，没有"只存不索引"的模式，要做到"取消能撤销"必须在索引前拦一道。因此管理端新增 3 个知识库端点（`stage` / `commit` / `unstage`），并删掉了初稿计划的"单条详情"端点（`commit` 的响应直接返回完整行即可，见 D19）。**`/api/upload` 本身不改**，客户端照常用。
 
 **第 4 项的影响已减弱**：订单页从卡片网格改为表格后，"卡片看起来单调"这个原先的顾虑不再成立——表格里商品名是文本列，品类集中不造成视觉问题。所以**维持原抽样规则**（可复现、确定性好），不引入跨品类抽样的额外逻辑。
 
@@ -2188,8 +2321,9 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 27 | **SVG 生成物会被静默提交入库** | 实测 `git check-ignore frontend/public/products/x.svg` 无命中，而 §10 步 16 走 `git add .` → 47 个生成物入库，违反项目"docx 不入库、只提交生成脚本"的既有约定 | §6.5 已要求 `frontend/.gitignore` 加 `public/products/`，并说明代价（新克隆仓库需先跑脚本，否则图片走兜底） |
 | 28 | **根 `scripts/` 脚本连不上 DB** | 根 `scripts/` 下没有任何连 DB 的先例（实测 `grep AsyncSessionLocal\|psycopg` → 0 命中），照抄 `PROJECT_ROOT = Path(__file__).parent.parent` 导入不到 `app`（它指向项目根，而 `app` 在 `llm_backend/` 下） | §7.4 已给出完整的 `sys.path.insert(0, PROJECT_ROOT / "llm_backend")` 引导写法 |
 | 29 | **conftest 顶层 `import main` 会连累全部测试** | `main.py:543` 的 `StaticFiles(frontend/dist)` 在目录不存在时构造即抛 `RuntimeError`；`dist` 被 gitignore，没构建过的环境里会让含 `test_cleaner`/`test_rrf` 在内的**整套测试**在 collection 阶段全灭 | §8.1 已改为在 `_login()` 函数内局部导入（与 `tests/test_documents_api.py:5` 的既有做法一致） |
-| 30 | **「上传即入库」的语义容易被误解** | 点「上传文件」那一刻 `documents` 行与 chunks 就已写入、检索已生效。若 UI 让人以为"点了保存才入库"，用户点「取消」会以为撤销了，实际没有——文档留在知识库里且**智能客服已经能检索到它** | §6.4.5 已按此事实设计：「取消」在 `uploaded` 态弹确认「文件已上传并入库…未保存的文件描述将丢失」，并给出"为什么新增发生在点上传那一刻"的设计说明（复用 `/api/upload` 的必然结果）。§9-14c 有验收 |
-| 31 | **「创建时间」要额外一次请求，且可能失败** | 该值不在 `/api/upload` 的响应里，需 `GET /api/admin/knowledge/{md5}` 补一次。若这次请求失败，只读区会缺一行 | §6.4.5 已规定 **fail-open**：失败时该行显示 `—`，**不阻断上传流程**（文件已入库这个主目的已达成，不该因为一个展示字段回滚整条链路） |
+| 30 | **暂存文件无人清理会留残留** | 「暂存了但既没提交也没取消」会在 `uploads/_staging/` 留文件（关弹窗、关浏览器、断网三种来源） | **接受**：只在管理员低频路径产生；在 gitignore 内、不进仓库；不写 DB、`_staging/` 不在索引扫描范围内（§6.4.5.1 已完整记录取舍）。**且这不是本次引入的新问题**——`/api/upload` 上传成功的文件一直留在磁盘上从不删除，早就有同类残留 |
+| 31 | **`commit` 失败时暂存文件要保留，不能一律删** | 若失败也删，用户重试就得重新上传（PDF 可能几 MB，MinerU 还可能瞬时失败）；若成功也留，则残留累积 | §5.7 已规定差异化清理：`success`/`duplicate` → 删；`failed` → **保留**（弹窗停在暂存态可重试，或点取消走 `unstage` 兜底）。§8.5 有正反两条断言 |
+| 31b | **管理端端点的 4xx 语义与 `/api/upload` 不同** | 后者把处理类失败包进 `200 + status=failed`（客户端依赖该契约），管理端端点用标准 4xx。**若有人图省事把两者合并成一个通用上传器，就会打破客户端契约** | §6.7 已明确警示"两者契约不同，各留各的"；`admin/api.js` 里的 `stageFile` 是独立实现，不复用 `src/api/upload.js`（后者 URL 还硬编码成了 `/api/upload`） |
 | 32 | **表单只读区不要用 `disabled` 的 input** | `disabled` 输入框视觉上仍像"能填但被禁用"，用户会反复点击试图编辑；且 `disabled` 字段虽不进提交体，但容易被后来者接上 `v-model` 而变成可写 | §6.4.5 已规定用**纯文本节点 + 浅灰底**渲染只读信息区；「创建时间」尤其强调是展示项、不进提交体 |
 
 ---
@@ -2210,14 +2344,24 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 10 | PUT | `/api/admin/orders/{id}` | require_admin |
 | 11 | DELETE | `/api/admin/orders/{id}` | require_admin |
 | 12 | GET | `/api/admin/knowledge` | require_admin |
-| 13 | GET | `/api/admin/knowledge/{md5}` | require_admin |
-| 14 | PATCH | `/api/admin/knowledge/{md5}` | require_admin |
-| 15 | DELETE | `/api/admin/knowledge/{md5}` | require_admin |
-| 16 | GET | `/api/admin/tickets` | require_admin |
-| 17 | PUT | `/api/admin/tickets/{id}` | require_admin |
+| 13 | POST | `/api/admin/knowledge/stage` | require_admin |
+| 14 | POST | `/api/admin/knowledge/commit` | require_admin |
+| 15 | DELETE | `/api/admin/knowledge/stage/{md5}` | require_admin |
+| 16 | PATCH | `/api/admin/knowledge/{md5}` | require_admin |
+| 17 | DELETE | `/api/admin/knowledge/{md5}` | require_admin |
+| 18 | GET | `/api/admin/tickets` | require_admin |
+| 19 | PUT | `/api/admin/tickets/{id}` | require_admin |
 | — | — | — | — |
-| 18 | POST | `/api/upload` | **复用，无鉴权（既有）** |
-| 19 | POST | `/api/token` | **复用，加返回 role** |
-| 20 | GET | `/api/users/me` | **复用，加返回 role** |
+| — | POST | `/api/upload` | **原样保留；管理端已不再调用** |
+| — | POST | `/api/token` | **复用，加返回 role** |
+| — | GET | `/api/users/me` | **复用，加返回 role** |
 
-**路由注册顺序提醒**：`GET /knowledge/{md5}` 与 `GET /knowledge` 同前缀不同路径，无冲突；但 `GET /products/categories` 必须排在**任何** `GET /products/{sku}` 之前（当前无此端点，见 §5.5）。
+**总计 19 个新端点**：控制台 2 + 商品 5 + 订单 4 + 知识库 6 + 工单 2。
+
+**路由注册顺序提醒**（两处，实施时按此检查）：
+
+| 情况 | 是否有冲突 | 说明 |
+|---|---|---|
+| `GET /products/categories` vs `GET /products/{sku}` | **当前无，将来会有** | 现在没有 `GET /products/{sku}`（只有 PUT/DELETE），所以不冲突。**将来若加详情端点，必须把 `categories` 注册在前面**——否则 `/products/categories` 会被 `{sku}="categories"` 抢先命中 |
+| `POST /knowledge/stage` · `POST /knowledge/commit` vs 变量路径 | **无** | knowledge 组里唯一带变量的路由是 `PATCH /{md5}` 与 `DELETE /{md5}`，**没有 `POST /{md5}`**，所以 `POST /stage` / `POST /commit` 不与任何东西竞争 |
+| `DELETE /knowledge/stage/{md5}` vs `DELETE /knowledge/{md5}` | **无** | 路径段数不同（`stage` 段多一层）。附带一个无害的边角：调 `DELETE /knowledge/stage`（少一段）会命中 `DELETE /{md5}` 且 `md5="stage"` → 查不到 → `404`。前端不会这么调 |
