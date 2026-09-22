@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 管理端不复用客户端 global.css(那边 body 设了 overflow:hidden,管理端要正常滚动),
+   但 Tailwind preflight 不设 body 背景色与文字色,不补则页面纯白底、卡片 bg-white
+   几乎看不出边界。以下三项与客户端观感对齐。 */
+
+/* 1. 页面底色 = tailwind.config.cjs 的 page.bg */
+body {
+  background-color: #fafbfc;
+  /* 2. 文字色:preflight 不设,默认继承浏览器黑 */
+  color: #1e293b;
+}
+
+/* 3. 滚动条:与客户端 global.css 的 6px 细滚动条一致(管理端表格/卡片密集) */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+/* 注意:不写 body { overflow: auto } —— admin 入口根本不加载 global.css,
+   Tailwind preflight 也不设 overflow,没有任何东西会把它设成 hidden,
+   写了是空操作,还会误导后人以为两个入口的 CSS 会互相影响。 */
