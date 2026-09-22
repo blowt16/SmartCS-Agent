@@ -5,7 +5,7 @@
 """
 import hashlib
 import os
-from typing import Any, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import numpy as np
 from langchain_core.documents import Document as LangchainDocument
@@ -24,6 +24,24 @@ from app.services.mineru_client import MinerUError, parse_pdf
 from app.services.text_cleaner import clean_text
 
 logger = get_logger(service="indexing")
+
+# 进度回调:(阶段标签, 百分比 0-100, 细分说明) -> 协程
+ProgressFn = Callable[[str, int, str], Awaitable[None]]
+
+# 阶段权重(和为 100),按典型耗时占比拍的经验值。
+# 不同文件类型必然有偏差:.md 解析近乎瞬时 → 会先跳到 50% 再慢慢走嵌入;
+# PDF 走 MinerU 云端 → 解析阶段吃掉 45% 的大部分。这是"真实进度"的代价:
+# 宁可真实地跳一下再匀速走,也不用定时器编造平滑假进度。
+_STAGES = [
+    ("validate", "校验文件",    5),
+    ("parse",    "解析文档",   45),
+    ("clean",    "清洗文本",    5),
+    ("split",    "切分片段",    5),
+    ("embed",    "生成向量",   35),
+    ("store",    "写入知识库",  5),
+]
+_LABELS = {_key: _label for _key, _label, _w in _STAGES}
+_WEIGHTS = {_key: _w for _key, _label, _w in _STAGES}
 
 
 class IndexingService:
@@ -81,8 +99,27 @@ class IndexingService:
 
     # ==================== 核心流程 ====================
 
-    async def process_file(self, file_info: Dict[str, Any]) -> Dict[str, Any]:
-        """单个文件全链路:失败路径零 DB 写入。"""
+    async def process_file(
+        self,
+        file_info: Dict[str, Any],
+        on_progress: Optional[ProgressFn] = None,
+    ) -> Dict[str, Any]:
+        """单个文件全链路:失败路径零 DB 写入。
+
+        on_progress: 可选进度回调(阶段标签, 百分比, 细分说明) -> 协程。
+        默认 None 时不发任何事件,既有调用方(/api/upload 与客户端上传)
+        执行路径逐行不变。发射一律走 _emit,不在别处直接调 on_progress。
+        """
+        _pct = 0
+
+        async def _emit(key: str, detail: str = "") -> None:
+            nonlocal _pct
+            if on_progress is None:
+                return
+            _pct += _WEIGHTS[key]
+            # 上限 99:100 只由 commit 的 done 事件给出,保证"最后一个 progress < 100"
+            await on_progress(_LABELS[key], min(_pct, 99), detail)
+
         path = file_info["path"]
         original_name = file_info.get("original_name", os.path.basename(path))
         user_id = str(file_info.get("user_id", 0))
@@ -99,6 +136,7 @@ class IndexingService:
             return self._fail("too_large", f"文件大小超过限制(最大 {settings.MAX_FILE_SIZE_MB}MB)")
         if size == 0:
             return self._fail("empty_file", "文件为空")
+        await _emit("validate")
 
         # 2. MD5 指纹
         with open(path, "rb") as f:
@@ -116,6 +154,7 @@ class IndexingService:
                         "original_filename": original_name, "user_id": user_id}
 
         # 4. 解析
+        await _emit("parse", "MinerU 云端解析中…" if ext == "pdf" else "")
         try:
             segments = await self._parse(path, ext)
         except MinerUError as e:
@@ -129,6 +168,7 @@ class IndexingService:
         # 5. 清洗 + 6. 分块(全文统一递归切分,2026-08-23):
         #    段间 \n\n 连接成全文 → split_documents 一次切分 → 块归属=块内首个非空
         #    字符所在段的章节(段字符轴定位,见 spec_plan/SPEC_CHUNK_MERGE_STRATEGY.md §3)
+        await _emit("clean")
         clean_segments: List[tuple[str, str, str]] = []   # (text, chapter, sku)
         for seg in segments:
             text = clean_text(seg.text) if settings.TEXT_CLEAN_ENABLED else seg.text.strip()
@@ -145,6 +185,7 @@ class IndexingService:
             cap += len(text) + 2
         full_text = "\n\n".join(t for t, _, _ in clean_segments)
 
+        await _emit("split")
         docs = self.text_splitter.split_documents([LangchainDocument(page_content=full_text)])
         chunks: List[str] = []
         chapters: List[str] = []
@@ -171,7 +212,26 @@ class IndexingService:
         )
 
         # 7. 嵌入(退避重试已内置于 embed_in_batches;全部成功才进事务)
-        embeddings = await embed_in_batches(chunks)
+        # 批次进度映射进"生成向量"那 35% 的区间(base 取 _emit("split") 之后的累计值)。
+        # on_progress 为 None 时走不带 on_batch 的原调用形态:既保持客户端路径逐行不变,
+        # 也让既有测试的 monkeypatch 替身(只接受 texts 一个参数)零改动继续可用。
+        if on_progress is None:
+            embeddings = await embed_in_batches(chunks)
+        else:
+            base = _pct
+
+            async def _on_batch(done: int, total: int) -> None:
+                await on_progress(
+                    _LABELS["embed"],
+                    min(base + int(_WEIGHTS["embed"] * done / total), 99),
+                    f"嵌入中 {done}/{total} 批",
+                )
+
+            embeddings = await embed_in_batches(chunks, on_batch=_on_batch)
+            # ⚠️ 批次发射走的是 base+offset,不推进 _pct 游标;这里必须把嵌入阶段的权重补上。
+            # 漏了这一步,后面的 _emit("store") 会从 60 加到 65 —— 低于批次发射的 77/95,
+            # 进度条会【倒退】(实测踩过)。游标与发射值必须同源。
+            _pct = base + _WEIGHTS["embed"]
         if not embeddings or len(embeddings) != len(chunks) or any(
             np.count_nonzero(v) == 0 for v in embeddings
         ):
@@ -202,6 +262,7 @@ class IndexingService:
             return {"status": "duplicate", "md5": md5_hex,
                     "original_filename": original_name, "user_id": user_id}
 
+        await _emit("store", f"{len(chunks)} 个片段")
         logger.info("入库完成: {} 个文本块(文件 {})", len(chunks), original_name)
         return {"status": "success", "md5": md5_hex, "chunks": len(chunks),
                 "original_filename": original_name, "user_id": user_id}

@@ -14,7 +14,7 @@
     vectors = provider.embed_sync(["文本1", "文本2"])
 """
 
-from typing import List, Optional
+from typing import Awaitable, Callable, List, Optional
 import asyncio
 
 import numpy as np
@@ -195,19 +195,29 @@ def reset_embedding_provider():
     _provider = None
 
 
-async def embed_in_batches(texts: List[str], batch_size: int = 10) -> List[List[float]]:
+async def embed_in_batches(
+    texts: List[str],
+    batch_size: int = 10,
+    on_batch: Optional[Callable[[int, int], Awaitable[None]]] = None,
+) -> List[List[float]]:
     """分批调用 embedding API 并拼接结果。
 
     text-embedding-v4 单请求文本数上限为 10 条，索引/兜底编码等批量场景
     必须分批。每批失败(返回全零向量)按指数退避重试 EMBEDDING_MAX_RETRIES 次,
     重试耗尽仍失败返回全零(不抛错),由调用方检测。
+
+    on_batch: 可选进度回调 (已完成批次, 总批次) -> 协程。默认 None 时跳过，
+    既有调用方执行路径逐行不变(管理端 SSE 进度条专用)。
     """
     provider = get_embedding_provider()
     results: List[List[float]] = []
-    for i in range(0, len(texts), batch_size):
+    total = (len(texts) + batch_size - 1) // batch_size
+    for idx, i in enumerate(range(0, len(texts), batch_size)):
         batch = texts[i : i + batch_size]
         vecs = await _embed_with_retry(provider, batch)
         results.extend(vecs)
+        if on_batch is not None:
+            await on_batch(idx + 1, total)
     return results
 
 
