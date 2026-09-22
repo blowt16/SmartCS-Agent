@@ -4,7 +4,8 @@
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
 > **技术栈**: FastAPI + SQLAlchemy async + psycopg + PostgreSQL/pgvector（后端）；Vue3 + Vite + Tailwind + ECharts（前端）。
 > **状态**: ⏳ 待实施（设计已评审，2026-09-22）
-> **关联文档**: `CLAUDE.md` §6（spec 生命周期）§商品知识文档编写规范（知识分层原则）、[[SPEC_SKU_ALIGNMENT.md]]（商品 sku 对齐键，本 spec 风险 §11-1 的依据）、[[SPEC_FRONTEND_VUE3_REFACTOR.md]]（客户端前端结构，本 spec 的隔离对象）、`docs/项目问题.md` #14（知识库归属）/#15（浏览器实测）、`docs/PROJECT_ANALYSIS.md` §10.1（业务端点鉴权现状）
+> **修订**: 2026-09-22 完成一轮对抗性审计（自查 + 前端/后端两路独立复核，实测方式：起真实 FastAPI 复现路由与鉴权、连真实库核对数据、建 Vite 探针工程验证多页构建与 Tailwind content 行为、直接构造 pydantic 模型验证空串/None 行为）。结论已合入正文：**2 处阻断**（`require_admin` 缺 `User` 导入 → 服务起不来；`src/admin/main.js` 导入清单缺失 → 管理端无样式无图标）、8 处高危、20+ 处中低，风险清单从 16 条扩到 29 条。**其中 4 处是我原稿的事实错误**（`Decimal` 手搓 dict 其实能序列化 / `App.vue` 行数 / 测试文件数 / 知识库新增表单的标题自相矛盾），已在正文更正并保留了"原稿错在哪"的说明，便于后续复核。
+> **关联文档**: `CLAUDE.md` §6（spec 生命周期）§商品知识文档编写规范（知识分层原则）、[[SPEC_SKU_ALIGNMENT.md]]（商品 sku 对齐键，本 spec 风险 §12-1 的依据）、[[SPEC_FRONTEND_VUE3_REFACTOR.md]]（客户端前端结构 = 本 spec 的隔离对象；亦是 D8 历史注脚的出处）、`docs/项目问题.md` #14（知识库归属）/#15（浏览器实测）、`docs/PROJECT_ANALYSIS.md` §10.1（业务端点鉴权现状）
 
 ---
 
@@ -36,7 +37,7 @@
 | 3 | 后端接口 | 16 个新端点（`/api/admin/*`）+ 1 个复用端点（`POST /api/upload`）+ 2 个既有响应扩展（`Token`/`UserResponse` 加 `role`） |
 | 4 | 前端 | 新入口 `admin.html` + `src/admin/` 目录，5 个页面 + 登录页 + 通用弹窗/分页/图表组件 |
 | 5 | 数据 | 4 个幂等脚本：管理员账号、订单种子、工单种子、商品占位图生成 |
-| 6 | 测试 | 6 个测试文件，重点覆盖越权（401/403）与 CRUD 契约 |
+| 6 | 测试 | 5 个测试文件（auth / products / orders / knowledge / console）+ conftest 补 4 个 fixture，重点覆盖越权（401/403）与 CRUD 契约 |
 
 ### 1.2 明确不做
 
@@ -118,19 +119,24 @@ product_price_stock: 47 行
 | # | 决策 | 选定方案 | 备选与否决理由 |
 |---|---|---|---|
 | **D1** | 管理员身份 | `users` 表加 `role VARCHAR(20) DEFAULT 'user'` | 备选"独立 `admins` 表 + `/api/admin/login`"：物理隔离更干净，但要复制一整套登录/JWT/校验代码，且管理员的聊天记录、知识库归属仍需回到 `users` |
-| **D2** | 登录入口 | **复用** `POST /api/token`，不分接口 | 一套登录逻辑。前端登录后读 `role` 决定跳客户端还是管理端（管理员也能用客户端，对应"体验客服"） |
+| **D2** | 登录接口 | **复用** `POST /api/token`，不分接口；管理端有**自己的**登录页（§6.3.1） | 一套登录逻辑。管理员在 `/admin.html` 登录进控制台，在 `/` 登录进聊天（两边都能用，对应"体验客服"） |
 | **D3** | 工单数据来源 | **只做种子数据**（用户指定） | 备选"从对话流真实生成"：需改 `lg_builder.py` 三个节点 + 流式事件协议，工程量翻倍且本轮不需要 |
 | **D4** | 订单数据来源 | 新建 `orders` 表 + 种子脚本（用户指定） | 备选"把商品当订单展示"：订单号/买家/状态全是编的，语义对不上，否决 |
 | **D5** | 商品写权限 | **完整 CRUD**（用户指定） | 备选"只改价格库存"：参考图的新增按钮就没了 |
 | **D6** | 管理端知识库列表 | 新建 `/api/admin/knowledge`，**不做 user_id 过滤** | 备选"复用 `/api/documents`"：该接口强制 `user_id` 过滤（`main.py:191`），管理员看不到别人的文档，也看不到 `docs/项目问题.md` #14 修复后挂在 id=6 的那 2 份 |
 | **D7** | 知识库上传 | **直接复用 `POST /api/upload`**（用户指定） | 该接口本身无鉴权（既有缺陷），管理端页面会带管理员令牌；上传归属用管理员自己的 `user_id` |
-| **D8** | 前端组织 | 独立 `admin.html` 多页入口（用户指定） | 备选"装 vue-router 统一 SPA"：要重构 `App.vue`（419 行，状态全堆在一个文件），客户端有回归风险 |
+| **D8** | 前端组织 | 独立 `admin.html` 多页入口（用户指定） | 备选"装 vue-router 统一 SPA"：要重构 `App.vue`（**实测 330 行**，登录态/会话/文档/聊天状态全堆在一个文件），客户端有回归风险 |
+
+**D8 的历史注脚（值得知道）**：这个项目**曾经有过两个前端入口**，并在 `SPEC_FRONTEND_VUE3_REFACTOR.md`（已完成）里**特意收敛成一个**。但那次收敛的理由与本方案无关——当时是"两个**互相独立、其中一个仓库里连源码都没有**的代码库"（旧 Vue 产物 `/` + 手写 1434 行 `/chat.html`），收敛是为了消灭不可维护的重复代码库，并把 `/chat.html` 的 `FileResponse` 路由一并删除。本方案的两个入口是**同一个标准 Vite 工程内的两个页面**，共享 `src/api/`、`package.json`、Tailwind 配置，不存在重复代码库问题。区别记在这里，免得后来者看到"又变回两个入口了"困惑。
 | **D9** | 商品图片 | 脚本生成本地 SVG 占位图（用户指定） | 备选"外部占位图服务"：国内网络可能加载不出，演示不可靠 |
 | **D10** | 图表 | 引入 ECharts（用户指定） | 只打管理端的包，客户端 bundle 不受影响（Vite 按入口分包） |
 | **D11** | 导航范围 | 5 项 + 「体验客服」按钮 | 不做用户管理（§1.2） |
 | **D12** | 后端代码组织 | 路由按模块拆 `app/api/admin/` 5 个文件，**不建 service 层** | 遵循 `main.py` 既有做法（`/api/documents` 等端点直接 `select`），CRUD 逻辑薄，建 service 层是纯样板 |
 | **D13** | 工单状态取值 | `待处理` / `已解决`（两值） | 对齐参考图（列表徽章 + 环形图图例均只此两值），不擅自加"处理中" |
 | **D14** | 订单状态取值 | `处理中` / `已发货` / `已送达`（三值） | 对齐参考图（卡片徽章 + 环形图图例） |
+| **D15** | 管理端入口的**发现路径** | 写进 README + 控制台不重复提供入口；**客户端一行不改**（登录成功不按 role 跳转） | 备选"客户端登录后 `if (role==='admin') location.href='/admin.html'`"：要改 `LoginView.vue`，与 §6.1 的"客户端零改动"直接冲突（§6.1 冻结了 `App.vue`/`main.js`/`components/*`，改了就没有文件能承载这个跳转）。管理端登录页已有「返回客服端」链接，反向路径是通的；正向路径靠 README 与书签 |
+
+**D15 的代价（明说）**：`Token.role` 在客户端侧**没有任何消费者**（`src/api/auth.js:44-46` 的 `login()` 只取 `access_token`），是给管理端与外部联调用的。若将来想在客户端做"管理员登录自动跳管理端"，需要动 `LoginView.vue`，届时另开一条改动，不在本次范围。
 
 ---
 
@@ -219,7 +225,14 @@ class Ticket(Base):
     role = Column(String(20), nullable=False, default="user", server_default="user")  # user/admin
 ```
 
-`server_default="user"` 必须写：`init_db.py` 的增量 ALTER 给存量 4 行填默认值，没有 server_default 则存量行为 NULL，`role != 'admin'` 判断仍能工作，但列语义不干净。
+**`default` 与 `server_default` 分工不同，两个都要写**：
+
+| 参数 | 生效场景 | 不写的后果 |
+|---|---|---|
+| `default="user"`（Python 侧） | ORM 走 `s.add(User(...))` 时，在 **flush 时**填值并写进 INSERT | **`/api/register` 会 500**：`user_service.py:34-42` 的 `create_user` 构造 `User(...)` 时没传 `role`，缺 Python 侧 default 则属性为 `None`，而 `UserResponse.role` 是必填 `str` → pydantic `ValidationError` → 500 |
+| `server_default="user"`（DDL 侧） | `create_all` 建表时把默认值写进表定义；`init_db.py` 的 `ALTER ... DEFAULT 'user'` 靠它给存量 4 行填值 | 存量行虽因 ALTER 语句里的 `DEFAULT` 仍是 `'user'`，但新建库缺兜底 |
+
+即：**`default=` 是保证 register/me 不 500 的关键，`server_default=` 是第二道保险**——两个都不能省。
 
 同时 `app/schemas/user.py`：
 
@@ -308,6 +321,13 @@ __all__ = ["User", "Conversation", "Message", "DocumentChunk", "Document",
 文件：`llm_backend/app/core/security.py`（追加，不动既有 `get_current_user`）
 
 ```python
+# ⚠️ 必须补这一行导入:security.py 现有 44 行里没有 User 的 import,
+# 而函数注解在 Python 3.13(无 from __future__ import annotations)下于"定义时"求值,
+# 缺它 → NameError → security 导入即抛 → auth → main 全链失败 → uvicorn 起不来,
+# 且 tests/ 里所有 `from main import app` 在 collection 阶段全灭。
+from app.models.user import User
+
+
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
     """管理端依赖:复用既有 JWT 校验,再查 role。非管理员 403。"""
     if current_user.role != "admin":
@@ -317,6 +337,10 @@ async def require_admin(current_user: User = Depends(get_current_user)) -> User:
         )
     return current_user
 ```
+
+**同样的导入坑还有一处**：`app/api/admin/tickets.py` 的 `PUT /{id}` 签名里写 `current_user: User = Depends(require_admin)`——该文件也要 `from app.models.user import User`（`require_admin` 的返回值类型是 `User`，注解同样在定义时求值）。
+
+**顺带一条既有小瑕疵（本次不修，知道即可）**：`security.py:11` 的 `oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")`，而实际端点是 `/api/token` → Swagger `/docs` 里点 Authorize 会打到不存在的 `/token`（实测返回 **405**，不是 404，因为被 `/` 的 StaticFiles 接住了）。**不影响 401 语义**（状态码与 `WWW-Authenticate: Bearer` 都由代码决定，与 tokenUrl 无关），所以 16 个新端点的鉴权行为完全正确——只是没法在 Swagger UI 里点着测。**联调一律用 curl 带 `Authorization: Bearer <token>`**。改 `tokenUrl` 属既有代码调整，不在本模块范围。
 
 **三态语义**（测试必须逐条覆盖，见 §8）：
 
@@ -437,7 +461,7 @@ api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
 {
   "trend": {
     "days":          ["09-16", "09-17", "09-18", "09-19", "09-20", "09-21", "09-22"],
-    "orders":        [0, 0, 0, 0, 0, 0, 18],
+    "orders":        [2, 2, 2, 2, 1, 1, 1],
     "conversations": [0, 1, 4, 0, 2, 3, 3]
   },
   "order_status":     [ { "name": "处理中", "value": 6 },
@@ -476,6 +500,8 @@ labels = [d.strftime("%m-%d") for d in days_list]  # 升序,最后一项=今天
 - `order_status` / `ticket_status`：`GROUP BY status`，`ORDER BY` 固定顺序（订单按 `处理中→已发货→已送达`，工单按 `待处理→已解决`），与前端图例颜色顺序绑定（§6.6）
 - `product_category`：`GROUP BY category ORDER BY COUNT(*) DESC`
 - 状态分布即使某状态计数为 0 **也要返回该项**（值为 0），否则图例会随数据消失
+
+**上例 `orders` 的数字形状说明**：`[2,2,2,2,1,1,1]` 是 §7.2 的「`index % 14` 铺开」规则跑出来的真实形状（实测），**不是**把 18 条堆在一天。实现时不要照抄常量，按 §7.2 的规则算——但要用它核对：折线应当是**有起伏的多点**，若跑出来是 `[0,0,0,0,0,0,18]` 说明种子的日期铺开没生效（与 §12-9 对应）。
 
 ### 5.5 商品管理（5 个端点）
 
@@ -535,6 +561,19 @@ class ProductCreate(BaseModel):
 | `sku` 格式不符 | `422`（pydantic pattern 自动） |
 | `sku` 已存在 | `400 {"detail": "商品编码已存在: JD-BED-001"}` |
 | `product_name` 已存在 | `400 {"detail": "商品名称已存在: <name>"}`（表上有 `uq_product_price_stock_name` 唯一约束，不先查会抛 IntegrityError→500） |
+
+**成功响应体（对齐 §5.5 列表元素结构，与 orders 的新增保持一致）**：
+
+```json
+{ "sku": "JD-TST-901", "product_name": "...", "category": "...",
+  "current_price": 199.00, "stock_quantity": 10,
+  "image": "/products/JD-TST-901.svg",
+  "updated_at": "2026-09-22T10:30:00" }
+```
+
+`image` 按 sku 拼接（新商品没有对应 SVG，前端 `onerror` 兜底，见 §6.5）——**接口侧不检查文件是否存在**，保持无文件系统依赖。
+
+**路由注册顺序纪律**：`GET /products/categories` 必须注册在**任何** `GET /products/{sku}` 形态的路由**之前**。当前设计里没有 `GET /products/{sku}`（只有 PUT/DELETE），所以不存在冲突；但将来若加详情端点，Starlette 是"路径+方法"匹配，`/products/categories` 会被 `{sku}="categories"` 抢先命中，必须把它排在前面。
 
 **sku 规则说明**：格式 `JD-{3位大写字母}-{3位数字}`，与现有 47 行完全一致（`import_product_price_stock.py:31` 同款正则）。**不自动生成**——自动生成需要维护"品类→3字母码"映射表，属额外复杂度；手填 + 格式校验 + 唯一性校验已足够，且与现有数据规范一致。
 
@@ -605,11 +644,27 @@ class OrderCreate(BaseModel):
 行为：
 
 1. 按 `product_sku` 查 `product_price_stock`，不存在 → `400 {"detail": "商品不存在: <sku>"}`
-2. `product_name` / `category` 从商品表**回填快照**
-3. `amount` 未传则取 `current_price`，传了则用传入值
-4. `order_date` 未传则取 **`datetime.now(timezone.utc).date()`**（UTC，与 §5.4(a) 的图表日期轴同基准；**不用** `date.today()`——那是本地日期，与 UTC 轴会在早 8 小时窗口内错位一天）
-5. `order_no` 由后端生成：`ORD-{max(现有序号)+1:03d}`。序号从现有 `order_no` 里解析（`ORD-(\d+)` 取最大值），**不是 `COUNT(*)+1`**——删除过订单后 `COUNT+1` 会撞唯一键
-6. 返回完整订单对象（同列表元素结构），状态码 `200`
+2. `user_id` 传了就先校验存在性（`SELECT 1 FROM users WHERE id=:id`），不存在 → `400 {"detail": "用户不存在: <id>"}`。**不能省**：`orders.user_id` 有外键，传一个不存在的 id 会抛 `IntegrityError` → 500（而不是一个可读的 400）
+3. `product_name` / `category` 从商品表**回填快照**
+4. `amount` 未传则取 `current_price`，传了则用传入值
+5. `order_date` 未传则取 **`datetime.now(timezone.utc).date()`**（UTC，与 §5.4(a) 的图表日期轴同基准；**不用** `date.today()`——那是本地日期，与 UTC 轴会在早 8 小时窗口内错位一天）
+6. `order_no` 由后端生成：`ORD-{max(现有序号)+1:03d}`。序号从现有 `order_no` 里解析（`ORD-(\d+)` 取最大值），**不是 `COUNT(*)+1`**——删除过订单后 `COUNT+1` 会撞唯一键
+7. 返回完整订单对象（同列表元素结构），状态码 `200`
+
+**并发下的撞号处理（必须写，否则是 500 而不是 400）**：两个请求同时读到 `max=18` → 都算 `ORD-019` → 后者撞 `order_no` 唯一约束 → `get_db`（`database.py:42-44`）rollback → 未捕获的 `IntegrityError` → **500**。处理方式：
+
+```python
+for attempt in range(3):          # 重算 max 再试,最多 3 次
+    try:
+        ...                       # 生成 order_no + INSERT + flush
+        break
+    except IntegrityError:
+        await db.rollback()
+        if attempt == 2:
+            raise HTTPException(409, "订单号生成冲突，请重试")
+```
+
+演示场景下并发概率极低，但这 6 行能把它从"500 未知错误"变成"409 请重试"。`ticket_no` 由种子脚本写死，无此问题。
 
 #### `PUT /api/admin/orders/{id}` — 编辑
 
@@ -629,7 +684,22 @@ class OrderCreate(BaseModel):
 
 #### `GET /api/admin/knowledge` — 全平台文档列表
 
-**不接收 `user_id` 参数**（§3 D6）。`keyword` 匹配 `original_filename` / `title` / `md5`。按 `created_at DESC`。
+**不接收 `user_id` 参数**（§3 D6）。
+
+`keyword` 的匹配口径（**刻意不匹配 `md5`**）：`original_filename` ILIKE / `title` ILIKE / **`id` 等值（关键词是纯数字时）**。
+
+```python
+if keyword:
+    conds = [Document.original_filename.ilike(f"%{keyword}%"),
+             Document.title.ilike(f"%{keyword}%")]
+    if keyword.isdigit():
+        conds.append(Document.id == int(keyword))   # 对应前端"文档编号"列的搜索
+    stmt = stmt.where(or_(*conds))
+```
+
+**为什么把 `md5` 从匹配范围里拿掉**：前端表格第 1 列「文档编号」展示的是 `id`（§6.4.5），搜索框 placeholder 也写「搜索文档编号/文件名/标题」。若 `keyword` 匹配 `md5`，用户搜「1」会命中**几乎所有行的十六进制 md5**（几乎每个 md5 都含 `1`）→ 返回全表 → 用户以为搜索坏了。改成 `id` 等值后，搜「1」精确命中 id=1 那行，与列头语义一致。
+
+按 `created_at DESC`。**本轮不支持按 `status` 筛选**（前端工具条只放搜索框 + 查询按钮，状态只做展示徽章；要加筛选就同步加 `status` 参数与下拉）。
 
 `items` 元素结构：
 
@@ -687,6 +757,23 @@ class KnowledgeUpdate(BaseModel):
 
 按 `md5` 全表查找（**不加 user_id 过滤**，与列表口径一致）。`404` 若不存在。返回更新后的完整对象（同列表元素结构）。
 
+**「未传字段」与「显式传 null」必须区分开**——这不是洁癖，是 §8.5 的测试**能不能写出来**的前提：
+
+```python
+# ✅ 正确:用 exclude_unset 区分"没传"和"传了 null"
+for field, value in payload.model_dump(exclude_unset=True).items():
+    setattr(doc, field, value)
+
+# ❌ 错误:这种最常见写法会让 {"title": null} 被当成"没传",
+#    于是 title 永远回不到 NULL(存量 2 行正是 NULL 状态,改一次就再也恢复不了)
+if payload.title is not None:
+    doc.title = payload.title
+```
+
+同样的问题存在于 `OrderUpdate` 的 `buyer_code` / `user_id`（想清空买家编码时无法清空）。**两个 Update schema 一律用 `exclude_unset=True` 逐字段赋值**。
+
+`ProductUpdate` / `TicketUpdate` 不受影响（它们没有"需要清空"的可空字段，`ticket` 的 `resolved_at`/`handler` 由 status 副作用控制，见 §5.8）。
+
 **同 md5 多归属的处理**：`documents` 的唯一约束是 `(user_id, md5)`，理论上同 md5 可挂多个 user_id。本接口若命中多行，**只更新 `id` 最小的那一行**并在响应里返回该行。当前库中 `md5` 无重复（2 行 2 个 md5），此分支不会触发，但代码不能因为 `scalar_one_or_none()` 抛 `MultipleResultsFound` 而 500。
 
 #### `DELETE /api/admin/knowledge/{md5}` — 按 md5 全量删
@@ -716,6 +803,8 @@ async def delete_knowledge(md5: str, db: AsyncSession = Depends(get_db)):
 #### `GET /api/admin/tickets`
 
 `keyword` 匹配 `ticket_no` / `summary` / `user_query`；`status` 精确匹配。按 `created_at DESC`。
+
+**响应形状与 §5.3 一致，是分页对象**（`{total, page, page_size, items}`）——与商品/订单/知识库列表同构，**不是裸数组**。前端 §6.4.6 也照样有分页条（种子 8 条一页放得下，但接口与 UI 都不做特例，否则将来工单涨到 50 条就要改三处）。
 
 `items` **返回全字段**（含 `detail` / `suggestion`）——数据量小（种子 8 条），列表直接带全字段，处理弹窗不需要二次请求：
 
@@ -823,7 +912,14 @@ class TicketUpdate(BaseModel):
     suggestion: Optional[str] = None
 ```
 
-**刻意不用 `response_model`**：本项目现有端点（`main.py`）全部手搓 dict 返回，未见 `response_model` 用法。为保持一致、且避免 `Decimal`/`datetime` 的序列化细节被 `response_model` 接管后行为分叉，管理端接口同样返回手搓 dict，序列化规则由 §5.3 明确约定。
+**刻意不用 `response_model`**，但理由要说准：
+
+- 事实是**两种风格项目里都有**——`main.py` 的端点全部手搓 dict；`api/auth.py:16,27,44` 三处用了 `response_model`（正是本次要改的 `UserResponse` / `Token`）。
+- 管理端 16 个端点**统一手搓 dict**，与 `main.py` 那批保持一致（管理端更接近 `main.py` 的业务端点，而非 auth 的 schema 端点）。
+- **不是为了绕开序列化问题**——`Decimal` / `datetime` 在 FastAPI 手搓 dict 返回路径上是**能正常序列化**的。实测（FastAPI 0.141.1 + `TestClient`）：返回 `{"price": Decimal("9957.50"), "when": datetime(...), "day": date(...)}` → `HTTP 200`，body 为 `{"price":9957.5,"when":"2026-09-22T10:30:00","day":"2026-09-14"}`，**不会抛 `Object of type Decimal is not JSON serializable`**。
+- 代价：手搓 dict **漏字段不会报错**。所以 §8 的测试必须逐字段断言关键字段存在（尤其 `current_price` / `amount` 是 number 而不是字符串）。
+
+**由此带出的真正前端责任**：`Decimal("9957.50")` 序列化成 **`9957.5`**（尾零被吃掉）。前端展示金额/价格**必须** `Number(v).toFixed(2)`，否则页面上会出现 `¥9957.5` 这种少一位的写法。这条已写入 §6.4.8 的通用交互约定。
 
 ---
 
@@ -891,16 +987,18 @@ export default defineConfig({
 - 构建后（生产/演示）：`http://127.0.0.1:8000/admin.html`（`main.py` 末尾的 `StaticFiles(directory=frontend/dist, html=True)` 挂在 `/`，直接命中 `dist/admin.html`）
 - 开发：`http://localhost:5173/admin.html`
 
-**按入口分包**：ECharts 只被 `src/admin/**` 引用，Vite 会把它打进 admin 的 chunk，`dist/index.html` 那一侧不会加载 ECharts。构建后可用文件大小核对（§9 步骤 6）。
+**按入口分包**：ECharts 只被 `src/admin/**` 引用，Rollup 只把"多入口共同可达"的模块提成共享 chunk，所以 ECharts 落在 admin 专属 chunk，`dist/index.html` 那一侧**不会加载 ECharts**（D10 的 JS 结论成立，实测确认）。
+
+**但 CSS 不成立，要说清楚**：Tailwind 的 `content` 是**全局并集**——`tailwind.config.cjs` 的 `content` 加上 `'./admin.html'` 后，**`dist/assets/main-*.css`（客户端那份）里会同时包含只出现在管理端文件里的工具类**，反之亦然。实测现有客户端 CSS 约 103KB，会因此长胖几 KB 量级。**单独给 admin 配一份 content 需要引入第二套 Tailwind 构建，不值得**——接受这个互相包含，只是别指望 CSS 也完全隔离。
 
 ### 6.2 目录结构
 
 ```
 frontend/
   admin.html                          ← 新建
-  public/products/{sku}.svg           ← 新建(脚本生成,47 个)
+  public/products/{sku}.svg           ← 新建(脚本生成,47 个;gitignore 内,不入库,见 §6.5)
   src/admin/
-    main.js                           ← createApp(AdminApp).mount('#admin-app')
+    main.js                           ← 见下方完整导入清单(漏一样就少一块样式,不是可选项)
     admin.css                         ← Tailwind 三行 + 管理端专用类
     AdminApp.vue                      ← 顶部导航 + 页面切换 + 登录态
     api.js                            ← 管理端接口封装
@@ -922,18 +1020,86 @@ frontend/
         BarChart.vue
 ```
 
+**通用组件契约**（被 5 个页面共 7 处使用，不定义就会各写各的）：
+
+```js
+// AdminModal.vue
+props: {
+  visible: Boolean,          // 受控显隐;父组件 v-if 之外再用它控制内部动画时不必须
+  title:   String,           // 弹窗标题(「新增商品」/「处理工单」…)
+  width:   { type: String, default: '560px' },
+}
+emits: ['close']             // 不 emit 'update:visible';父组件用 @close 关自己
+// 行为约定:
+//   - 点遮罩【不关闭】(表单填了一半误点会丢数据),只有右上角 × 与「取消」按钮触发 close
+//   - ESC 关闭
+//   - 打开时 body 加 overflow:hidden,关闭时移除(与客户端 docs-panel 同样的处理)
+//   - 表单内容全部由父组件通过默认插槽传入,弹窗自身不持有表单状态
+//   - z-index: 50(高于导航栏的 40,低于图片预览类的 100)
+
+// StatusBadge.vue
+props: {
+  text:  String,             // 徽章文字:已发货 / 待处理 / 低 …
+  color: { type: String, default: 'gray' },  // gray|green|blue|amber|red —— 映射到 bg-{c}-100 text-{c}-600
+}
+// 用法:<StatusBadge text="已发货" color="blue" />
+// 各处颜色映射在【页面里】决定(订单状态→blue/green/amber、工单状态→red/green、紧急度→green/amber/red),
+// 不把它做成"传 status 自动配色"的智能组件 —— 三种状态集(订单/工单/紧急度)取值完全不同,硬合并要传枚举类型
+
+// ProductThumb.vue
+props: { src: String, alt: String, size: { type: Number, default: 96 } }
+// 内部 onerror 兜底,见 §6.5
+```
+
 **复用客户端既有件**（相对路径 `../api/auth.js`）：`getToken` / `setToken` / `clearToken` / `authHeaders` / `handleUnauthorized`。token 存 `localStorage` 的 `token` 键——与客户端**同一个键**，故管理端登录后客户端也是登录态（对应"体验客服"点过去不用再登）。这是有意为之。
 
-**不复用** `global.css`：它含 `body { overflow: hidden }`（为聊天界面定制），会让管理端列表页无法滚动。`admin.css` 只写：
+**副作用（须知）**：反过来说，**在管理端登出会把客户端的登录态一并清掉**（同一个 token 键）。演示时若两个标签页都开着，在管理端点「退出登录」后切回客户端标签页会发现需要重新登录。属预期行为，写进 README。
+
+**`src/admin/main.js` 的完整内容**（对照客户端 `src/main.js:1-11`，这是**必须逐行写全**的——漏一行就少一块样式，且不报错）：
+
+```js
+import { createApp } from 'vue';
+import AdminApp from './AdminApp.vue';
+import './admin.css';
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fortawesome/fontawesome-free/css/all.min.css';
+
+createApp(AdminApp).mount('#admin-app');
+```
+
+| 导入 | 漏掉的后果 |
+|---|---|
+| `./admin.css` | **整个管理端无样式**（Tailwind 指令不落地）——阻断级 |
+| `@fortawesome/.../all.min.css` | §6.4.1 导航 5 个图标、§6.4.2 六张卡片图标、§6.5 logo 的 `fa-headset`、`ProductThumb` 兜底的 `fa-box` **全部渲染成空白** |
+| `@fontsource/inter/*` | `tailwind.config.cjs:7` 的 `fontFamily.sans: ['Inter', ...]` 静默回退 `system-ui`，与客户端并排看字体明显不同 |
+
+**不需要** `highlight.js`（管理端无 markdown 渲染，那是聊天消息专用的）。
+
+**不复用** `global.css`——但代价不只是 `overflow`，**要手工补齐 3 项**，否则与客户端并排看观感不一致：
 
 ```css
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* 管理端:列表页需要正常滚动,覆盖 global.css 的 overflow:hidden(两份 CSS 不同入口,互不影响) */
-body { overflow: auto; }
+/* 1. body 背景色:Tailwind preflight 不设 body 背景色,不补则页面是纯白底,
+      而卡片是 bg-white —— 白底卡片贴白底页面几乎看不出边界 */
+/* 2. 文字色:同 preflight 不设,Tailwind 默认继承浏览器黑 */
+body {
+  background-color: #fafbfc;   /* = tailwind.config.cjs:21-23 的 page.bg */
+  color: #1e293b;
+}
+
+/* 3. 滚动条:global.css:27-38 的 6px 细滚动条,管理端表格/卡片密集,不补会退回系统默认粗滚动条 */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ```
+
+**注意**：`body { overflow: auto }` **不需要写**——admin 入口根本不加载 `global.css`，Tailwind preflight 也不设 `overflow`，没有任何东西会把它设成 `hidden`（写了是空操作，还会误导后续维护者以为两个入口的 CSS 会互相影响）。
 
 ### 6.3 页面切换与登录态（`AdminApp.vue`）
 
@@ -963,28 +1129,59 @@ onMounted(() => window.addEventListener('hashchange', () => { currentPage.value 
 const authState = ref('checking');   // checking | anonymous | denied | ok
 const me = ref(null);
 
-onMounted(async () => {
+async function checkAuth() {
   if (!getToken()) { authState.value = 'anonymous'; return; }
   try {
     const user = await getMe();               // 复用 ../api/auth.js
-    if (user.role !== 'admin') { authState.value = 'denied'; return; }
+    // ⚠️ me 必须在 role 判断【之前】赋值:denied 提示卡要显示 {email}
     me.value = user;
-    authState.value = 'ok';
+    authState.value = user.role === 'admin' ? 'ok' : 'denied';
   } catch {
     clearToken();
+    me.value = null;
     authState.value = 'anonymous';
   }
+}
+
+onMounted(() => {
+  checkAuth();
+  // ⚠️ 必须监听:api/auth.js:23-30 的 handleUnauthorized 会 clearToken() 并派发此事件,
+  // 全仓唯一监听者是客户端 App.vue:319。管理端不接的话 —— token 过期时点任意页面 →
+  // 请求 401 → token 已被清、authState 仍是 'ok' → 用户卡在管理端界面看
+  // 「数据加载失败，请刷新重试」,而不是回登录页,必须手动刷新才能恢复。
+  // /api/upload 的 XHR 路径(src/api/upload.js:46)同理派发该事件。
+  window.addEventListener('auth:unauthorized', () => {
+    me.value = null;
+    authState.value = 'anonymous';
+  });
 });
 ```
+
+`AdminLogin` 的 `@logged-in` 直接绑 `checkAuth`（不是 `recheck`）——登录成功后重新走一遍 `getMe` + role 判断，非管理员会正确落到 `denied` 而不是误进控制台。
 
 | 状态 | 渲染 |
 |---|---|
 | `checking` | 居中的加载指示 |
-| `anonymous` | `<AdminLogin @logged-in="recheck" />` |
-| `denied` | 提示卡：「当前账号（`{email}`）没有管理员权限」+「返回客服端」链接（`href="/"`）+「切换账号」按钮（清 token 回 anonymous） |
+| `anonymous` | `<AdminLogin @logged-in="checkAuth" />` |
+| `denied` | 提示卡：「当前账号（`{{ me?.email }}`）没有管理员权限」+「返回客服端」链接（`href="/"`）+「切换账号」按钮（`clearToken()` + 清 `me` + 回 `anonymous`） |
 | `ok` | 顶部导航 + 当前页视图 |
 
 **登出**：`clearToken()` → `authState = 'anonymous'`（与客户端行为一致，不用 confirm）。
+
+#### 6.3.1 管理端登录页 `AdminLogin.vue`
+
+客户端 `LoginView.vue` 是**深色**盒子（`global.css:213-244`：`#1e1e1e` 底 + `#2d2d2d` 盒 + 绿色按钮），而管理端五个页面是**浅色**。两张皮都不算错，**此处取浅色**——理由：管理端是独立站点，登录页是它的第一屏，与后面的浅色页面保持一致比与客户端的登录页保持一致更重要；且用户要求"管理端风格和客户端一致"指的是那 5 个功能页（参考图也全是浅色）。
+
+| 项 | 规格 |
+|---|---|
+| 容器 | 居中卡片，`bg-white rounded-2xl shadow-sm border border-gray-100`，宽 400px，页面底 `bg-page`(`#fafbfc`) |
+| 标题 | 「SmartCS-Agent 管理端」+ 副标题「请使用管理员账号登录」(小字灰色) |
+| 字段 | 邮箱 `<input type="email">`、密码 `<input type="password">`，样式复用客户端的表单观感（圆角 8px、聚焦主色边） |
+| 按钮 | 「登 录」主色实心，`loading` 时禁用 + 转圈图标 |
+| 错误提示 | 红色小字（登录失败 / 网络错误）；**不区分**"密码错"和"非管理员"——两者都只在登录后由 role 判断给出，避免泄露账号是否存在 |
+| 底部链接 | 「返回客服端」→ `href="/"`（**必须有**，否则误入管理端的用户没有退路） |
+| 不做 | 「记住账号密码」不做（客户端那个功能把密码明文写进了 localStorage，`docs/项目问题.md` #15 附带发现②已记录该问题，管理端不复制这个做法）；「注册」入口不做（管理员账号由种子脚本创建） |
+| 提交 | 调 `../api/auth.js` 的 `login(email, password)`（它内部 `setToken`），成功后 `emit('logged-in')` |
 
 ### 6.4 五个页面的逐页设计
 
@@ -1063,7 +1260,9 @@ onMounted(async () => {
 - 改名称时：`修改商品名称会影响智能客服对该商品的检索命中（知识库中的旧名称对不上），确认修改？`
 - 删除时：`确定删除商品 {sku}？删除后智能客服将查不到该商品的价格与库存（已入库的静态知识仍会返回）。`
 
-**分页条**：`共 {total} 条` + 每页条数下拉（12/24/48）+ 上一页/页码/下一页。与参考图一致放在右下角。
+**分页条**：`共 {total} 条` + 每页条数下拉（12/24/48）+ 上一页/页码/下一页。与参考图一致放在右下角。边界规则（0 条、删后越界、切换每页条数）见 §6.4.7。
+
+**加载/空态/删除确认/保存禁用/前端校验**：全部走 §6.4.8 的通用约定，不在本页另定。
 
 #### 6.4.4 订单管理 `OrderView.vue`（卡片网格，对齐参考图）
 
@@ -1115,8 +1314,8 @@ onMounted(async () => {
 | 字段 | 控件 | 必填 | 说明 |
 |---|---|---|---|
 | 选择文件 | `<input type="file" accept=".pdf,.doc,.docx,.txt,.md">` | **是** | 白名单与后端 `ALLOWED_FILE_TYPES` 一致 |
-| 标题 | input | 否 | 留空则用文件名（去掉扩展名） |
-| 文件描述 | textarea rows=3 | 否 | 写入 `description` |
+| 标题 | input | 否 | **留空则用 `original_filename` 去掉扩展名后回填**（在提交前算好，作为 `title` 的值发出，不是留空不传） |
+| 文件描述 | textarea rows=3 | 否 | 写入 `description`；留空则不传该字段 |
 
 **保存流程（三步，必须按序）**：
 
@@ -1125,7 +1324,22 @@ onMounted(async () => {
    - `failed` → 展示 `index_result.detail`，**终止**（不调 PATCH）
    - `duplicate` → 提示「该文件已存在（md5 重复），未新增」+ 展示已有记录的 md5，**终止**
    - `success` → 继续第 3 步
-3. `PATCH /api/admin/knowledge/{index_result.md5}`，body `{title, description}`（都为空则跳过这一步）
+
+   **⚠️ `failed` 分两种 HTTP 形态，能拿到的信息不一样**（既有接口 `main.py:170-176` 的契约）：
+
+   | `error` | HTTP | 前端能拿到的信息 |
+   |---|---|---|
+   | `unsupported` / `too_large` / `empty_file` | **`400`** | **只有状态码**——见下方说明 |
+   | `parse_error` / `embedding_failed` | `200` | 完整 `index_result.detail` |
+
+   **这是既有代码的真实限制**：`src/api/upload.js:42-51` 的 `uploadFileWithProgress` 只在 2xx 时 `resolve(JSON.parse(xhr.responseText))`，401 单独分支，**其余状态码一律 `reject(new Error('上传失败: ' + status))`，响应体直接丢弃**。所以 400 的 `unsupported`/`too_large`/`empty_file` 三种情况，`index_result.detail` 在前端**根本拿不到**——只能显示「上传失败: 400」。
+
+   **选定做法（二选一，本 spec 取 a）**：
+   - **(a) 接受限制**：前端对 400 显示通用文案「文件格式不支持、超过 30MB 或为空，请检查后重试」（把三种可能都列出来），不改 `upload.js`。文件名/大小前端本地就能预检，实际很难触发。
+   - **(b) 改 `upload.js`**：在 `xhr.onload` 的 else 分支里 `try { const d = JSON.parse(xhr.responseText); reject(Object.assign(new Error(d.detail || ...), { detail: d.detail })) } catch { ... }`。但这会**改动客户端共用的文件**（客户端也在用 `uploadFileWithProgress`），违背 §6.1 的"客户端零改动"。
+
+   **且前端要在选择文件时就本地预检**（避免 400 发生）：扩展名对照 `settings.allowed_extensions`（`txt,md,pdf,docx`）、大小 ≤ 30MB（`MAX_FILE_SIZE_MB`），不符直接提示，不发请求。
+3. `PATCH /api/admin/knowledge/{index_result.md5}`，body `{title, description}`——`title` 必发（留空时已按上表回填为去扩展名的文件名），`description` 为空则**省略该键**（配合 §6.7 的 `cleanBody` 与 §5.7 的 `exclude_unset`）
 
 第 3 步失败时：不静默吞掉，弹提示「文件已上传成功，但标题/描述保存失败，请在列表中编辑补填」。**理由**：此时 `documents` 行已落库、chunks 已入库、检索已可用，"上传"这个主目的已达成，不该报"新增失败"误导用户；标题可事后编辑。
 
@@ -1163,13 +1377,41 @@ onMounted(async () => {
 | 问题详情 | textarea rows=4 | ❌ | — |
 | 处理建议 | textarea rows=4 | ❌ | — |
 
-底部右侧：`取消` + `保存`（绿）。保存 → `PUT /api/admin/tickets/{id}` → 关闭弹窗 + 刷新列表当前页。
+底部右侧：`取消` + `保存`（绿）。保存 → `PUT /api/admin/tickets/{id}` → 关闭弹窗 + 刷新列表当前页（§6.4.8）。
+
+**分页条**：与其它三个列表页一致（§6.4.7）。种子 8 条一页放得下，但接口返回的是分页对象、UI 也照常渲染分页条——不做特例，否则工单涨到 50 条时要改三处。
 
 #### 6.4.7 通用分页条 `Pagination.vue`
 
 Props：`total` / `page` / `pageSize`；Emits：`update:page` / `update:pageSize`。
 
 布局（右下角，对齐参考图）：`共 {total} 条` + 每页条数 `<select>`（12/24/48）+ `‹` 上一页 + 页码按钮（当前页高亮 `bg-primary text-white`）+ `›` 下一页。禁用态：首页时 `‹` 置灰、末页时 `›` 置灰。
+
+**边界规则（不定义就会出"空白页"）**：
+
+| 情况 | 行为 |
+|---|---|
+| `total === 0` | 整条分页栏**隐藏**（由各页面渲染「暂无数据」空态代替），不显示"共 0 条"和 0 个页码按钮 |
+| 删除后当前页越界（在第 3 页删光，只剩 2 页） | 列表刷新后若 `page > 总页数`，**自动回退到最后一页**并重新拉取。判据：`page > Math.max(1, Math.ceil(total/pageSize))` |
+| 切换每页条数 | **重置到第 1 页**（保持当前页会导致越界或跳过数据） |
+| 执行搜索 / 切换筛选条件 | **重置到第 1 页**（同上） |
+
+### 6.4.8 通用交互约定（4 个列表页 + 5 个弹窗共用）
+
+spec 到这一节为止只定义了每页的字段与布局，**没定义"数据没回来时、点保存时、删之前"长什么样**。5 个页面各写各的必然不一致，统一在此规定：
+
+| 场景 | 统一行为 |
+|---|---|
+| **列表加载中** | 列表区域显示 3 行骨架条（`animate-pulse` 的灰条）；**不清空已有数据**（翻页时的体验比闪白好），仅首次加载显示 |
+| **列表为空** | 居中空态：`fas fa-inbox` 灰图标 + 「暂无数据」+ 若有搜索词则追加「没有匹配「{keyword}」的记录」 |
+| **加载失败** | 居中一行灰字「数据加载失败」+ 「重试」文字按钮（重跑当前请求），**不弹窗**（弹窗会打断后续操作） |
+| **删除** | 一律 `confirm()` 二次确认，文案模板 `确定删除{对象}「{名称}」？{后果说明}`。三个删除各有一句后果说明：商品见 §6.4.3、文档见 §6.4.5、**订单**用「确定删除订单「{order_no}」？删除后不可恢复。」 |
+| **保存中** | 保存按钮置 `disabled` + 转圈图标，**禁止重复提交**（否则连点两次会因唯一约束弹「商品名称已存在」这类误导性错误） |
+| **保存失败** | 弹窗**不关闭**，在弹窗顶部显示红色错误条（保留用户已填内容，不清空） |
+| **保存成功** | 关闭弹窗 + 刷新当前页列表（保持 `page` / `page_size` / 筛选条件不变） |
+| **前端预校验** | 必填项为空 → 按钮置灰或不提交 + 字段下方红字提示；商品 sku 按 `^JD-[A-Z]{3}-\d{3}$` 本地校验（不合法不发请求）；价格 > 0、库存 ≥ 0。**目的**：把 422 挡在网络往返之前 |
+| **金额展示** | 一律 `Number(v).toFixed(2)` 带 `¥` 前缀（见 §5.9：`Decimal("9957.50")` 序列化后是 `9957.5`，不格式化会少一位） |
+| **日期展示** | 一律字符串切片（`.slice(0,10)` / `.slice(11,16)`），**不经过 `new Date()`**（§12-8） |
 
 ### 6.5 商品缩略图 `ProductThumb.vue` 与 SVG 生成
 
@@ -1198,6 +1440,14 @@ Props：`total` / `page` / `pageSize`；Emits：`update:page` / `update:pageSize
 | 内容 | 圆角矩形（`rx="32"`）品类渐变底 + 商品名首字符大字（白色，居中偏上）+ 品类小字（白色 70% 透明，居中偏下） |
 | 幂等 | 直接覆盖写，可重复执行 |
 | 品类→渐变色映射 | 见下表（9 个品类全覆盖，未命中回退灰） |
+| **git 追踪** | **不入库**——在 `frontend/.gitignore` 追加一行 `public/products/`，只提交生成脚本 |
+
+**为什么 SVG 不入库**（对齐项目既有约定）：`CLAUDE.md` 商品知识文档规范 §4 明确"docx 文件在 `.gitignore` 内，变更只提交生成脚本与 TSV"，根 `.gitignore:54-55` 同样把生成物 `llm_backend/knowledge_data/` 整体忽略。这 47 个 SVG 与 docx 性质相同——**由 DB 数据派生的生成物**，提交它们等于把"可由脚本重建的东西"塞进仓库，且商品改名/增删后会与脚本产物不一致。实测当前 `git check-ignore -v frontend/public/products/JD-BED-001.svg` **无命中**（不被忽略），**不加规则会被 §10 步 16 的 `git add .` 静默入库**。
+
+**不入库的代价（明说）**：新克隆的仓库只有源码，`frontend/public/` 是空的 → 跑 `npm run build` 后页面**图片全走 `onerror` 兜底**，显示灰色方块 + 箱子图标。页面"看起来正常但没图"，容易被误判成 bug。因此：
+
+- `README.md` 的启动步骤里，`build_product_placeholders.py` 必须列在 `npm run build` **之前**
+- §9 验证步骤 5 已把它列为独立步骤，跑完再构建
 
 | 品类 | 渐变起 | 渐变止 |
 |---|---|---|
@@ -1237,10 +1487,14 @@ echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, Leg
 
 **共同实现要点**：
 
+- **`echarts.use([...])` 必须写在模块顶层**（每个图表组件文件顶部各写一份，幂等；或抽到一个 `charts/echarts-setup.js` 由三个组件 import）。**绝不能写在 `onMounted` 里**——那晚于 `echarts.init`，会报 `Component series.line not exists. Load it first.`。这是最容易犯的一个错，因为"初始化前先注册"的顺序直觉上很像该放在挂载钩子里。
 - `onMounted` 里 `echarts.init(el)`；`onBeforeUnmount` 里 `chart.dispose()`（**必须 dispose**，否则切换页面会泄漏 canvas 与监听器）
 - `watch(() => props.data, ...)` 里 `chart.setOption(option, true)`（`true` = 不合并，避免图例残留）
 - `window.addEventListener('resize', chart.resize)`，`onBeforeUnmount` 一并 `removeEventListener`
 - 容器高度固定 `320px`
+- **空数据/全零态**：`props.data` 为空数组、或所有 `value` 都为 0 时，**不调 `setOption`**，容器内渲染居中灰字「暂无数据」。理由：ECharts 在数据全 0 时**一个扇区都不画**（环图只剩图例、柱状图只剩坐标轴），看起来像加载失败。触发场景真实存在——工单种子若全是「待处理」，`已解决` 就是 0；商品表被清空时 `product_category` 是 `[]`。
+
+**图例实现方式统一**：三张图**图例一律交给 ECharts 的 `LegendComponent`**（已注册），不用 HTML 自绘图例。§6.4.2 说的"标题右侧小图例"指 §5.4 返回的 `trend` 数据对应折线的两条线名（订单 / 客服会话）——同样走 ECharts legend，位置 `right: 0, top: 0`。不混用两种图例实现，否则四个图并排时会明显不齐。
 
 **颜色规范（固定，不随数据变）**：
 
@@ -1287,7 +1541,7 @@ export const createOrder = (b)      => request('/api/admin/orders', { method: 'P
 export const updateOrder = (id, b)  => request(`/api/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(b) });
 export const deleteOrder = (id)     => request(`/api/admin/orders/${id}`, { method: 'DELETE' });
 export const listKnowledge = (p)    => request(`/api/admin/knowledge?${qs(p)}`);
-export const updateKnowledge = (md5,b) => request(`/api/admin/knowledge/${md5}`, { method: 'PATCH', body: JSON.stringify(b) });
+export const updateKnowledge = (md5,b) => request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'PATCH', body: JSON.stringify(cleanBody(b)) });
 export const deleteKnowledge = (md5)=> request(`/api/admin/knowledge/${encodeURIComponent(md5)}`, { method: 'DELETE' });
 export const listTickets = (p)      => request(`/api/admin/tickets?${qs(p)}`);
 export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { method: 'PUT', body: JSON.stringify(b) });
@@ -1295,13 +1549,46 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 
 `qs(obj)`：过滤掉 `undefined` / `null` / `''` 的键后用 `URLSearchParams` 拼串。
 
-**知识库上传不走 `request()`**——它需要 XHR 上传进度，复用 `src/api/upload.js` 的 `uploadFileWithProgress({ file, userId, onProgress })`（已在客户端使用，直接 import 即可，无需改动）。
+**知识库上传不走 `request()`**——它需要 XHR 上传进度，复用 `src/api/upload.js` 的 `uploadFileWithProgress({ file, userId, onProgress })`（直接 import，**不改这个文件**，理由与代价见 §6.4.5 的 400 说明）。
+
+**`request()` 的附加职责：请求体空串归一化**（实测坑，不加必炸）：
+
+```js
+// 浏览器 <input type="number"> / <input type="date"> 留空时给的是 ''(不是 undefined),
+// JSON.stringify 后就是 ""。而实测 pydantic 2.12 对 Optional[Decimal]/Optional[int]/Optional[date]
+// 收到 '' 一律 ValidationError → 422,只有 Optional[str] 接受 ''(存成空字符串)。
+// 所以发请求前必须把 "" 从 body 里摘掉,等价于"未传"= 不更新。
+function cleanBody(body) {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, v]) => v !== '' && v !== undefined)
+  );
+}
+// 用法:updateProduct(sku, cleanBody(form)) 等
+```
+
+**实测结果**（本机 pydantic 2.12.5）：
+
+| 字段类型 | 收到 `''` | 处理 |
+|---|---|---|
+| `Optional[Decimal]`（`current_price`/`amount`） | **422** | 必须摘掉 |
+| `Optional[int]`（`stock_quantity`/`user_id`） | **422** | 必须摘掉 |
+| `Optional[date]`（`order_date`） | **422** | 必须摘掉 |
+| `Optional[str]`（`buyer_code`/`title`/`description`） | 通过，存成 `''` | 无需摘，但若要"清空为 NULL"得传 `null` 且后端用 `exclude_unset`（§5.7） |
 
 ---
 
 ## 7. 种子数据规范
 
-四个脚本，均为**幂等**（重复执行不产生重复行），全部放 `llm_backend/scripts/`。
+四个脚本，均为**幂等**（重复执行不产生额外行）。**分两处放置**，按"是否连 DB"划：
+
+| 脚本 | 位置 | 为什么 |
+|---|---|---|
+| `seed_admin_account.py` | `llm_backend/scripts/` | 连 DB（`users` 表），与 `import_product_price_stock.py` / `ingest_knowledge.py` 同族 |
+| `seed_orders.py` | `llm_backend/scripts/` | 连 DB（读 `product_price_stock`、写 `orders`） |
+| `seed_tickets.py` | `llm_backend/scripts/` | 连 DB（写 `tickets`） |
+| `build_product_placeholders.py` | **根 `scripts/`** | 产物是**前端静态资源**，与 `build_smart_furniture_docx.py` / `build_jd_aftersales_docx.py` 同族。但它**要连 DB 读商品**——这在本项目里没有先例，见 §7.4 的 `sys.path` 引导写法 |
+
+**⚠️ 根 `scripts/` 下没有任何连 DB 的先例**（实测 `grep -rn "AsyncSessionLocal\|psycopg\|get_logger" scripts/*.py` → 0 命中；那里只有纯文件读写的 build 脚本）。所以 §7.4 必须写明引导代码，照抄根脚本的 `PROJECT_ROOT = Path(__file__).parent.parent` 是**导入不到 `app` 包的**（那指向项目根，而 `app` 在 `llm_backend/` 下一层）。
 
 ### 7.1 `seed_admin_account.py` — 管理员账号
 
@@ -1329,11 +1616,15 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 | 金额 | 直接取该商品 `current_price` |
 | 买家名 | 从固定名单轮转：`沈七, 蒋六, 卫五, 楚四, 陈三, 冯二, 郑一, 吴十, 周九, 孙八, 钱七, 赵六, 李四, 王五, 张伟, 刘敏, 陈静, 杨帆` |
 | 买家编码 | `P{序号:03d}`，与买家名一一对应（`沈七→P001`） |
-| `user_id` | 轮转填现有真实用户 id `[3, 4, 5, 6]`（第 n 条填 `ids[n % 4]`） |
+| `user_id` | **现查**轮转：`SELECT id FROM users ORDER BY id LIMIT 4`，第 n 条填 `ids[n % len(ids)]`；查不到任何用户时填 `NULL`。**不写死 `[3,4,5,6]`**——那 4 个 id 今天存在，但库一旦重建/清过，写死会让 `orders.user_id` 外键直接报错、整个种子失败 |
 | 状态 | 均匀分布：`处理中` / `已发货` / `已送达` 各 6 条（保证控制台环形图三色都有） |
 | 下单日期 | 从 **`datetime.now(timezone.utc).date()`** 往前推 `(index % 14)` 天——基准必须与 §5.4(a) 的图表日期轴完全一致（都用 UTC），否则折线错位一天。**必须落在近 14 天内**，否则控制台"近 7 日趋势"折线全是 0 |
 | 订单号 | `ORD-{index+1:03d}` → `ORD-001` … `ORD-018` |
-| 幂等键 | `order_no`：先 `SELECT order_no FROM orders`，已存在则跳过（`ON CONFLICT DO NOTHING` 语义） |
+| 幂等策略 | **upsert 覆盖，不是"已存在则跳过"**：`INSERT ... ON CONFLICT (order_no) DO UPDATE SET order_date=EXCLUDED.order_date, status=EXCLUDED.status` |
+
+**为什么必须 upsert 而不是跳过**（原设计的一个真实缺陷）：`order_date` 是"运行日往前推 `index%14` 天"。若已存在就跳过，已有 18 行的日期**永不刷新**——今天是 2026-09-22，跑完种子后趋势图覆盖 09-09~09-22；一周后（09-29）图表窗口变成 09-23~09-29，**订单折线全 0**，而统计卡片仍写着"订单 18"。演示前重跑种子是再自然不过的操作，upsert 让它同时起到"刷新演示数据"的作用。
+
+**同类窗口效应（不处理，但要知道）**：`conversations` 是真实数据（实测最后一天 2026-09-19），一周后"近 7 日趋势"的会话折线同样会归零。这是真实数据自然衰减，不是 bug，**本 spec 不造假会话**。
 
 **日期分布要明确**：18 条订单里，让**最近 7 天每天至少 1 条**（`index % 14` 的前 7 个索引落在近 7 天），保证折线图有起伏不是一条平线。
 
@@ -1341,14 +1632,18 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 
 | 字段 | 规范 |
 |---|---|
-| `ticket_no` | `TK-{YYYYMMDD}{序号:06d}`，日期取 `created_at` 的日期 |
-| `created_at` | 从 `datetime.now()` 往前推 `(index * 6)` 小时，保证时间戳不同（参考图 4 条的创建时间是 05:12~08:16 的递增序列） |
+| `ticket_no` | `TK-{YYYYMMDD}{序号:06d}`，**日期部分写成模块级常量 `BASE_DATE = "20260914"`（对齐参考图的 `TK-20260914...`），不取运行日** |
+| `created_at` | **`datetime.now(timezone.utc)`**（UTC，与 §5.4a/§7.2 同基准）往前推 `(index * 6)` 小时，保证时间戳不同 |
 | `status` | 5 条 `待处理` + 3 条 `已解决`（参考图 4 条是 3 待处理 1 已解决的比例） |
 | `urgency` | 低 2 / 中 5 / 高 1（参考图 4 条全是「中」，但控制台图需要区分度） |
 | `category` | 售后服务 / 退货咨询 / 投诉 / 其他 |
 | 已解决的 3 条 | 填 `resolved_at`（= `created_at` + 2 小时）+ `handler = 'admin_test'` |
 | 待处理的 5 条 | `resolved_at` / `handler` 均为 `NULL` |
-| 幂等键 | `ticket_no` |
+| 幂等键 | `ticket_no`（**因为日期已固定为常量，跨天重跑才会稳定命中**） |
+
+**为什么 `ticket_no` 的日期不能取运行日**（原设计的一个真实缺陷）：原写法是"日期取 `created_at` 的日期"、`created_at` 又由 `datetime.now()` 推导 → **每天重跑，8 条的 `ticket_no` 全部是新号 → 全部 INSERT 成功 → 表变 16 条**。§9 步骤 4 的判据"重复执行仍为 8"就只在**同一天内**成立，而"演示前重跑一次种子"是最自然的操作。把日期钉成常量后，跨天重跑也稳定命中幂等键。
+
+**为什么 `created_at` 用 UTC 而不是本地 `datetime.now()`**：全链路约定库时区为 UTC（§5.4a，实测 `TimeZone=Etc/UTC`）。若种子写本地时间（UTC+8）的 naive datetime，存进 `timestamp without time zone` 后被全系统当 UTC 读 → 工单列表显示的时间比实际**早 8 小时**（与 `docs/项目问题.md` #15a 同源的坑，只是这次源头在种子数据）。工单的图表按 status 聚合，不受影响，但列表时间列会错。
 
 **8 条的字面内容**（`user_query` / `summary` / `detail` / `suggestion` 全部写死，直接采用参考图的 4 条原文 + 补 4 条，保证与参考图观感一致）：
 
@@ -1372,20 +1667,53 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 
 ### 7.4 `scripts/build_product_placeholders.py` — 商品占位图
 
-见 §6.5 的完整规范。补充：脚本开头按项目既有脚本惯例加 `sys.path.append(ROOT_DIR)` 与 `get_logger(service="build_placeholders")`，结束时打印生成数量与输出目录。
+见 §6.5 的完整规范。脚本开头**必须**按下面的写法引导（这是本项目**第一个**放在根 `scripts/` 却要连 DB 的脚本，没有先例可抄）：
+
+```python
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent          # = 项目根
+sys.path.insert(0, str(PROJECT_ROOT / "llm_backend"))          # ⚠️ app 包在 llm_backend 下,不是项目根
+import app.core.database  # noqa: F401  —— 触发 Windows SelectorEventLoop 补丁(database.py:5-8)
+
+from app.core.database import AsyncSessionLocal
+from app.core.logger import get_logger
+from app.models.product_price_stock import ProductPriceStock
+```
+
+对照根 `scripts/build_smart_furniture_docx.py` 的 `PROJECT_ROOT = Path(__file__).resolve().parent.parent`——那一行在那边够用（它只做文件读写），在这里**不够**：`app` 在 `llm_backend/` 下，必须再拼一层。而 `llm_backend/scripts/import_product_price_stock.py:13-17` 是另一套写法（它的 `ROOT_DIR` 就是 `llm_backend`）。
+
+好消息：`app/core/config.py:6-7` 的 `ENV_FILE` 是**绝对路径**，所以从任何 CWD 跑都能读到 `.env`，只需要处理模块路径这一个坑。
+
+结束时打印生成数量与输出目录。
 
 ### 7.5 执行顺序
 
-```
+```bash
+# ── 第一步必做,且必须先于启动服务(见 §9 顶部告警) ──
 cd llm_backend
 python scripts/init_db.py                 # 1. 建 orders/tickets 表 + 加 4 个增量列
-python scripts/seed_admin_account.py      # 2. 管理员账号(必须先于其它,后续脚本无依赖但便于先登录验证)
+python scripts/seed_admin_account.py      # 2. 管理员账号
 python scripts/seed_orders.py             # 3. 18 条订单
 python scripts/seed_tickets.py            # 4. 8 条工单
-python ../scripts/build_product_placeholders.py   # 5. 47 个 SVG(从项目根目录)
+
+# ── 占位图脚本在项目根的 scripts/(它产出前端静态资源),所以要在根目录跑 ──
+cd ..
+python scripts/build_product_placeholders.py   # 5. 47 个 SVG → frontend/public/products/
 ```
 
-注意：`init_db.py` 必须在最前——种子脚本 INSERT 的列（`documents.title` 等）与表（`orders`/`tickets`）都依赖它。
+**顺序不能换**：`init_db.py` 必须在最前——种子脚本 INSERT 的列（`users.role`、`documents.title`）与表（`orders`/`tickets`）都依赖它。占位图脚本读 `product_price_stock`（既有表），不依赖种子，但放在最后让"数据 → 产物"的因果链清晰。
+
+**重跑语义**（四个脚本都可重复执行，但效果不同）：
+
+| 脚本 | 重跑效果 |
+|---|---|
+| `init_db.py` | 幂等，无变化 |
+| `seed_admin_account.py` | 只确保 `role='admin'`，不重置密码 |
+| `seed_orders.py` | **upsert 覆盖**——顺带把订单日期刷新到"近 14 天"，解决趋势图随时间归零（见 §7.2） |
+| `seed_tickets.py` | 幂等（`ticket_no` 日期是常量），无变化 |
+| `build_product_placeholders.py` | 覆盖写，无变化 |
 
 ---
 
@@ -1439,6 +1767,13 @@ async def normal_user():
 
 
 async def _login(email: str, password: str) -> str:
+    # ⚠️ main 必须【函数内】导入,不能提到 conftest 顶层 ——
+    # main.py:543 的 StaticFiles(directory=frontend/dist) 在目录不存在时【构造即抛】
+    # RuntimeError。frontend/dist 被 gitignore,没构建过的环境里,conftest 顶层 import
+    # 会让【整套测试】(含与本次无关的 test_cleaner/test_rrf)在 collection 阶段全灭。
+    # 现有 tests/test_documents_api.py:5 也是按需在模块内 import 的,保持一致。
+    from main import app                 # noqa: PLC0415
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.post("/api/token", json={"email": email, "password": password})
@@ -1478,12 +1813,14 @@ async def normal_token(normal_user):
 
 ### 8.3 `tests/test_admin_products.py`
 
+**断言一律与现查 DB 比对，不写死 47 / 12 / 9**（与 §8.6 同原则）——写死会被本模块自己的功能推翻：§9 步骤 12 要求人工新增一条测试商品，只要那一步的删除没做干净，整套商品测试立刻变红。
+
 | 用例 | 断言 |
 |---|---|
-| 列表默认分页 | `total == 47`；`len(items) <= 12`；`page == 1` |
+| 列表默认分页 | `total == await db_count(ProductPriceStock)`；`len(items) <= 12`；`page == 1`；`total > len(items)` 且 `page_size=12`（即**分页确实在分页**，`total` 不是 `len(items)`） |
 | `keyword` 匹配商品名 | 搜「门锁」→ `total > 0` 且所有 item 的 name/sku 含关键词 |
-| `keyword` 匹配 sku | 搜 `JD-BED-001` → `total == 1` |
-| `category` 筛选 | 筛「智能门锁」→ `total == 12`（实测值，§2.1） |
+| `keyword` 匹配 sku | 搜 `JD-BED-001` → `total == 1`（sku 唯一，可写死） |
+| `category` 筛选 | 筛「智能门锁」→ `total == await db_count(ProductPriceStock, ProductPriceStock.category == "智能门锁")` |
 | 新增成功 | `POST` 带合法 sku → list 中能查到，`stock_quantity` 一致 |
 | 新增 sku 格式非法 | `POST` sku=`ABC-1` → `422` |
 | 新增 sku 重复 | 用 `JD-BED-001` → `400` |
@@ -1492,7 +1829,7 @@ async def normal_token(normal_user):
 | 编辑不存在的 sku | `PUT /products/JD-XXX-999` → `404` |
 | 删除成功 | `DELETE` → list 中消失 |
 | 删除不存在 | `404` |
-| 品类列表 | 返回 9 项（实测值，§2.1），含「智能门锁」 |
+| 品类列表 | 长度 == `SELECT COUNT(DISTINCT category) FROM product_price_stock`；含「智能门锁」；**去重且有序** |
 | `current_price` 是 json number 不是字符串 | `isinstance(item["current_price"], float)` |
 
 清理：所有新增用 `JD-TST-9xx` 段的 sku，`cleanup` fixture 里 `DELETE WHERE sku LIKE 'JD-TST-%'`。
@@ -1520,7 +1857,9 @@ async def normal_token(normal_user):
 | 列表 | **不传 user_id 也能拿到**（这是 D6 的核心行为）；`total >= 2` 且必含 `original_filename` 为「京东自营售后政策.docx」「京东智能家具产品知识文档.docx」两行（不写死 `== 2`，避免与其他用例的执行顺序耦合） |
 | 列表字段 | 含 `title` / `description` / `status` / `chunk_count` / `created_at` / `owner_id` |
 | 两行种子的 `chunk_count` | 分别为 `4` 与 `38`（实测值，§2.1） |
-| PATCH 标题与描述 | 成功后重查值已变；**测试后还原原值**（这两行是生产种子数据） |
+| PATCH 标题与描述 | 成功后重查值已变 |
+| **PATCH 能把 title 还原为 NULL** | 发 `json={"title": None}` → 重查 `title IS NULL`。**这条是 §5.7「用 `exclude_unset` 而非 `is not None`」的直接验收**——写成后者这条必挂 |
+| 测试后还原 | 用 `json={"title": None, "description": None}`（**不是 `""`**）把两行种子文档还原为 NULL 原值；`""` 会留下空串而非 NULL，属静默污染演示数据（前端 `item.title \|\| item.original_filename` 恰好能兜住，所以**看不出问题**） |
 | PATCH 不存在 md5 | `404` |
 | PATCH status 非法值 | `422` |
 | DELETE 不存在 md5 | `404` |
@@ -1558,7 +1897,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | `knowledge.total` | `== db_count(Document)`，**不按 user_id 过滤**（D6 的核心行为，比对时确认该值 ≥ 2） |
 | `charts.trend.days` 长度 | `== 7`；`chart?days=14` → `== 14` |
 | `trend.orders` / `trend.conversations` 长度 | `== len(days)`（**补零逻辑**） |
-| `trend.days[-1]` | `== 今天（MM-DD）` |
+| `trend.days[-1]` | `== datetime.now(timezone.utc).strftime("%m-%d")` —— **必须写 UTC**。若测试侧用本地 `datetime.now()` 构造"今天"，在 UTC+8 的本地 00:00~08:00 窗口内两者差一天 → 该用例每天随机变红（后端按 §5.4a 用 UTC 生成日期轴） |
 | `order_status` 含全部 3 个状态 | 即使某状态 0 条也返回该项 |
 | `ticket_status` 含全部 2 个状态 | 同上 |
 | `product_category` 按数量降序 | 首项是数量最多的品类 |
@@ -1574,14 +1913,16 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 
 ## 9. 验证方案（按序执行）
 
+> **⚠️ 步骤 1 是不可跳过的前置**：`run.py` 不跑任何迁移（`run.py:28-35` 只有 uvicorn 启动）。若先起服务再跑迁移，SQLAlchemy 的 `select(User)` 会**显式列出 `role` 列**（不是 `SELECT *`）→ PG 抛 `UndefinedColumn` → 所有查 `users` 的路径全 500：`/api/token`（登录）、`/api/register`、`/api/users/me` 以及全部 16 个 admin 端点。**而客户端聊天 `/api/langgraph/query` 不查 users 表，照常能用**——故障现象是"聊天正常但登录全挂"，极难第一时间定位。**永远先迁移，再启动。**
+
 | # | 步骤 | 判据 |
 |---|---|---|
-| 1 | `cd llm_backend && python scripts/init_db.py` | 日志 `Database initialization completed successfully!`；随后查表见 `orders` / `tickets` 存在，`users` 有 `role` 列，`documents` 有 `title`/`description`/`status` 列 |
+| 1 | `cd llm_backend && python scripts/init_db.py` | 日志 `Database initialization completed successfully!`；随后查表见 `orders` / `tickets` 存在，`users` 有 `role` 列，`documents` 有 `title`/`description`/`status` 列。**再查一次数据**：`SELECT role FROM users` 应为 4 行且都非 NULL（`ALTER ... DEFAULT 'user'` 给存量行填了值） |
 | 2 | `python scripts/seed_admin_account.py` | 打印管理员 email/role/id；`SELECT role FROM users WHERE email='admin_test@test.com'` → `admin` |
 | 3 | `python scripts/seed_orders.py` | `SELECT COUNT(*) FROM orders` → 18；重复执行仍为 18（幂等） |
 | 4 | `python scripts/seed_tickets.py` | `SELECT COUNT(*) FROM tickets` → 8；重复执行仍为 8（幂等） |
 | 5 | `python ../scripts/build_product_placeholders.py` | `frontend/public/products/` 下 47 个 `.svg`；浏览器打开其一可见色块+文字 |
-| 6 | `cd frontend && npm install && npm run build` | 构建成功；`dist/admin.html` 存在；**核对 ECharts 只在 admin 的 chunk 里**：`ls -la dist/assets/` 中体积最大的 js 属 admin 入口，`dist/assets/` 下与 index 入口同名的 chunk 体积无明显增长（对比构建前后 `dist/index.html` 引用的 js 体积） |
+| 6 | `cd frontend && npm install && npm run build` | 构建成功；产物含 `dist/admin.html` + `dist/products/*.svg`。**ECharts 分包核对（可执行的判据）**：① `dist/index.html` 与 `dist/admin.html` 引用的 assets **文件名互不相同**（多页构建按入口分 chunk，实测形如 `main--EHfa8l.css` / `admin-BxLDXbEe.js` / `shared-*.js`，都带内容 hash——**不要用"同名 chunk 体积对比"那种做不到的方式**）；② `grep -l "echarts" dist/assets/*.js` **只命中 admin 的 chunk**，不命中 index 或 shared 的。注：`shared-*.js`（vue 所在）两边共用属正常 |
 | 7 | 启动后端 `cd llm_backend && python run.py`，浏览器开 `http://127.0.0.1:8000/admin.html` | 未登录 → 显示管理端登录页 |
 | 8 | 用**普通用户**登录管理端 | 显示「当前账号没有管理员权限」提示卡（不是能进控制台） |
 | 9 | 用 **admin_test / admin** 登录 | 进入控制台；6 张卡片数字与 §2.1 实测一致：商品 47（副标"上架"数按现库实查，不写死）、订单 18、知识库 2、工单 8（待办 5）、用户 4、会话 13（消息 64）。**若密码不对登不上**：`docs/项目问题.md` #15e 记载该账号密码曾被改为 `admin`，种子脚本不重置已存在账号的密码；此时在管理端登录页用「切换账号」，或手动 `UPDATE users SET password_hash=<bcrypt(明文)> WHERE email='admin_test@test.com'` |
@@ -1609,8 +1950,8 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 5 | 订单 4 端点 | `api/admin/orders.py` | 同上 |
 | 6 | 知识库 3 端点 | `api/admin/knowledge.py` | 同上 + 与既有 `/api/documents` 并存不冲突 |
 | 7 | 工单 2 端点 | `api/admin/tickets.py` | 同上 |
-| 8 | 种子脚本 3 个 + 占位图脚本 1 个，跑通 | `scripts/seed_admin_account.py`、`scripts/seed_orders.py`、`scripts/seed_tickets.py`、`scripts/build_product_placeholders.py` | §9-2~5 全部判据 |
-| 9 | 后端测试 6 个文件 + conftest fixtures | `tests/test_admin_*.py`、`tests/conftest.py`(改) | `pytest -q` 全绿（§9-18） |
+| 8 | 种子脚本 3 个 + 占位图脚本 1 个，跑通 | `llm_backend/scripts/seed_admin_account.py`、`llm_backend/scripts/seed_orders.py`、`llm_backend/scripts/seed_tickets.py`、**根** `scripts/build_product_placeholders.py` | §9-2~5 全部判据；**每个脚本连跑两次**核对幂等（订单为 upsert、其余无变化） |
+| 9 | 后端测试 5 个文件 + conftest fixtures | `tests/test_admin_auth.py` 等 5 个、`tests/conftest.py`(改) | 在**项目根**执行 `python -m pytest -q`（`pyproject.toml:60` 的 `testpaths` 指向 `llm_backend/tests`，从 `llm_backend/` 里跑也能因上溯到根 pyproject 而生效）全绿（§9-18） |
 | 10 | 前端骨架：入口 + 构建配置 + `api.js` + `admin.css` + 登录页 + 导航 | `admin.html`、`vite.config.js`(改)、`tailwind.config.cjs`(改)、`src/admin/`（main/App/css/api/AdminLogin） | `npm run build` 成功；浏览器见登录页，管理员登录进控制台 |
 | 11 | 控制台页 + 3 个图表组件 | `ConsoleView.vue`、`charts/*.vue` | §9-9~11 |
 | 12 | 商品管理页 + 通用组件（Modal/分页/缩略图/徽章） | `ProductView.vue`、`components/*.vue` | §9-12 |
@@ -1623,7 +1964,12 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 - 本文档标题下补「归档状态」行，`git mv` 到 `docs/spec_plan/已完成/`
 - 修 `docs/PROJECT_ANALYSIS.md` / `docs/SHOP_SAGE_ANALYSIS.md` 中对本 spec 的导航引用（如有）
 - `docs/项目问题.md` 补一条：管理端引入了 role 与 require_admin，但 `/api/upload`、`/api/documents` 仍不校验令牌（既有缺陷，本次未修）
-- `README.md` 补管理端入口与种子脚本的执行说明
+- `README.md` 补三件事：① **管理端入口 `http://127.0.0.1:8000/admin.html`**（D15 选定的唯一发现路径）；② **启动前必须先跑 `python scripts/init_db.py`**（§12-20，顺序错了登录会全挂）；③ 种子脚本执行顺序，其中 `build_product_placeholders.py` 必须排在 `npm run build` **之前**（§6.5）
+- `frontend/.gitignore` 追加 `public/products/`（§6.5，与 docx 同策略）
+
+**Git 提交注意事项**：
+- `frontend/package.json` + `package-lock.json` 因装 ECharts 会变更，**要一起提交**
+- **不要 `git add .` 盲提交**——先 `git status` 核对 47 个 `frontend/public/products/*.svg` 确实被忽略（§12-27）。若 gitignore 规则没生效，会静默入库生成物
 
 **分支与提交**：当前分支 `main`（`git branch --show-current` 复查后再提交——多窗口并发场景下分支可能被外部切换）。按项目惯例 `[feat] 管理端：<模块>` 分步提交，或按用户要求一次提交。
 
@@ -1639,6 +1985,13 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 2 | **商品「编辑」是否允许改名称** | **允许，但弹二次确认**（文案见 §6.4.3） | 直接禁掉名称字段（理由：`product_name` 是 RAG 检索对齐键，改名会让 docx 块里的旧名对不上） |
 | 3 | **控制台「活跃用户」口径** | **`COUNT(*) FROM users`**（全部注册用户） | 近 7 日有会话的用户数（`COUNT(DISTINCT conversations.user_id)` 近 7 天），更贴合"活跃"字面义 |
 
+补充两项（已按默认实现，实施中可调）：
+
+| # | 事项 | 默认选择 | 备选 |
+|---|---|---|---|
+| 4 | **订单种子选品范围** | **取 `ORDER BY sku LIMIT 18`**——实测只覆盖 9 个品类里的 4 个（智能电动床 5 + 智能窗帘 6 + 智能晾衣架 5 + 电动升降桌 2），订单页卡片会比较单调 | 跨品类抽样（如每个品类轮流取），演示观感更好。**注意**：控制台的「商品品类分布」柱状图看的是商品表，不受此项影响 |
+| 5 | **订单弹窗的商品下拉** | `GET /products?page_size=100` 一次拉取（当前 47 条，`page_size` 上限正好是 100，安全） | 提供一个精简的 `/products/options`（只返 sku+name+price）；或商品数超 100 时改成可搜索下拉。**现在不做**——47 条离上限还有一半余量，加接口是为不存在的问题付出复杂度 |
+
 ---
 
 ## 12. 风险与避坑清单
@@ -1651,19 +2004,29 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | 4 | **`/api/upload` 返回 `duplicate` 时不能 PATCH** | md5 已存在说明该文档行已存在，此时 PATCH 会改到**旧记录**的标题，覆盖人工维护的元数据 | §6.4.5 已明确：`duplicate` 时终止，不做 PATCH |
 | 5 | **`documents.status='disabled'` 不影响检索** | 停用只是展示态，检索侧仍会召回其 chunks（加谓词要改两条检索 SQL，超范围） | 前端「状态」列做 tooltip 注明；写入 §12-9 已知限制；将来做检索侧过滤时一并修 |
 | 6 | **`/api/upload` 与 `/api/documents` 无鉴权** | 既有缺陷（`docs/项目问题.md` #14）。管理端页面照常带管理员令牌，但端点本身不校验 | **本次不修**（改它会连带屏蔽客户端上传）。`docs/项目问题.md` 补记一条 |
-| 7 | **`Numeric` 的 `Decimal` 无法直接 JSON 序列化** | fastapi 的 `jsonable_encoder` 能处理 `Decimal`→float，但**手搓 dict 返回时不经过 encoder 的完整路径**，容易报 `Object of type Decimal is not JSON serializable` | §5.3 已明确约定：所有价格/金额字段显式 `float(...)` |
+| 7 | **`Decimal` 序列化后尾零被吃掉，页面会显示 `¥9957.5`** | 实测 FastAPI 手搓 dict 返回 `Decimal("9957.50")` → JSON 数字 `9957.5`（不报错，但精度位丢了） | 前端所有金额/价格展示一律 `Number(v).toFixed(2)`（§6.4.8）。**不需要**后端转 `float()`——那是无效动作 |
 | 8 | **日期时区坑（既有）** | `isoformat()` 不带时区，前端 `new Date()` 按本地时间解析 → 差 8 小时（`docs/项目问题.md` #15a） | 管理端所有日期展示走**字符串切片**（`slice(0,10)` / `slice(11,16)`），不经过 `new Date()` |
 | 9 | **工单种子日期分布** | 若订单日期全部堆在一天，控制台折线图会是一条平线，看不出"趋势" | §7.2 已规范：18 条订单的日期按 `index % 14` 铺开到近 14 天，且近 7 天每天至少 1 条 |
 | 10 | **ECharts 实例泄漏** | 不 `dispose()` 时切页面会累积 canvas 与 resize 监听器，久了页面卡顿 | §6.6 已明确 `onBeforeUnmount` 里 `dispose()` + `removeEventListener` |
 | 11 | **`order_no` 生成撞唯一键** | 用 `COUNT(*)+1` 时，删掉中间一条再新增会撞已存在的号 | §5.6 已明确：解析现有 `order_no` 取 `max(序号)+1` |
 | 12 | **管理端登录态与客户端共用 `token` 键** | 这是有意的（点"体验客服"不用重新登录），但意味着**管理员在管理端登出会连带把客户端登出** | 属预期行为；写进 README |
 | 13 | **`create_all` 建新表依赖模型已导入** | 只在 `models/` 建文件而漏改 `models/__init__.py`，`create_all` 不会建 `orders`/`tickets`，且**不报错**（静默不建） | §10 步骤 1 的验证判据明确要求查表存在 |
-| 14 | **测试污染演示数据** | `PATCH /knowledge/{md5}` 用例会改到真实种子的 2 份文档 | §8.5 已明确要求用例内还原原值 |
+| 14 | **测试污染演示数据** | `PATCH /knowledge/{md5}` 用例会改到真实种子的 2 份文档；用 `""` 还原会留空串而非 NULL（**前端能兜住，所以看不出问题**） | §8.5 已明确要求用 `json={"title": None}` 还原，并加了"能还原为 NULL"这条验收断言 |
 | 15 | **`uvicorn` Windows 启动坑** | `python -m uvicorn main:app` 在 py3.13 下因 Proactor 启动失败，必须走 `run.py`（已内置 Selector 补丁） | §9-7 用 `python run.py`；验证完 §9-19 必须 kill 进程 |
 | 16 | **`reload=True` 实测不生效** | `docs/项目问题.md` #15 附带发现③：改后端代码后 `run.py` 不自动重启 | 改后端后手动重启，别以为热重载生效了（否则会对着旧代码排查） |
 | 17 | **`vite.config.js` 是 ESM，`__dirname` 不存在** | `package.json` 有 `"type": "module"`，配置被当 ESM 加载。写 `resolve(__dirname, 'index.html')` 会在启动构建时直接报 `__dirname is not defined in ES module scope` | §6.1 已给出 `fileURLToPath(new URL('./index.html', import.meta.url))` 的写法 |
 | 18 | **图表日期基准不一致会错位一天** | 图表日期轴若用本地 `date.today()`、而 `conversations.created_at` 是 UTC（库时区 `Etc/UTC`），近 7 日趋势的会话数会整体偏移一格 | §5.4(a) 与 §7.2 已统一为 UTC 基准，两处必须一起改；改一处会静默错位（图还是能画出来，只是数对不上） |
 | 19 | **`total` 用 `len(items)` 会退化成单页** | 前端分页条依赖 `total` 算页数；若返回当前页条数，则永远只有 1 页，翻页功能形同虚设，且**不会报错** | §5.3 已明确要求同一组 where 另跑 count |
+| 20 | **🔴 模型改了但库没迁移 → 登录全挂、聊天正常** | SQLAlchemy 的 `select(User)` **显式列出全部列**（不是 `SELECT *`），库缺 `role` 列 → `UndefinedColumn` → `/api/token`、`/api/register`、`/api/users/me` + 16 个 admin 端点全 500。**而 `/api/langgraph/query` 不查 users 表，照常能用** → 现象是"聊天好好的，就是登不上"，极难定位。`run.py:28-35` 不跑任何迁移 | §9 顶部已加显式告警，步骤 1 永远是先跑 `init_db.py`（此条比 §12-13 严重点在于：13 是"少建表"，这条是"服务能起但登录坏"，后者更难发现） |
+| 21 | **🔴 `require_admin` 缺 `User` 导入 → 整个服务起不来** | `security.py` 现有 44 行没有 `from app.models.user import User`，而函数注解在 Python 3.13 定义时求值 → `NameError` → 导入链全断 → uvicorn 起不来 + 所有测试 collection 全灭 | §5.1 已给出带导入的完整代码块，并点名 `tickets.py` 有同样的坑 |
+| 22 | **工单种子跨天重跑会让数据翻倍** | `ticket_no` 若含运行日，每天重跑全部是新号 → 8 条变 16 条，"演示前重跑种子"这个最自然的操作就会坏掉 | §7.3 已把日期钉成常量 `BASE_DATE = "20260914"` |
+| 23 | **订单种子的趋势图会随时间归零** | `order_date` 是"运行日往前推 `index%14` 天"，若幂等策略是"已存在则跳过"，日期永不刷新 → 一周后近 7 日折线全 0，而卡片仍写"订单 18" | §7.2 已改为 upsert 覆盖。**同类**：`conversations` 是真实数据，一周后会话折线也会归零——那是真实衰减，不造假 |
+| 24 | **工单种子用本地时间 → 列表时间早 8 小时** | `datetime.now()` 是本地（UTC+8），写进 `timestamp without time zone` 后被当 UTC 读（与 `docs/项目问题.md` #15a 同源，只是源头在种子） | §7.3 已改 `datetime.now(timezone.utc)` |
+| 25 | **`/api/upload` 的 400 响应体前端拿不到** | `src/api/upload.js:42-51` 只在 2xx 时解析响应体，其余状态码直接 `reject('上传失败: ' + status)` → `unsupported`/`too_large`/`empty_file` 的具体原因前端**看不见** | §6.4.5 已给出二选一（本 spec 取"接受限制 + 前端本地预检"），并修正了 §6.7 原写"无需改动"的含糊表述 |
+| 26 | **表单空串 → 422** | 浏览器数字/日期输入框留空给的是 `''`，而实测 pydantic 对 `Optional[Decimal]/int/date` 收到 `''` 一律 ValidationError | §6.7 已给 `cleanBody()` 归一化函数 + 实测对照表 |
+| 27 | **SVG 生成物会被静默提交入库** | 实测 `git check-ignore frontend/public/products/x.svg` 无命中，而 §10 步 16 走 `git add .` → 47 个生成物入库，违反项目"docx 不入库、只提交生成脚本"的既有约定 | §6.5 已要求 `frontend/.gitignore` 加 `public/products/`，并说明代价（新克隆仓库需先跑脚本，否则图片走兜底） |
+| 28 | **根 `scripts/` 脚本连不上 DB** | 根 `scripts/` 下没有任何连 DB 的先例（实测 `grep AsyncSessionLocal\|psycopg` → 0 命中），照抄 `PROJECT_ROOT = Path(__file__).parent.parent` 导入不到 `app`（它指向项目根，而 `app` 在 `llm_backend/` 下） | §7.4 已给出完整的 `sys.path.insert(0, PROJECT_ROOT / "llm_backend")` 引导写法 |
+| 29 | **conftest 顶层 `import main` 会连累全部测试** | `main.py:543` 的 `StaticFiles(frontend/dist)` 在目录不存在时构造即抛 `RuntimeError`；`dist` 被 gitignore，没构建过的环境里会让含 `test_cleaner`/`test_rrf` 在内的**整套测试**在 collection 阶段全灭 | §8.1 已改为在 `_login()` 函数内局部导入（与 `tests/test_documents_api.py:5` 的既有做法一致） |
 
 ---
 
