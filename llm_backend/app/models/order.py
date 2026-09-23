@@ -17,7 +17,9 @@ class Order(Base):
     buyer_code = Column(String(20), nullable=True)               # P001 形式
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     amount = Column(Numeric(10, 2), nullable=False)              # 下单金额
-    status = Column(String(20), nullable=False, default="处理中")  # 处理中/已发货/已送达
+    status = Column(String(20), nullable=False, default="处理中")  # 处理中/已发货/已送达/已签收
     order_date = Column(Date, nullable=False)
+    # 签收日期:仅 status='已签收' 时有值;订单改回其它状态时由接口强制清空
+    signed_date = Column(Date, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -49,7 +49,7 @@ import BarChart from '../components/charts/BarChart.vue';
 import DonutChart from '../components/charts/DonutChart.vue';
 
 // 颜色按后端保证的固定顺序绑定(spec §6.6)
-const ORDER_COLORS = ['#f59e0b', '#3b82f6', '#10b981'];   // 处理中/已发货/已送达
+const ORDER_COLORS = ['#f59e0b', '#3b82f6', '#10b981', '#14b8a6'];   // 处理中/已发货/已送达/已签收
 const TICKET_COLORS = ['#ef4444', '#10b981'];             // 待处理/已解决
 
 const stats = ref(null);

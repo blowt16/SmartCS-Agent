@@ -11,6 +11,7 @@ cleanup_test_orders 在**用例前后各清一次**(前一次兜住上次跑挂�
 """
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,8 @@ UNKNOWN_USER_ID = 999999      # users 表无此 id(种子为 3/4/5/6)
 # 列表元素字段集(§5.6)。少一个前端就渲染不出来,故逐字段钉住。
 ITEM_FIELDS = {
     "id", "order_no", "sku", "product_name", "category",
-    "buyer_name", "buyer_code", "amount", "status", "order_date", "image",
+    "buyer_name", "buyer_code", "amount", "status", "order_date",
+    "signed_date", "image",
 }
 
 # 单页上限(端点 page_size 约束 le=100),取全量时用
@@ -335,6 +337,84 @@ async def test_update_unknown_id_404(admin_token):
             headers=_bearer(admin_token),
         )
     assert r.status_code == 404, r.text
+
+
+# ==================== 签收日期 ====================
+
+
+def _today_utc() -> str:
+    """与接口同一基准(UTC)——不用本地日期,否则在 UTC+8 的 00:00~08:00 窗口内会差一天。"""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def _put(c, token, order_id, **body):
+    return await c.put(f"/api/admin/orders/{order_id}", json=body, headers=_bearer(token))
+
+
+async def test_create_signed_order_defaults_signed_date_to_today(admin_token):
+    """新增即「已签收」且不传 signed_date → 后端补 UTC 当天。"""
+    async with _client() as c:
+        r = await _create(c, admin_token, SKU_A, status="已签收")
+        assert r.status_code == 200, r.text
+        body = r.json()
+    assert body["status"] == "已签收"
+    assert body["signed_date"] == _today_utc()
+
+
+async def test_create_non_signed_order_ignores_signed_date(admin_token):
+    """非「已签收」时即使显式传了日期也必须落 NULL——不许造出「未签收却带签收日期」的数据。"""
+    async with _client() as c:
+        r = await _create(c, admin_token, SKU_A, status="已发货", signed_date="2026-01-01")
+        assert r.status_code == 200, r.text
+        body = r.json()
+    assert body["status"] == "已发货"
+    assert body["signed_date"] is None
+
+
+async def test_update_to_signed_sets_signed_date(admin_token):
+    """状态改成「已签收」但没传日期 → 补当天。"""
+    async with _client() as c:
+        created = await _create(c, admin_token, SKU_A, status="已发货")
+        assert created.json()["signed_date"] is None
+        r = await _put(c, admin_token, created.json()["id"], status="已签收")
+    assert r.status_code == 200, r.text
+    assert r.json()["signed_date"] == _today_utc()
+
+
+async def test_update_away_from_signed_clears_signed_date(admin_token):
+    """从「已签收」改回其它状态 → 签收日期清空(状态与日期强绑定的核心断言)。"""
+    async with _client() as c:
+        created = await _create(c, admin_token, SKU_A, status="已签收", signed_date="2026-03-05")
+        assert created.json()["signed_date"] == "2026-03-05"
+        r = await _put(c, admin_token, created.json()["id"], status="已发货")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "已发货"
+    assert r.json()["signed_date"] is None
+
+
+async def test_update_keeps_explicit_signed_date(admin_token):
+    """已签收时显式传的日期要保留(用于补录历史订单),不被「补当天」覆盖。"""
+    async with _client() as c:
+        created = await _create(c, admin_token, SKU_A, status="已签收")
+        r = await _put(c, admin_token, created.json()["id"], signed_date="2026-03-05")
+    assert r.status_code == 200, r.text
+    assert r.json()["signed_date"] == "2026-03-05"
+
+
+async def test_update_other_field_keeps_existing_signed_date(admin_token):
+    """已签收订单只改无关字段(请求里没有 status / signed_date)→ 原签收日期不被重置成今天。
+
+    这条盯的是 exclude_unset 与"补当天"的交互:实现里取 data.get('signed_date', order.signed_date),
+    若误写成 data.get('signed_date') or today,改个无关字段就会把签收日期冲成今天。
+
+    ⚠️ 改的是 buyer_code 而非 buyer_name:本文件约定"造的订单 buyer_name 一律 BUYER",
+    清理 fixture 按 buyer_name 精确匹配删除;改买家名会让订单逃出清理、污染演示数据(实测踩过)。
+    """
+    async with _client() as c:
+        created = await _create(c, admin_token, SKU_A, status="已签收", signed_date="2026-03-05")
+        r = await _put(c, admin_token, created.json()["id"], buyer_code="P999")
+    assert r.status_code == 200, r.text
+    assert r.json()["signed_date"] == "2026-03-05", "改无关字段不应重置签收日期"
 
 
 # ==================== 删除 ====================

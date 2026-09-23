@@ -127,11 +127,11 @@ async def test_trend_last_day_is_utc_today(admin_token):
     assert d["trend"]["days"][-1] == datetime.now(timezone.utc).strftime("%m-%d")
 
 
-async def test_order_status_returns_all_three_values(admin_token):
+async def test_order_status_returns_all_four_values(admin_token):
     """即使某状态 0 条也返回该项,否则图例会随数据消失。"""
     async with _client() as c:
         d = (await c.get(CHARTS_URL, headers={"Authorization": f"Bearer {admin_token}"})).json()
-    assert [x["name"] for x in d["order_status"]] == ["处理中", "已发货", "已送达"]
+    assert [x["name"] for x in d["order_status"]] == ["处理中", "已发货", "已送达", "已签收"]
 
 
 async def test_ticket_status_returns_all_two_values(admin_token):

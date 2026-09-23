@@ -75,6 +75,10 @@ async def init_db():
             await conn.execute(text(
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'enabled'"
             ))
+            # 签收日期:仅 status='已签收' 时有值,其余状态由接口强制置 NULL
+            await conn.execute(text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS signed_date DATE"
+            ))
         logger.info("Database initialization completed successfully!")
     except Exception as e:
         logger.error("Database initialization failed: {}", str(e))

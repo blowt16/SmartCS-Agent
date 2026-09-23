@@ -35,6 +35,8 @@ def _serialize(o: Order) -> dict:
         "status": o.status,
         # Date 列无时间部分,isoformat() 直接是 YYYY-MM-DD,不经 new Date() 无时区风险
         "order_date": o.order_date.isoformat(),
+        # 非「已签收」恒为 null,前端据此不显示签收日期
+        "signed_date": o.signed_date.isoformat() if o.signed_date else None,
         # 不查文件系统是否存在,前端 onerror 兜底(§6.5)
         "image": f"/products/{o.sku}.svg",
     }
@@ -116,6 +118,10 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
     amount = payload.amount if payload.amount is not None else product.current_price
     # UTC 日期,与 §5.4(a) 图表日期轴同基准;不用 date.today()——本地日期在早 8 小时窗口内错位一天
     order_date = payload.order_date or datetime.now(timezone.utc).date()
+    # 签收日期与状态绑定:非「已签收」一律 NULL;「已签收」未填则补当天
+    signed_date = None
+    if payload.status == "已签收":
+        signed_date = payload.signed_date or datetime.now(timezone.utc).date()
 
     for attempt in range(3):  # 并发撞号:重算 max 再试,最多 3 次
         try:
@@ -130,6 +136,7 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
                 amount=amount,
                 status=payload.status,
                 order_date=order_date,
+                signed_date=signed_date,
             )
             db.add(order)
             await db.flush()
@@ -165,6 +172,15 @@ async def update_order(
         )).scalar_one_or_none()
         if exists is None:
             raise HTTPException(status_code=400, detail=f"用户不存在: {data['user_id']}")
+
+    # 签收日期与状态强绑定,在服务端兜底(直调接口也不能造出「未签收却带签收日期」的数据):
+    #   - 非「已签收」→ 一律置 NULL(状态改回其它即为清空)
+    #   - 「已签收」→ 必须有值:显式传了用传的,没传沿用原值,原值也没有则补当天
+    effective_status = data.get("status", order.status)
+    if effective_status != "已签收":
+        data["signed_date"] = None
+    else:
+        data["signed_date"] = data.get("signed_date", order.signed_date) or datetime.now(timezone.utc).date()
 
     for field, value in data.items():
         setattr(order, field, value)

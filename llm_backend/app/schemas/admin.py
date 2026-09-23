@@ -27,8 +27,10 @@ class OrderCreate(BaseModel):
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: str = Field("处理中", pattern=r"^(处理中|已发货|已送达)$")
+    status: str = Field("处理中", pattern=r"^(处理中|已发货|已送达|已签收)$")
     order_date: Optional[date] = None
+    # 留空且 status='已签收' 时由接口补当天;status 不是已签收则一律存 NULL
+    signed_date: Optional[date] = None
 
 
 class OrderUpdate(BaseModel):
@@ -36,8 +38,9 @@ class OrderUpdate(BaseModel):
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: Optional[str] = Field(None, pattern=r"^(处理中|已发货|已送达)$")
+    status: Optional[str] = Field(None, pattern=r"^(处理中|已发货|已送达|已签收)$")
     order_date: Optional[date] = None
+    signed_date: Optional[date] = None
 
 
 class KnowledgeCommit(BaseModel):

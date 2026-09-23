@@ -36,8 +36,8 @@ BUYER_NAMES = [
     "李四", "王五", "张伟", "刘敏", "陈静", "杨帆",
 ]
 
-# 三个状态均匀分布,保证控制台环形图三色都有
-STATUSES = ["处理中", "已发货", "已送达"]
+# 四个状态均匀分布,保证控制台环形图四色都有
+STATUSES = ["处理中", "已发货", "已送达", "已签收"]
 
 
 async def main() -> int:
@@ -66,6 +66,11 @@ async def main() -> int:
 
         rows = []
         for index, (sku, product_name, category, current_price) in enumerate(products):
+            status = STATUSES[index % len(STATUSES)]
+            order_date = today - timedelta(days=index % 14)
+            # 签收日期只在「已签收」时有值,按下单后 2 天顺延;min 兜住"不早于今天"
+            # 否则近几天下的单会生成未来日期(签收日期晚于今天,不合常理)
+            signed_date = min(order_date + timedelta(days=2), today) if status == "已签收" else None
             rows.append({
                 "order_no": f"ORD-{index + 1:03d}",
                 "sku": sku,
@@ -75,8 +80,9 @@ async def main() -> int:
                 "buyer_code": f"P{index + 1:03d}",
                 "user_id": user_ids[index % len(user_ids)] if user_ids else None,
                 "amount": current_price,            # 下单金额快照
-                "status": STATUSES[index % len(STATUSES)],
-                "order_date": today - timedelta(days=index % 14),
+                "status": status,
+                "order_date": order_date,
+                "signed_date": signed_date,
             })
 
         stmt = pg_insert(Order).values(rows)
@@ -85,6 +91,7 @@ async def main() -> int:
             set_={
                 "order_date": stmt.excluded.order_date,
                 "status": stmt.excluded.status,
+                "signed_date": stmt.excluded.signed_date,
             },
         )
         await s.execute(stmt)

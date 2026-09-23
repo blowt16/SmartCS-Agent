@@ -15,7 +15,7 @@ from app.models.user import User
 
 router = APIRouter()
 
-ORDER_STATUSES = ["处理中", "已发货", "已送达"]
+ORDER_STATUSES = ["处理中", "已发货", "已送达", "已签收"]
 TICKET_STATUSES = ["待处理", "已解决"]
 
 

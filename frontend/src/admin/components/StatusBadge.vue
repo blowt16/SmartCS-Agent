@@ -13,7 +13,7 @@ import { computed } from 'vue';
 // 各处颜色映射在页面里决定。
 const props = defineProps({
   text: String,
-  color: { type: String, default: 'gray' },   // gray|green|blue|amber|red
+  color: { type: String, default: 'gray' },   // gray|green|blue|amber|red|teal
 });
 
 const MAP = {
@@ -22,6 +22,8 @@ const MAP = {
   blue: 'bg-blue-100 text-blue-600',
   amber: 'bg-amber-100 text-amber-600',
   red: 'bg-red-100 text-red-600',
+  // 订单「已签收」用,与「已送达」的 green 区分
+  teal: 'bg-teal-100 text-teal-600',
 };
 
 const colorClass = computed(() => MAP[props.color] || MAP.gray);
