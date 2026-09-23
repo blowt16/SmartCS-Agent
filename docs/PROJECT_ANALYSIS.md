@@ -120,7 +120,7 @@ flowchart TB
         direction TB
         MW["LoggingMiddleware<br/>CORS Middleware"]
         LG["/api/langgraph/query<br/>Agent 多路由 SSE"]
-        UPLOAD["/api/upload<br/>文件上传 + 索引"]
+        ADMIN["/api/admin/*<br/>管理端（含知识库索引）"]
         AUTH["/api/register /api/token<br/>认证"]
         CONV["/api/conversations<br/>会话管理"]
     end
@@ -297,7 +297,7 @@ flowchart TB
         R2 --> R3{"按地址分发"}
         R3 -->|"对话提问 /api/langgraph/query"| R4["对话主链路：预处理 → 智能体 → 流式回答"]
         R3 -->|"登录注册 /api/register、/api/token"| R5["账号认证（JWT 签发与校验）"]
-        R3 -->|"知识上传 /api/upload"| R6["文档解析 → 切块 → 向量入库"]
+        R3 -->|"知识上传（管理端）/api/admin/knowledge/commit"| R6["文档解析 → 切块 → 向量入库"]
         R3 -->|"会话管理 /api/conversations…"| R7["会话列表 / 消息 / 删除改名"]
         R3 -->|"其余路径"| R8["前端静态资源"]
     end
@@ -776,7 +776,7 @@ flowchart TD
 
 #### 4.9.4 前端模块（出口接收端）
 
-Vue3 SFC 工程（`frontend/`，dev 由 vite 代理 `/api` → `:8000`；生产由后端将 `frontend/dist` 静态挂载于 `/`——dist 未构建则 404）。主聊天单页：登录门 → Sidebar（会话 CRUD）→ ChatArea → DocsPanel。
+Vue3 SFC 工程（`frontend/`，dev 由 vite 代理 `/api` → `:8000`；生产由后端将 `frontend/dist` 静态挂载于 `/`——dist 未构建则 404）。主聊天单页：登录门 → Sidebar（会话 CRUD）→ ChatArea。（客户端原有的文档上传/DocsPanel 面板已于 2026-09-23 下线，知识库统一由管理端 `admin.html` 处理；管理端为同一 Vite 工程的第二个入口。）
 
 **SSE 流接收运行流程**（`composables/useChat.js`）：
 

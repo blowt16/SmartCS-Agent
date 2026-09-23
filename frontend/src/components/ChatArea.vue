@@ -43,21 +43,6 @@
             DeepSeek
           </span>
 
-          <!-- 文档管理按钮 -->
-          <button
-            @click="emit('toggle-docs')"
-            class="w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200"
-            :class="[
-              docsPanelOpen
-                ? 'bg-primary text-white'
-                : isDark
-                  ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  : 'bg-gray-100 text-gray-600 hover:bg-primary hover:text-white'
-            ]"
-          >
-            <i class="fas fa-folder"></i>
-          </button>
-
           <!-- 暗色模式切换 -->
           <button
             @click="emit('toggle-dark')"
@@ -254,15 +239,6 @@
           <i class="fas fa-image"></i>
         </button>
 
-        <!-- 文档上传按钮 -->
-        <button
-          @click="emit('toggle-docs')"
-          class="w-10 h-10 rounded-xl flex items-center justify-center transition-colors flex-shrink-0"
-          :class="isDark ? 'bg-gray-600 text-gray-300 hover:bg-primary hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-primary hover:text-white'"
-        >
-          <i class="fas fa-file-alt"></i>
-        </button>
-
         <!-- 文本输入框 -->
         <textarea
           ref="messageInput"
@@ -307,13 +283,12 @@ const props = defineProps({
   isTyping: { type: Boolean, default: false },
   currentConversation: { type: Object, default: null },
   isDark: { type: Boolean, default: false },
-  docsPanelOpen: { type: Boolean, default: true },
   stats: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits([
   'send', 'save-title', 'preview-image',
-  'toggle-sidebar', 'toggle-docs', 'toggle-dark',
+  'toggle-sidebar', 'toggle-dark',
 ]);
 
 // 输入区局部状态

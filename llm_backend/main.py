@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -13,14 +13,11 @@ from app.core.logger import get_logger, log_structured, log_round_start, log_rou
 from app.core.middleware import LoggingMiddleware
 from app.core.config import settings
 from app.api import api_router
-from app.core.database import AsyncSessionLocal
 from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from sqlalchemy import select
 from app.services.conversation_service import ConversationService
-import uuid
 import os
-from app.services.indexing_service import IndexingService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
@@ -120,118 +117,6 @@ class LangGraphRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-@app.post("/api/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    user_id: str = Form(...)
-):
-    """上传文件并准备 RAG 处理"""
-    try:
-        log_structured("file_upload", {
-            "user_id": user_id,
-            "filename": file.filename,
-            "content_type": file.content_type,
-        })
-
-        # 1. 创建基于UUID的一级目录
-        user_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"user_{user_id}"))
-        first_level_dir = UPLOAD_DIR / user_uuid
-        
-        # 2. 创建基于时间戳的二级目录
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        second_level_dir = first_level_dir / timestamp
-        second_level_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 3. 生成带时间戳的文件名
-        original_name, ext = os.path.splitext(file.filename)
-        new_filename = f"{original_name}_{timestamp}{ext}"
-        file_path = second_level_dir / new_filename
-        
-        # 保存文件
-        content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
-            
-        # 获取文件信息
-        file_info = {
-            "filename": new_filename,
-            "original_name": file.filename,
-            "size": len(content),
-            "type": file.content_type,
-            "path": str(file_path).replace('\\', '/'),
-            "user_id": user_id,
-            "user_uuid": user_uuid,
-            "upload_time": timestamp,
-            "directory": str(second_level_dir)
-        }
-
-        # 4. 处理文件索引
-        indexing_service = IndexingService()
-        index_result = await indexing_service.process_file(file_info)
-
-        # 契约:处理类错误 200+status;校验类错误 400(见 spec §3 API 响应契约)
-        if index_result.get("status") == "failed" and index_result.get("error") in (
-            "unsupported", "too_large", "empty_file",
-        ):
-            raise HTTPException(status_code=400, detail=index_result.get("detail", index_result.get("error")))
-
-        # 合并结果
-        result = {**file_info, "index_result": index_result}
-
-        return result
-
-    except HTTPException:
-        raise  # 内层已明确的 HTTP 契约错误(如校验类 400),不套 500
-    except Exception as e:
-        logger.exception("Upload failed for user {}: {}", user_id, str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/documents")
-async def list_documents(user_id: str = Query(...)):
-    """文件级文档列表(按 user_id 过滤,时间倒序)。"""
-    from sqlalchemy import select, desc
-    from app.models.document import Document
-
-    async with AsyncSessionLocal() as session:
-        rows = (await session.execute(
-            select(Document).where(Document.user_id == user_id).order_by(desc(Document.created_at))
-        )).scalars().all()
-    return {
-        "user_id": user_id,
-        "total": len(rows),
-        "documents": [
-            {
-                "md5": d.md5, "original_filename": d.original_filename,
-                "file_type": d.file_type, "file_size": d.file_size,
-                "page_count": d.page_count, "chunk_count": d.chunk_count,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            }
-            for d in rows
-        ],
-    }
-
-
-@app.delete("/api/documents/{md5}")
-async def delete_document(md5: str, user_id: str = Query(...)):
-    """按文件删除:chunks 与记录同事务删除;md5 不存在返回 404。"""
-    from sqlalchemy import delete
-    from app.models.document import Document
-    from app.models.document_chunk import DocumentChunk
-
-    async with AsyncSessionLocal() as session:
-        doc = (await session.execute(
-            select(Document).where(Document.user_id == user_id, Document.md5 == md5)
-        )).scalar_one_or_none()
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"文档不存在: {md5}")
-        await session.execute(delete(DocumentChunk).where(
-            DocumentChunk.user_id == user_id, DocumentChunk.md5 == md5
-        ))
-        await session.delete(doc)
-        await session.commit()
-    return {"md5": md5, "deleted": True}
-
 
 @app.post("/chat-rag")
 async def rag_chat_endpoint(request: RAGChatRequest):

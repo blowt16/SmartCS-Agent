@@ -19,7 +19,7 @@ LLM_BACKEND = str(Path(__file__).resolve().parent.parent)
 # 无关的 uv 脚手架 main.py(只有 `def main()`,没有 `app`)。若 llm_backend 已在 sys.path 的
 # 靠后位置,那个 `if` 就什么都不做 → `from main import app` 命中根目录的 stub →
 # ImportError: cannot import name 'app' from 'main'。
-# 症状很有迷惑性:与 test_admin_auth.py / test_documents_api.py(模块顶层 import main)
+# 症状很有迷惑性:与 test_admin_auth.py(模块顶层 import main)
 # 同会话跑就"碰巧能过"(正确的 main 已进 sys.modules),单独跑则必挂。
 if LLM_BACKEND in sys.path:
     sys.path.remove(LLM_BACKEND)
@@ -106,7 +106,7 @@ def _import_app():
        llm_backend 在 sys.path[0],到 fixture 执行时仓库根被重新插到了 [0])。而仓库根有
        一个 uv 脚手架 main.py(只有 `def main()`,没有 `app`)。
        → ImportError: cannot import name 'app' from 'main' (D:\SmartCS-Agent\main.py)
-       这个坑还会伪装:与模块顶层 import main 的文件(test_admin_auth / test_documents_api)
+       这个坑还会伪装:与模块顶层 import main 的文件(test_admin_auth)
        同会话跑就"碰巧能过"(正确的 main 已进 sys.modules),单独跑则必挂。
 
     所以:导入前当场把路径摆正,并把已缓存的错误 main 清出去。两行都不能省。

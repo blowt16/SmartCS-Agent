@@ -18,7 +18,8 @@
 > **实施中发现的 spec 数值偏差**（行为正确，仅记数不符）：§7.3 的紧急度小结写「低 2 / 中 5 / 高 1」，但同节的逐行表实为「低 3 / 中 4 / 高 1」——**按逐行表实施**（表是具体数据，小结是派生物）。另 §8.5 预测全空白 md 会返回 `empty_file`，实测是 `parse_error`（倒在 `parse_text_file` 的解码校验，行为本身正确：200 + error 事件 + 保留暂存文件）；测试断言已放宽为 `in ("empty_file", "parse_error")` 并注明原因。
 > **本机环境备注**：`bsk`（BrowserSkill）因 Windows 保留了 TCP 段 **52761–52860**（`netsh int ipv4 show excludedportrange` 可查），守护进程**无法绑定默认端口 52800**（bind 报 errno 13，且无进程占用），故本轮浏览器验收改用本地 Playwright + 已装的 Chromium 145 完成；清理该保留段需管理员执行 `net stop winnat && net start winnat`，未擅自操作。
 >
-> **归档后的变更**（2026-09-22，本条为最新判定；上文 D15／§6.3.1／本机环境备注 是当时的决策与状态记录，**保留原文不改写**）：
+> **归档后的变更**（2026-09-22 起，本条为最新判定；上文 D15／§6.3.1／本机环境备注／§3 表格 等是当时的决策与状态记录，**保留原文不改写**）：
+> - **客户端知识库功能整体下线**（2026-09-23，用户决策：后续统一由管理端处理）——客户端 `DocsPanel.vue`、`src/api/upload.js` 及 `App.vue`／`ChatArea.vue` 中的全部相关状态、函数与入口按钮已删除；后端 `POST /api/upload`、`GET /api/documents`、`DELETE /api/documents/{md5}` 三个端点连同 `tests/test_documents_api.py` **一并删除**（`main.py` 中随之失去引用的 `uuid` / `IndexingService` / `Query` / `AsyncSessionLocal` 四个 import 已清理）。**本文档中所有「`/api/upload` 保持原样」「不动既有端点行为」「管理端不再调用 `/api/upload`」等表述均已不适用**——该端点已不存在。`/api/upload/image`（聊天图片上传，另一条路由）与 `IndexingService.process_file`（管理端 `commit` 仍依赖）**保留未动**。副产品：`docs/项目问题.md` #16 记的「三端点不校验令牌」缺陷随之消失（删除而非加鉴权）。
 > - **`AdminLogin.vue` 新增「记住账号」**——§6.3.1 原列为「不做」。原理由针对的是客户端把**密码明文**写进 `localStorage`（`docs/项目问题.md` #15 附带发现②），而本实现**只存邮箱、不存密码**（键 `remembered-admin-email`，与客户端 `remembered-credentials` 相互独立），不触及该风险面。管理员密码至今不入任何浏览器存储。
 > - **`LoginView.vue` 登录按钮下新增「进入管理端」链接**（`href="/admin.html"`，同标签跳转）——D15 原写「客户端一行不改」。用户 2026-09-22 明确要求提供该入口，正向发现路径不再只靠 README 与书签；管理端登录页的「返回客服端」仍是对应退路。
 > - **上文「本机环境备注」中的 `bsk` 问题已解决**：CLI 与扩展升级至 **0.3.0**，端口改为 **35000**（默认 52800 仍落在保留段内）。注意 0.3.0 的 `--port` 是**隐藏选项**（`bsk daemon start --help` 不显示），且守护进程空闲 10 分钟即退出——**每次使用前需显式 `bsk daemon start --port 35000`**，任何命令自动拉起守护进程时用的仍是 52800，必然失败。本轮管理端端到端复测即用 `bsk` 驱动真实 Edge 完成，6 个模块全部通过。

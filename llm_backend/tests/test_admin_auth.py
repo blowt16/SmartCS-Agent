@@ -36,7 +36,7 @@ ADMIN_ENDPOINTS = [
 
 @asynccontextmanager
 async def _client():
-    """ASGI 直连(不起 uvicorn),与 tests/test_documents_api.py 同模式。"""
+    """ASGI 直连(不起 uvicorn)。"""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
 

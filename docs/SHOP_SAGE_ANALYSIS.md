@@ -2,6 +2,8 @@
 
 > ⚠️ 本文撰写于 2026-08-16 Neo4j 退役之前：文中 SmartCS 侧涉及 Neo4j/Text2Cypher/predefined_cypher/实体识别 的描述（如工作流图、bug 记录、健康检查建议）请以历史视角阅读——这些组件已于同日整体移除，当前知识库查询统一走 pgvector 向量检索。
 
+> ⚠️ 另注（2026-09-23 补）：文中多处以 `POST /api/upload` 为改造对象的建议（如「Celery 接管 `/api/upload` 索引」「`/api/upload` 同步阻塞」「`/api/upload` 完全免鉴权」）中，**该端点已于 2026-09-23 随客户端知识库功能下线一并删除**。这些建议的**技术关切本身仍然成立**（索引同步阻塞、无重试/分批/幂等、任务队列），但改造对象应改为管理端的 `POST /api/admin/knowledge/commit`（它同样走 `app/services/indexing_service.py`）；其中「`/api/upload` 免鉴权」一条**已随端点删除而消解**（详见 `docs/项目问题.md` #16）。正文保留原文，以本条为准。
+
 > 本文档服务于 SmartCS-Agent 二次开发：对比分析 `D:\ShopSage` 与本项目，提炼 ShopSage 中可迁移到 SmartCS-Agent 的**架构与功能流程设计亮点**，并映射到本项目当前痛点，给出落地优先级建议。
 >
 > 分析方法：两份只读源码走读（SmartCS-Agent 约 1.1 万行 Python；ShopSage 全仓库），关键结论已抽样复核。
