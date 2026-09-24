@@ -71,3 +71,7 @@ llm_backend/models/
 llm_backend/evaluation/results/
 # 根目录 uploads（cwd 混淆运行残留，不入库）
 /uploads/
+
+# AOCI agent host integration (machine-bound; do not commit)
+.mcp.json
+.mcp.json.backup.*
