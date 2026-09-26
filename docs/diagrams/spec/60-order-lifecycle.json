@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "订单状态生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      980,
+      566
+    ],
+    "output": "D:/SmartCS-Agent/docs/diagrams/60-order-lifecycle.html"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "订单状态"
+    },
+    {
+      "id": "date_rule",
+      "label": "签收日期约束"
+    }
+  ],
+  "states": [
+    {
+      "id": "processing",
+      "type": "start",
+      "label": "处理中",
+      "sublabel": "默认值",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "shipped",
+      "type": "active",
+      "label": "已发货",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "delivered",
+      "type": "active",
+      "label": "已送达",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "signed",
+      "type": "success",
+      "label": "已签收",
+      "lane": "main",
+      "col": 3,
+      "step": "04"
+    },
+    {
+      "id": "clear",
+      "type": "decision",
+      "label": "非已签收 ⇒ 强制置 NULL",
+      "sublabel": "signed_date",
+      "lane": "date_rule",
+      "col": 0,
+      "width": 142
+    },
+    {
+      "id": "autofill",
+      "type": "decision",
+      "label": "已签收 ⇒ 取值优先级",
+      "sublabel": "传入值 → 保留原值 → 取当天",
+      "lane": "date_rule",
+      "col": 1,
+      "width": 142
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-ship",
+      "from": "processing",
+      "to": "shipped",
+      "label": "发货",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "t-deliver",
+      "from": "shipped",
+      "to": "delivered",
+      "label": "送达",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "t-sign",
+      "from": "delivered",
+      "to": "signed",
+      "label": "签收",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "t-admin",
+      "from": "processing",
+      "to": "signed",
+      "variant": "dashed",
+      "label": "管理员可直接改（无状态机约束）",
+      "fromSide": "top",
+      "toSide": "top",
+      "route": "top-channel",
+      "channelY": 105
+    },
+    {
+      "id": "t-fill",
+      "from": "signed",
+      "to": "autofill",
+      "label": "填签收日期",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "t-clear",
+      "from": "delivered",
+      "to": "clear",
+      "label": "非已签收 → 强制清空",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "状态值三处同源",
+      "items": [
+        "console.py:18 ORDER_STATUSES = [处理中, 已发货, 已送达, 已签收]",
+        "schemas/admin.py:30,41 正则 ^(处理中|已发货|已送达|已签收)$",
+        "models/order.py:20 默认 处理中"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "signed_date 绑定规则",
+      "items": [
+        "创建：status ≠ 已签收 ⇒ 置 NULL；= 已签收 ⇒ 传入值，否则取当天",
+        "更新：改回非已签收 ⇒ 强制清空；= 已签收 ⇒ 传入值 → 保留原值 → 取当天",
+        "依据 orders.py:121 / :177"
+      ]
+    }
+  ]
+}
