@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "知识库上传与索引管道",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      602
+    ],
+    "output": "D:/SmartCS-Agent/docs/diagrams/50-knowledge-upload.html"
+  },
+  "stages": [
+    {
+      "label": "暂存与校验"
+    },
+    {
+      "label": "解析"
+    },
+    {
+      "label": "清洗切块"
+    },
+    {
+      "label": "向量化"
+    },
+    {
+      "label": "入库"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "form_modal",
+      "type": "frontend",
+      "label": "KnowledgeFormModal",
+      "sublabel": "客户端预检",
+      "stage": 0,
+      "row": 2,
+      "width": 116
+    },
+    {
+      "id": "stage_api",
+      "type": "backend",
+      "label": "POST /knowledge/stage",
+      "sublabel": "md5 + 扩展名/大小校验",
+      "stage": 0,
+      "row": 1,
+      "width": 134
+    },
+    {
+      "id": "staging",
+      "type": "database",
+      "label": "uploads/_staging/",
+      "sublabel": "{md5}{ext} 暂存区",
+      "stage": 0,
+      "row": 0,
+      "width": 110
+    },
+    {
+      "id": "commit_api",
+      "type": "backend",
+      "label": "POST /knowledge/commit",
+      "sublabel": "SSE 流式响应",
+      "stage": 1,
+      "row": 0,
+      "width": 140
+    },
+    {
+      "id": "index_svc",
+      "type": "backend",
+      "label": "IndexingService.process_file",
+      "sublabel": "校验 → 去重 → 解析",
+      "stage": 1,
+      "row": 1,
+      "width": 176
+    },
+    {
+      "id": "doc_parser",
+      "type": "backend",
+      "label": "doc_parser / mineru_client",
+      "sublabel": "docx/txt 本地解析，pdf 云端",
+      "stage": 1,
+      "row": 2,
+      "width": 164
+    },
+    {
+      "id": "cleaner",
+      "type": "backend",
+      "label": "text_cleaner.clean_text",
+      "sublabel": "去控制字符 / 页眉 / 目录行",
+      "stage": 2,
+      "row": 2,
+      "width": 146
+    },
+    {
+      "id": "splitter",
+      "type": "backend",
+      "label": "RecursiveCharacterTextSplitter",
+      "sublabel": "500/50，块号 + 章节 + sku",
+      "stage": 2,
+      "row": 3,
+      "width": 188
+    },
+    {
+      "id": "embedder",
+      "type": "cloud",
+      "label": "embed_in_batches",
+      "sublabel": "批 ≤10，重试 [1,2,4]s",
+      "stage": 3,
+      "row": 3,
+      "width": 104
+    },
+    {
+      "id": "documents",
+      "type": "database",
+      "label": "documents 表",
+      "sublabel": "文件级记录",
+      "stage": 4,
+      "row": 0,
+      "width": 80
+    },
+    {
+      "id": "chunks",
+      "type": "database",
+      "label": "document_chunks",
+      "sublabel": "HNSW + GIN 生成列",
+      "stage": 4,
+      "row": 3,
+      "width": 98
+    },
+    {
+      "id": "sse_progress",
+      "type": "messagebus",
+      "label": "SSE 进度回传",
+      "sublabel": "progress / done / error",
+      "stage": 4,
+      "row": 2,
+      "width": 106
+    }
+  ],
+  "flows": [
+    {
+      "id": "form_modal-stage_api",
+      "from": "form_modal",
+      "to": "stage_api",
+      "label": "上传文件",
+      "variant": "emphasis",
+      "labelDy": -15
+    },
+    {
+      "id": "stage_api-staging",
+      "from": "stage_api",
+      "to": "staging",
+      "label": "校验通过 → 写暂存（不解析、不入库）",
+      "variant": "emphasis",
+      "labelDy": -15
+    },
+    {
+      "id": "staging-commit_api",
+      "from": "staging",
+      "to": "commit_api",
+      "label": "确认提交",
+      "variant": "emphasis"
+    },
+    {
+      "id": "commit_api-index_svc",
+      "from": "commit_api",
+      "to": "index_svc",
+      "label": "user_id 取 JWT（与 /stage 取 form 字段不对称）",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "index_svc-doc_parser",
+      "from": "index_svc",
+      "to": "doc_parser",
+      "label": "按 file_type 分支",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "doc_parser-cleaner",
+      "from": "doc_parser",
+      "to": "cleaner",
+      "label": "清洗噪音",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cleaner-splitter",
+      "from": "cleaner",
+      "to": "splitter",
+      "label": "切块 500/50",
+      "variant": "emphasis",
+      "labelDy": 34
+    },
+    {
+      "id": "splitter-embedder",
+      "from": "splitter",
+      "to": "embedder",
+      "label": "分批向量化",
+      "variant": "emphasis"
+    },
+    {
+      "id": "embedder-chunks",
+      "from": "embedder",
+      "to": "chunks",
+      "label": "单事务写入文档块",
+      "variant": "emphasis"
+    },
+    {
+      "id": "index_svc-documents",
+      "from": "index_svc",
+      "to": "documents",
+      "label": "写入文件级记录",
+      "labelDy": -15
+    },
+    {
+      "id": "index_svc-sse_progress",
+      "from": "index_svc",
+      "to": "sse_progress",
+      "label": "progress / done / error 三类事件",
+      "labelDy": 18
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "两个易踩的现状",
+      "items": [
+        "documents.status='disabled' 不影响检索（向量/BM25 SQL 均不过滤）",
+        "/stage 的 user_id 取 multipart 表单字段，/commit 取 JWT，两者不对称"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "进度权重（封顶 99）",
+      "items": [
+        "validate 5% / parse 45% / clean 5% / split 5% / embed 35% / store 5%",
+        "100 只由 done 事件发出",
+        "删除知识库会级联删 chunks，避免孤儿块仍被检索"
+      ]
+    }
+  ]
+}
