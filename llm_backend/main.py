@@ -24,7 +24,7 @@ from app.lg_agent.utils import new_uuid
 from app.lg_agent.lg_builder import graph, init_checkpointer, close_checkpointer
 from app.lg_agent.stream_filter import StreamChunkFilter
 from app.services.pronoun_detector import _is_filler  # 语气词闸门临时借用（SPEC_ENTRY_LLM_RESOLUTION 落地后 FILLER 迁入 redis_semantic_cache，届时改 import）
-from app.services.pronoun_resolver import resolve_pronouns
+from app.services.pronoun_resolver import resolve_pronouns_ex
 from app.services.redis_semantic_cache import RedisSemanticCache
 from langchain_core.messages import HumanMessage, AIMessage
 import json
@@ -289,16 +289,21 @@ async def langgraph_query(
         # 注：缓存入口 redis_semantic_cache._resolve_message 仍为旧两段式正则，
         # 遗留问题与后续方案见 docs/项目问题.md #11
         resolved_query = query
+        ref_candidates: List[str] = []
         if (
             settings.RESOLVE_ENABLED
             and not (settings.RESOLVE_SKIP_FILLER and _is_filler(query))
             and history_messages
         ):
-            resolved_query = await resolve_pronouns(
+            # _ex 版本额外返回"多候选指代"信息：用户用了指代但上文有多款同等候选时，
+            # 不擅自选定，交由图内澄清节点反问用户（SPEC_MULTI_CANDIDATE_REFERENCE）
+            _resolve = await resolve_pronouns_ex(
                 _get_resolve_llm(),
                 history_messages + [{"role": "user", "content": query}],
                 query,
             )
+            resolved_query = _resolve.query
+            ref_candidates = _resolve.candidates
 
         # ===== 语义缓存检索（消解后、进图前；命中短路，跳过整个图流程）=====
         # 缓存内容由 graphrag/chat 链路完整回答后写入（ScopeGuard 把关的范围内回答），
@@ -321,7 +326,7 @@ async def langgraph_query(
         # 新会话或正常多轮对话，始终用 InputState 输入
         # LangGraph 通过 thread_id 自动维护上下文状态
         logger.info("Processing with InputState" + (" (continuing thread {})" if state_history else " (new thread)"), thread_id)
-        input_state = InputState(messages=resolved_query)
+        input_state = InputState(messages=resolved_query, ref_candidates=ref_candidates)
 
         async def process_stream():
             # 收集完整回答，图结束后回写语义缓存

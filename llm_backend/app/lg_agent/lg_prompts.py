@@ -200,3 +200,15 @@ CLARIFY_SYSTEM_PROMPT = """你是一个电商领域的智能客服。用户的�
 用户消息：
 {question}
 """
+
+
+# 多候选指代的澄清回复（SPEC_MULTI_CANDIDATE_REFERENCE §4.4）。
+# ⚠️ **确定性模板，不走 LLM**——这是实测后的设计变更：
+#     曾两次尝试让 LLM 生成这段话术并"把候选逐条列出"，均失败：模型看到上一条助手
+#     回复已列过商品，便只写"帮您把刚才提到的两款列出来"而**不列**（第二次还换用词
+#     绕过了 prompt 里禁用的表述）。让模型复述它认为已给过的内容，是逆着其倾向做事；
+#     而候选列表本是确定性数据，不该交给模型重新生成。
+# {candidate_lines} 由 lg_builder._render_candidate_lines 生成（含尽力提取的价格）。
+CLARIFY_MULTI_CANDIDATE_REPLY = """亲～您问的是哪一款呢？😊
+{candidate_lines}
+回复序号或型号都可以哦～"""

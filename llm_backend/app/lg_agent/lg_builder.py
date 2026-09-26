@@ -9,6 +9,7 @@ from app.lg_agent.lg_prompts import (
     COMPLAINT_PLACEHOLDER_REPLY,
     CLARIFY_SYSTEM_PROMPT,
     CLARIFY_FALLBACK_REPLY,
+    CLARIFY_MULTI_CANDIDATE_REPLY,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
@@ -28,6 +29,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables.base import Runnable
 import base64
 import math
+import re
 import os
 import aiohttp
 import json
@@ -63,6 +65,29 @@ def _normalize_sub_type(router_type: str, sub_type: object) -> str:
     if router_type != "aftersale":
         return "none"
     return sub_type if sub_type in _AFTERSALE_SUB_TYPES else "other"
+
+
+_PRICE_RE = re.compile(r"¥\s*([\d,]+(?:\.\d+)?)")
+_PRICE_WINDOW = 60   # 候选名之后多少字符内找价格
+
+
+def _render_candidate_lines(candidates: list, last_assistant_text: str) -> str:
+    """把候选渲染成带序号的列表行（确定性，不经 LLM）。
+
+    价格尽力从助手上一条回复里提取（候选名之后 _PRICE_WINDOW 字符内找 ¥xxx）：
+    取得到就带上，取不到只写型号——**宁缺毋滥，绝不编造**。
+    """
+    lines = []
+    for i, name in enumerate(candidates, 1):
+        suffix = ""
+        idx = last_assistant_text.find(name)
+        if idx >= 0:
+            m = _PRICE_RE.search(last_assistant_text, idx,
+                                 idx + len(name) + _PRICE_WINDOW)
+            if m:
+                suffix = f" —— ¥{m.group(1)}"
+        lines.append(f"{i}️⃣ {name}{suffix}")
+    return "\n".join(lines)
 
 
 def _normalize_confidence(raw: object) -> float:
@@ -190,6 +215,15 @@ def route_query(
     elif _risk == "high_risk":
         logger.info("意图路由: risk=high_risk → 节点=transfer_human | query: '{}'", query)
         return "transfer_human"
+
+    # 多候选指代：入口消解检测到用户指代有 ≥2 个同等候选 → 不猜，问用户
+    # （SPEC_MULTI_CANDIDATE_REFERENCE）。位置在 risk 之后：违规/高风险消息
+    # 不因指代歧义改道，安全优先。
+    candidates = getattr(state, "ref_candidates", None) or []
+    if len(candidates) >= 2:
+        logger.info("意图路由: 多候选指代({} 个: {}) → 节点=clarify_node | query: '{}'",
+                    len(candidates), "、".join(candidates[:3]), query)
+        return "clarify_node"
 
     # 检查配置中是否有图片路径，如果有，优先处理为图片查询
     if hasattr(state, "config") and state.config and state.config.get("configurable", {}).get("image_path"):
@@ -319,6 +353,24 @@ async def clarify_node(
         # 被下方 except 吞掉 → 每次澄清都静默降级静态模板（同一句话、与 history 无关）。
         # 该缺陷自澄清功能上线起存在且长期未被发现——golden set 只测路由节点、
         # 从不执行本节点。回归防线见 tests/test_clarify_node.py
+        # 多候选指代：**确定性回复，不走 LLM**（理由见 CLARIFY_MULTI_CANDIDATE_REPLY 注释：
+        # 两次实测证明模型会因"上一条已列过"而拒绝在本条重列候选，只写"帮您把刚才提到的
+        # 两款列出来"然后不列）。候选列表是确定性数据，代码生成 100% 可靠且可单测。
+        candidates = getattr(state, "ref_candidates", None) or []
+        if len(candidates) >= 2:
+            last_assistant = ""
+            for m in reversed(state.messages):
+                if isinstance(m, AIMessage) and m.content:
+                    last_assistant = str(m.content)
+                    break
+            logger.info("-----clarify_node: 多候选指代({} 个)，走确定性话术-----",
+                        len(candidates))
+            return {"messages": [AIMessage(
+                content=CLARIFY_MULTI_CANDIDATE_REPLY.format(
+                    candidate_lines=_render_candidate_lines(candidates, last_assistant)
+                )
+            )]}
+
         system_prompt = CLARIFY_SYSTEM_PROMPT.format(
             logic=state.router["logic"], question=question
         )

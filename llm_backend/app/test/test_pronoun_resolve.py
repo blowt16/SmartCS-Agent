@@ -31,7 +31,11 @@ from app.services.deepseek_service import DeepseekService
 from app.services.llm_factory import LLMFactory
 from app.services.ollama_service import OllamaService
 from app.services.pronoun_detector import detect_pronoun, DetectionDecision
-from app.services.pronoun_resolver import resolve_pronouns, _format_history
+from app.services.pronoun_resolver import (
+    _format_history,
+    resolve_pronouns,
+    resolve_pronouns_ex,
+)
 from app.services.redis_semantic_cache import RedisSemanticCache
 
 PASS, FAIL = 0, 0
@@ -226,6 +230,74 @@ async def test_resolve_no_assistant_leak():
         leaked = [m for m in must_not if m in r]
         check(f"{name}: '{query}' → '{r}'", not missing and not leaked,
               f"缺失={missing} 泄漏={leaked}")
+
+
+# ==================== 2d. 多候选指代检测（SPEC_MULTI_CANDIDATE_REFERENCE §7.2）====================
+#
+# 助手一次列多款商品后，用户用"这款/多少钱"指代时，消解器**不得擅自选定**，
+# 应把候选放进 candidates，交由图内澄清节点反问用户（docs/项目问题.md #21）。
+#
+# ⚠️ M-5 是本组的**核心反例**：用户上一轮已指明具体商品、此后未引入新商品时，
+# 指代目标唯一，**不得**判为多候选——否则会频繁打扰（该风险见 spec §8 R1）。
+
+_DOOR_REPLY_MULTI = (
+    "亲～您好呀！👋 我们这边有多款智能门锁哦，给您整理一下目前在售的型号：\n"
+    "**小米系列**\n"
+    "- 小米智能门锁2 指静脉版：¥1099.00（有货）\n"
+    "- 小米全自动智能门锁Pro：¥1358.00（有货）\n"
+    "**鹿客系列**\n"
+    "- 鹿客 S50F：¥1299.00（有货）\n"
+)
+_DOOR_REPLY_SINGLE = "亲～推荐您看看小米智能门锁2 指静脉版，¥1099.00（有货）哦～"
+
+# (用例名, 历史, 当前消息, 期望有候选?, 期望 query 含)
+MULTI_CANDIDATE_CASES = [
+    ("M-1 助手列 3 款 · 用户用省略",
+     [("你们有智能门锁吗", _DOOR_REPLY_MULTI)], "多少钱", True, None),
+    ("M-2 助手只列 1 款 · 用户用省略",
+     [("你们有智能门锁吗", _DOOR_REPLY_SINGLE)], "多少钱", False, "小米智能门锁2"),
+    ("M-3 助手列 3 款 · 用户指明唯一型号",
+     [("你们有智能门锁吗", _DOOR_REPLY_MULTI)], "鹿客 S50F 保修多久", False, "鹿客"),
+    # 用户缩窄到品牌、但助手列了**两款小米** → 仍有歧义，应追问（不是误判）
+    ("M-3b 用户缩窄到品牌 · 但仍有两款同品牌",
+     [("你们有智能门锁吗", _DOOR_REPLY_MULTI)], "小米那款保修多久", True, None),
+    ("M-4 助手列 3 款 · 用户消息本身完整",
+     [("你们有智能门锁吗", _DOOR_REPLY_MULTI)], "你们支持七天无理由吗", False, None),
+    # ⭐ 核心反例：上一轮用户自己锁定了型号，本轮指代目标唯一 → 不得判多候选
+    ("M-5 上一轮已指明主体 · 本轮用指代",
+     [("小米智能门锁2 指静脉版多少钱", "亲～小米智能门锁2 指静脉版的价格是 ¥1099.00～")],
+     "那个保修多久", False, "小米智能门锁2"),
+    ("M-6 上一轮已指明主体 · 本轮省略主语",
+     [("小米智能门锁2 指静脉版多少钱", "亲～小米智能门锁2 指静脉版的价格是 ¥1099.00～")],
+     "有货吗", False, "小米智能门锁2"),
+]
+
+
+async def test_multi_candidate_detection():
+    """多候选检测 + 已指明主体不误判（真实 LLM）。"""
+    print("[消解器] 多候选指代检测（真实 LLM）")
+    llm = LLMFactory.create_chat_service()
+    for name, hist, query, expect_cands, must_contain in MULTI_CANDIDATE_CASES:
+        history = []
+        for u, a in hist:
+            history += [{"role": "user", "content": u}, {"role": "assistant", "content": a}]
+        try:
+            r = await resolve_pronouns_ex(
+                llm, history + [{"role": "user", "content": query}], query)
+        except Exception as e:
+            check(f"{name}（LLM 不可用，未验证）", False, f"{type(e).__name__}: {str(e)[:50]}")
+            continue
+        got_cands = r.ambiguous
+        detail = f"候选={r.candidates} query='{r.query}'"
+        ok = got_cands == expect_cands
+        if ok and must_contain:
+            ok = must_contain in r.query
+            detail += f" 需含'{must_contain}'"
+        if ok and expect_cands:
+            # 候选必须是助手回复里确实出现过的对象，不得编造
+            ok = all(any(c[:4] in a for _, a in hist) for c in r.candidates)
+            detail += " 候选须出自助手回复"
+        check(f"{name}: '{query}'", ok, detail)
 
 
 def test_history_truncation_configurable():
@@ -442,6 +514,7 @@ async def main():
     test_detector()
     await test_resolver()
     await test_resolve_no_assistant_leak()
+    await test_multi_candidate_detection()
     test_history_truncation_configurable()
     test_llm_service_signature()
     await test_deepseek_generate_passthrough()

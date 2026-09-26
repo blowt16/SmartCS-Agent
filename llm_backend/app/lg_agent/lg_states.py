@@ -81,7 +81,12 @@ class InputState:
         A new list of messages with the messages from `right` merged into `left`.
         If a message in `right` has the same ID as a message in `left`, the
         message from `right` will replace the message from `left`."""
-    
+    # 多候选指代（SPEC_MULTI_CANDIDATE_REFERENCE）：入口消解检测到用户指代有 ≥2 个
+    # 同等候选时填入，route_query 据此改走澄清节点。空 = 无歧义。
+    # 声明在 InputState 而非 AgentState——图构建为 StateGraph(AgentState, input=InputState)，
+    # 入口只能传本类声明的字段；AgentState 继承本字段，故一处生效。
+    ref_candidates: list[str] = field(default_factory=list)
+
 
 # @dataclass(kw_only=True)： 强制要求数据类中的所有字段必须以关键字参数的形式提供。即不能以位置参数的方式传递。
 @dataclass(kw_only=True)
