@@ -66,7 +66,14 @@ ROUTER_SYSTEM_PROMPT = """你是一个电商智能客服的意图识别引擎。
 4. sub_type 是**最后**才判断的维度——先按上面的准则定死 type 与 risk，再回来填 sub_type，
    不要因为判断二级场景而改动 type
 
-仅输出符合 schema 的 JSON（type / sub_type / risk / logic 四个字段）。
+## confidence 置信度（0~1 浮点数，独立填写、不影响上面的判断）
+对**本次 type 判断**的把握程度。如实反映不确定性，不要一律给高分：
+- 0.9~1.0：语义明确，几乎没有歧义
+- 0.75~0.9：基本确定，有轻微歧义
+- 0.6~0.75：在多个类别间摇摆
+- <0.6：几乎靠猜
+
+仅输出符合 schema 的 JSON（type / sub_type / risk / confidence / logic 五个字段）。
 """
 
 # 一般查询提示，即用户的问题与电商、产品、订单、技术支持无关

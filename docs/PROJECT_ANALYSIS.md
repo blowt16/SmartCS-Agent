@@ -483,6 +483,7 @@ flowchart TD
 | `sub_type` | logistics_query / return_refund / exchange / reship / order_query / other / none | 售后二级场景（仅 `type=aftersale` 时有效，否则 none）。**2026-09-26 恢复该维度**（推翻 2026-08-27 决策 #13）：识别层只答"用户说的是哪类诉求"（纯语义分类），"查订单/算差价/发起退货"等执行动作仍归售后 Agent。本次只落 state + 日志 + 评测，**不参与路由** |
 | `risk` | none / violation / high_risk | 风险维度；violation=违规拦截（解除限速/改装电池/越狱等），high_risk=转人工 |
 | `source` | rule / llm | 判定来源：规则层短路 / LLM 识别（供日志与评测统计规则命中率） |
+| `confidence` | float 0~1 | 模型自评置信度。**只记录、不参与路由**（2026-09-26 实测决策）：81 条样本中位数 0.92、仅 3 条低于 0.75，4 条判错全落高置信区（模型"自信地判错"），阈值 0.75 需误伤 2 条判对的才拦下 1 条判错的，净收益为负。规则层/经营范围预检短路记 1.0，结构化输出失败降级记 0.0 |
 | `logic` | str | 分类理由/次要意图，注入应答节点 prompt |
 
 **意图规则判定层**（`app/lg_agent/intent_rules.py`，2026-09-26 新增）：置于 LLM 之前，零延迟判定明确意图，命中即短路、未命中降级 LLM。**四道让行闸门**——风险信号词命中 / 未命中场景词 / 多意图（售前与售后词同时命中）/ 售后二级场景多命中，任一触发即交回 LLM。设计判据为"**宁可漏不可错**"：漏了只是降级 LLM（等同改造前），错了则短路走错分支。实测（真实问句留出集 35 条 + golden 46 条，合计 81 条）规则层误判 **0**；留出集命中率 57%。
@@ -1066,6 +1067,7 @@ class Router(TypedDict):
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
     source: Literal["rule", "llm"]  # 判定来源（规则层短路 / LLM 识别）
+    confidence: float               # 模型自评置信度，**只记录不参与路由**（实测判别力弱）
 ```
 
 **技术价值**:

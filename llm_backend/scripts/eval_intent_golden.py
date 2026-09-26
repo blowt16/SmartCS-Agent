@@ -207,6 +207,7 @@ async def eval_case(messages, expected, case_id, config) -> dict:
             "type": router["type"],
             "risk": router["risk"],
             "sub_type": router.get("sub_type", "none"),
+            "confidence": router.get("confidence", 0.0),
         }
         source = router.get("source", "llm")
     except Exception as e:
@@ -266,6 +267,23 @@ def summarize(results, title) -> dict:
           f" | 让行 LLM: {total - rule_hits - errors}"
           f" | 其中 LLM 分歧(type): {llm_bad}"
           + (f" | 异常: {errors}" if errors else ""))
+
+    # ---- 置信度分布（2026-09-26 起记录，供后续定阈值用；当前不参与路由）----
+    # 只统计 source=llm：规则层短路是确定性命中（confidence=1.0），混入会拉高分布。
+    llm_rows = [r for r in results if not r.get("error") and r["source"] == "llm"]
+    if llm_rows:
+        confs = sorted(r["actual"]["confidence"] for r in llm_rows)
+        n = len(confs)
+        print(f"  置信度(仅 source=llm, {n} 条): min={confs[0]:.2f} "
+              f"中位={confs[n // 2]:.2f} max={confs[-1]:.2f} | 当前不参与路由")
+        for th in (0.75, 0.9):
+            low = [r for r in llm_rows if r["actual"]["confidence"] < th]
+            if not low:
+                print(f"    阈值 {th}: 无样本低于该值")
+                continue
+            wrong = sum(1 for r in low if not r["matches"]["type"])
+            print(f"    阈值 {th}: 低置信 {len(low)} 条，其中判错 {wrong} "
+                  f"| 代价(误送澄清) {len(low) - wrong} 条 / 收益(拦下判错) {wrong} 条")
     return {"total": total, "rule_hits": rule_hits, "rule_bad": rule_bad,
             "errors": errors, "type_acc": dim_correct["type"], "type_n": dim_total["type"]}
 

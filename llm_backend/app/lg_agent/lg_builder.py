@@ -27,6 +27,7 @@ from typing import Dict, List
 from langchain_core.messages import AIMessage
 from langchain_core.runnables.base import Runnable
 import base64
+import math
 import os
 import aiohttp
 import json
@@ -64,6 +65,21 @@ def _normalize_sub_type(router_type: str, sub_type: object) -> str:
     return sub_type if sub_type in _AFTERSALE_SUB_TYPES else "other"
 
 
+def _normalize_confidence(raw: object) -> float:
+    """校正 confidence 为 [0,1] 浮点，非法一律 0.0。
+
+    confidence 只记录、不参与路由（理由见 Router.confidence 注释）。但必须挡掉
+    NaN——NaN 参与任何阈值比较恒为 False，将来启用阈值时会静默绕过判定。
+    字符串不静默转 float：避免"看起来有值"的假数据污染分布统计。
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0.0
+    value = float(raw)
+    if math.isnan(value) or not 0.0 <= value <= 1.0:
+        return 0.0
+    return value
+
+
 async def analyze_and_route_query(
     state: AgentState, *, config: RunnableConfig
 ) -> dict[str, Router]:
@@ -86,7 +102,8 @@ async def analyze_and_route_query(
     if not in_scope:
         logger.warning("经营范围预检拦截: {}", scope_reason)
         return {"router": Router(type="general", sub_type="none", risk="none",
-                                 logic=f"超出经营范围: {scope_reason}", source="rule")}
+                                 logic=f"超出经营范围: {scope_reason}", source="rule",
+                                 confidence=1.0)}   # 关键词预检，确定性命中
 
     # ④ 意图规则层（零延迟）：明确意图直接短路，未命中降级 LLM
     # 设计见 SPEC_INTENT_RULE_LAYER.md —— 规则层不判 risk（风险信号词命中即让行），
@@ -97,7 +114,8 @@ async def analyze_and_route_query(
         logger.info("意图规则层命中: type={} sub_type={} | {} | query: '{}'",
                     r_type, r_sub_type, r_reason, user_question)
         return {"router": Router(type=r_type, sub_type=r_sub_type, risk="none",
-                                 logic=f"规则层判定：{r_reason}", source="rule")}
+                                 logic=f"规则层判定：{r_reason}", source="rule",
+                                 confidence=1.0)}   # 关键词匹配，确定性命中
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
@@ -132,11 +150,15 @@ async def analyze_and_route_query(
         response["sub_type"] = _normalize_sub_type(
             response.get("type"), response.get("sub_type")
         )
+        response["confidence"] = _normalize_confidence(response.get("confidence"))
     except Exception as e:
         logger.error("Router 结构化输出失败，降级为 general/none: {}", str(e))
         response = Router(type="general", sub_type="none", risk="none",
-                          logic="结构化输出失败降级", source="llm")
+                          logic="结构化输出失败降级", source="llm", confidence=0.0)
+    # confidence 只记录不路由（实测判别力弱，见 SPEC §11.5）——此处仅落日志供后续统计
     logger.info("Analyze user query type completed, result: {}", response)
+    logger.info("意图置信度: source={} confidence={} | query: '{}'",
+                response.get("source"), response.get("confidence"), user_question)
     return {"router": response}
 
 def route_query(

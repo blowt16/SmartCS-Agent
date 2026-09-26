@@ -33,6 +33,12 @@ class Router(TypedDict):
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
     source: Literal["rule", "llm"]  # 判定来源：规则层短路 / LLM 识别（供日志与评测统计）
+    # 模型自评置信度 [0,1]。**只记录、不参与路由**（2026-09-26 实测决策）：
+    # 81 条样本中位数 0.92、仅 3 条低于 0.75，且 4 条判错全落在高置信区
+    # （模型"自信地判错"），阈值 0.75 需误伤 2 条判对的才拦下 1 条判错的，净收益为负。
+    # 故先按 source=llm 攒真实流量分布，攒够再定阈值。
+    # 取值约定：规则层/经营范围预检短路=1.0（确定性命中）；结构化输出失败降级=0.0。
+    confidence: float
 
 # @dataclass(kw_only=True)： 强制要求数据类中的所有字段必须以关键字参数的形式提供。即不能以位置参数的方式传递。
 @dataclass(kw_only=True)
@@ -82,7 +88,8 @@ class InputState:
 class AgentState(InputState):
     """State of the retrieval graph / agent."""
     router: Router = field(default_factory=lambda: Router(
-        type="general", sub_type="none", risk="none", logic="", source="llm"))
+        type="general", sub_type="none", risk="none", logic="",
+        source="llm", confidence=0.0))
     """The router's classification of the user's query."""
     steps: list[str] = field(default_factory=list)
     """Populated by the retriever. This is a list of documents that the agent can reference."""
