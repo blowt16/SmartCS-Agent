@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartCS-Agent 系统运行流程图集</title>
+<style>
+  :root {
+    --bg: #0f1115; --fg: #e6e8eb; --muted: #9aa3ad;
+    --card: #171a21; --line: #262b34; --accent: #63b3ed;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f8fa; --fg: #1a1d21; --muted: #5b636d;
+      --card: #ffffff; --line: #e3e6ea; --accent: #2b6cb0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px 24px 72px;
+    background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; margin: 0 0 8px; }
+  .lede { color: var(--muted); margin: 0 0 40px; }
+  h2 {
+    font-size: 1.05rem; margin: 40px 0 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line); color: var(--muted);
+    font-weight: 600; letter-spacing: .02em;
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { margin: 0 0 10px; }
+  a.item {
+    display: block; padding: 14px 18px; text-decoration: none;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    color: inherit; transition: border-color .15s, transform .15s;
+  }
+  a.item:hover { border-color: var(--accent); transform: translateX(2px); }
+  .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .name { font-weight: 600; color: var(--accent); }
+  .kind {
+    font-size: .72rem; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 1px 9px; white-space: nowrap;
+  }
+  .desc { color: var(--muted); font-size: .9rem; margin-top: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SmartCS-Agent 系统运行流程图集</h1>
+  <p class="lede">9 张交互式流程图，开发视角（含真实文件、函数、接口与表名）。每张可独立打开，支持缩放、搜索与明暗主题切换。</p>
+
+  <h2>主线 A · 客服对话</h2>
+  <ul>
+    <li><a class="item" href="00a-dialogue-spine.html">
+      <div class="row"><span class="name">客服对话端到端主路径</span><span class="kind">workflow</span></div>
+      <div class="desc">一条主线看完全流程：用户提问 → HTTP 入口 → 入口指代消解 → 意图识别与路由 → 售前导购 → SSE 流式出口。</div>
+    </a></li>
+    <li><a class="item" href="00b-dialogue-dispatch.html">
+      <div class="row"><span class="name">对话业务分派与出口</span><span class="kind">workflow</span></div>
+      <div class="desc">路由之后扇出到五类业务落点，再汇聚到 SSE 出口。含语义缓存「当前未启用」与出口闸门的标注。</div>
+    </a></li>
+    <li><a class="item" href="10-presales-orchestration.html">
+      <div class="row"><span class="name">售前导购编排流程</span><span class="kind">workflow</span></div>
+      <div class="desc">create_research_plan 容器 → TimeoutGuard 30s → multi_tool 子图（planner 任务分解 → Send 并行派发 → customer_tools 检索 → summarize → final_answer）。</div>
+    </a></li>
+    <li><a class="item" href="11-presales-retrieval.html">
+      <div class="row"><span class="name">售前检索管线</span><span class="kind">workflow</span></div>
+      <div class="desc">RAGRetrieverService 混合检索：向量 ∥ BM25 → RRF 融合 → Reranker 精排，加 RAG 门控动态补全；含两个未接入 @tool 的虚线标注。</div>
+    </a></li>
+    <li><a class="item" href="20-clarify.html">
+      <div class="row"><span class="name">追问与意图澄清</span><span class="kind">workflow</span></div>
+      <div class="desc">clarify_node 的提示词组装、历史压缩、LLM 生成与静态模板兜底，以及澄清后回到识别节点的虚线反馈环。</div>
+    </a></li>
+    <li><a class="item" href="30-intent-routing.html">
+      <div class="row"><span class="name">意图识别与路由决策</span><span class="kind">workflow</span></div>
+      <div class="desc">ScopeGuard 关键词预检 → Router 双维（type + risk）结构化输出 → route_query 优先级判定 → 8 个落点。</div>
+    </a></li>
+  </ul>
+
+  <h2>主线 B · 管理端</h2>
+  <ul>
+    <li><a class="item" href="40-admin-overview.html">
+      <div class="row"><span class="name">管理端端到端运行流程</span><span class="kind">workflow</span></div>
+      <div class="desc">前端四态鉴权闸门 → require_admin 组级依赖 → 控制台 / 商品 / 订单 / 知识库 / 工单五大模块，共 19 个端点。</div>
+    </a></li>
+    <li><a class="item" href="50-knowledge-upload.html">
+      <div class="row"><span class="name">知识库上传与索引管道</span><span class="kind">dataflow</span></div>
+      <div class="desc">暂存校验 → 解析 → 清洗切块 → 向量化 → 入库，五阶段对齐索引进度权重，含 SSE 进度回传通道。</div>
+    </a></li>
+    <li><a class="item" href="60-order-lifecycle.html">
+      <div class="row"><span class="name">订单状态生命周期</span><span class="kind">lifecycle</span></div>
+      <div class="desc">处理中 → 已发货 → 已送达 → 已签收，含签收日期绑定约束，以及代码中真实存在的「无状态机约束」任意跳转。</div>
+    </a></li>
+  </ul>
+</main>
+</body>
+</html>

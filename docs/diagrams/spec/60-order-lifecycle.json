@@ -19,6 +19,10 @@
     {
       "id": "date_rule",
       "label": "签收日期约束"
+    },
+    {
+      "id": "terminal",
+      "label": "终态"
     }
   ],
   "states": [
