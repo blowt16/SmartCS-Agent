@@ -5,7 +5,7 @@ from langgraph.graph import add_messages
 
 
 class Router(TypedDict):
-    """Classify user query: scenario + risk."""
+    """Classify user query: scenario + aftersale sub-scenario + risk."""
     logic: str                      # 分类理由（供回答生成参考）
     type: Literal[
         "presale",                  # 售前：商品咨询/参数/价格活动/推荐导购
@@ -15,11 +15,24 @@ class Router(TypedDict):
         "image",                    # 图片（原 image-query）
         "clarify",                  # 意图不明：语义上无法确定用户问什么 → 澄清节点
     ]
-    # 售后子场景（return_refund/logistics/order_query）不再由识别层判断——
-    # 判断需订单/历史等上下文，下沉到售后 Agent 工作流骨架第一步（简化设计，2026-08-27）
+    # 售后二级场景（2026-09-26 恢复该维度，推翻 2026-08-27 决策 #13）——
+    # 原决策"子场景判断需订单/历史等上下文"混淆了识别与执行两个环节：
+    # 识别层只回答"用户说的是哪类诉求"（纯语义分类，对话文本足够）；
+    # "查订单/算差价/发起退货"等执行动作仍归售后 Agent。
+    # 本次只落 state + 日志 + 评测，不参与路由（route_query 未改）。
+    sub_type: Literal[
+        "logistics_query",          # 物流查询
+        "return_refund",            # 退货退款
+        "exchange",                 # 换货
+        "reship",                   # 补发
+        "order_query",              # 订单查询
+        "other",                    # 其他/兜底：确定是售后但归不出细类
+        "none",                     # 非 aftersale 时必须为 none
+    ]
     risk: Literal[
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
+    source: Literal["rule", "llm"]  # 判定来源：规则层短路 / LLM 识别（供日志与评测统计）
 
 # @dataclass(kw_only=True)： 强制要求数据类中的所有字段必须以关键字参数的形式提供。即不能以位置参数的方式传递。
 @dataclass(kw_only=True)
@@ -68,7 +81,8 @@ class InputState:
 @dataclass(kw_only=True)
 class AgentState(InputState):
     """State of the retrieval graph / agent."""
-    router: Router = field(default_factory=lambda: Router(type="general", risk="none", logic=""))
+    router: Router = field(default_factory=lambda: Router(
+        type="general", sub_type="none", risk="none", logic="", source="llm"))
     """The router's classification of the user's query."""
     steps: list[str] = field(default_factory=list)
     """Populated by the retriever. This is a list of documents that the agent can reference."""

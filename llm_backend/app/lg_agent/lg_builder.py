@@ -40,25 +40,44 @@ from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import Memor
 from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.agent_safety import (
     ScopeGuard, TimeoutGuard,
 )
+from app.lg_agent.intent_rules import classify_by_rules
 
 
 # 构建日志记录器
 logger = get_logger(service="lg_builder")
+
+# 售后二级场景合法取值（与 Router.sub_type 的 Literal 保持一致）
+_AFTERSALE_SUB_TYPES = frozenset({
+    "logistics_query", "return_refund", "exchange", "reship", "order_query", "other",
+})
+
+
+def _normalize_sub_type(router_type: str, sub_type: object) -> str:
+    """校正 sub_type 与 type 的跨字段一致性。
+
+    schema 的 Literal 只能约束取值集合，约束不了跨字段搭配——模型可能给出
+    type=presale + sub_type=return_refund 这类组合，需在此收敛：
+        type≠aftersale → 必须 none；type=aftersale → 不可为 none（兜底 other）。
+    """
+    if router_type != "aftersale":
+        return "none"
+    return sub_type if sub_type in _AFTERSALE_SUB_TYPES else "other"
+
 
 async def analyze_and_route_query(
     state: AgentState, *, config: RunnableConfig
 ) -> dict[str, Router]:
     """Analyze the user's query and determine the appropriate routing.
 
-    This function uses a language model to classify the user's query and decide how to route it
-    within the conversation flow.
+    两级判定：① 意图规则层（零延迟关键词，命中即短路，不调模型）；
+    ② LLM 识别层（结构化输出，规则层未命中时降级至此）。
 
     Args:
         state (AgentState): The current state of the agent, including conversation history.
         config (RunnableConfig): Configuration with the model used for query analysis.
 
     Returns:
-        dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
+        dict[str, Router]: 含 'router' 键，值为分类结果（type / sub_type / risk / logic / source）。
     """
     # ③ 经营范围预检（关键词级，零延迟）
     user_question = state.messages[-1].content if state.messages else ""
@@ -66,7 +85,19 @@ async def analyze_and_route_query(
     in_scope, scope_reason = scope_guard.check(user_question)
     if not in_scope:
         logger.warning("经营范围预检拦截: {}", scope_reason)
-        return {"router": Router(type="general", risk="none", logic=f"超出经营范围: {scope_reason}")}
+        return {"router": Router(type="general", sub_type="none", risk="none",
+                                 logic=f"超出经营范围: {scope_reason}", source="rule")}
+
+    # ④ 意图规则层（零延迟）：明确意图直接短路，未命中降级 LLM
+    # 设计见 SPEC_INTENT_RULE_LAYER.md —— 规则层不判 risk（风险信号词命中即让行），
+    # 故短路结果 risk 恒为 none，不影响违规/高风险拦截。
+    rule_hit = classify_by_rules(user_question)
+    if rule_hit:
+        r_type, r_sub_type, r_reason = rule_hit
+        logger.info("意图规则层命中: type={} sub_type={} | {} | query: '{}'",
+                    r_type, r_sub_type, r_reason, user_question)
+        return {"router": Router(type=r_type, sub_type=r_sub_type, risk="none",
+                                 logic=f"规则层判定：{r_reason}", source="rule")}
 
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
     # 意图识别/路由为分类决策任务，低温（ROUTER_TEMPERATURE=0）保证同输入同输出
@@ -97,9 +128,14 @@ async def analyze_and_route_query(
         response = cast(
             Router, await model.with_structured_output(Router).ainvoke(messages)
         )
+        response["source"] = "llm"
+        response["sub_type"] = _normalize_sub_type(
+            response.get("type"), response.get("sub_type")
+        )
     except Exception as e:
         logger.error("Router 结构化输出失败，降级为 general/none: {}", str(e))
-        response = Router(type="general", risk="none", logic="结构化输出失败降级")
+        response = Router(type="general", sub_type="none", risk="none",
+                          logic="结构化输出失败降级", source="llm")
     logger.info("Analyze user query type completed, result: {}", response)
     return {"router": response}
 
@@ -120,6 +156,9 @@ def route_query(
     """
     _type = state.router["type"]
     _risk = state.router["risk"]
+    # 用 .get 而非下标：改造前落盘的 checkpoint 里 router 无 sub_type 字段，
+    # 续聊旧会话时下标访问会 KeyError（本次不改路由，sub_type 仅用于日志）
+    _sub = state.router.get("sub_type", "none")
     query = state.messages[-1].content if state.messages else ""
 
     # risk 拦截最优先：违规/高风险消息不进入任何业务处理路径
@@ -145,7 +184,8 @@ def route_query(
         logger.info("意图路由: 类型={} → 节点=create_research_plan(RAG 检索) | query: '{}'", _type, query)
         return "create_research_plan"
     elif _type == "aftersale":
-        logger.info("意图路由: 类型={} → 节点=aftersale_placeholder | query: '{}'", _type, query)
+        logger.info("意图路由: 类型={} 二级场景={} → 节点=aftersale_placeholder | query: '{}'",
+                    _type, _sub, query)
         return "aftersale_placeholder"
     elif _type == "complaint":
         logger.info("意图路由: 类型={} → 节点=complaint_placeholder | query: '{}'", _type, query)

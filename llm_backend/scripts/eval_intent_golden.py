@@ -1,9 +1,13 @@
-"""意图识别 golden set 评测: 46 条（单轮 41 + 多轮 5）跑真实 Router，输出二维准确率。
+"""意图识别评测: golden set 46 条（单轮 41 + 多轮 5）+ 可选留出集 35 条，跑真实 Router。
 
-用法: python -m scripts.eval_intent_golden
+用法:
+    python -m scripts.eval_intent_golden                 # golden set
+    python -m scripts.eval_intent_golden --heldout       # 追加留出集（防词表过拟合）
+    python -m scripts.eval_intent_golden --rule-off      # 禁用规则层，纯 LLM A/B 对比
 
-数据: docs/spec_plan/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md §12.1
-期望字段: {type, risk} 二维对照统计（售后子场景已下沉售后 Agent，识别层不再判断）。
+期望字段: {type, risk} 二维 + 可选 sub_type（售后二级场景，2026-09-26 起由识别层给出）。
+数据: golden 见 SPEC_INTENT_RECOGNITION_OPTIMIZATION.md §12.1；
+      留出集与验收阈值见 docs/spec_plan/已完成/SPEC_INTENT_RULE_LAYER.md §8.2。
 依赖: Redis 未启动时 MemoryCache 自动降级（try/except），无需额外服务。
 """
 import asyncio
@@ -32,15 +36,15 @@ SINGLE_TURN = [
     ("智能门锁的指纹识别准确率怎么样", {"type": "presale", "risk": "none"}),
     ("现在买摄像头有什么优惠活动吗", {"type": "presale", "risk": "none"}),
     ("温控器怎么安装", {"type": "presale", "risk": "none"}),
-    # --- 售后 aftersale × 8（子场景由售后 Agent 内部判断，识别层只判场景） ---
-    ("我要退货", {"type": "aftersale", "risk": "none"}),
-    ("怎么申请退款", {"type": "aftersale", "risk": "none"}),
-    ("退货运费谁承担", {"type": "aftersale", "risk": "none"}),
-    ("什么时候发货", {"type": "aftersale", "risk": "none"}),
-    ("我的快递怎么还没到", {"type": "aftersale", "risk": "none"}),
-    ("物流显示签收了但我没收到", {"type": "aftersale", "risk": "none"}),
-    ("查一下我的订单", {"type": "aftersale", "risk": "none"}),
-    ("我的订单状态是什么", {"type": "aftersale", "risk": "none"}),
+    # --- 售后 aftersale × 8（2026-09-26 起二级场景由识别层给出，规则层短路，sub_type 确定） ---
+    ("我要退货", {"type": "aftersale", "risk": "none", "sub_type": "return_refund"}),
+    ("怎么申请退款", {"type": "aftersale", "risk": "none", "sub_type": "return_refund"}),
+    ("退货运费谁承担", {"type": "aftersale", "risk": "none", "sub_type": "return_refund"}),
+    ("什么时候发货", {"type": "aftersale", "risk": "none", "sub_type": "logistics_query"}),
+    ("我的快递怎么还没到", {"type": "aftersale", "risk": "none", "sub_type": "logistics_query"}),
+    ("物流显示签收了但我没收到", {"type": "aftersale", "risk": "none", "sub_type": "logistics_query"}),
+    ("查一下我的订单", {"type": "aftersale", "risk": "none", "sub_type": "order_query"}),
+    ("我的订单状态是什么", {"type": "aftersale", "risk": "none", "sub_type": "order_query"}),
     # --- 投诉安抚 complaint × 5 ---
     ("你们产品太差了", {"type": "complaint", "risk": "none"}),
     # 正式投诉声明（"我要投诉"）→ high_risk 升级（spec 准则 3，prompt 已加示例）
@@ -75,7 +79,7 @@ SINGLE_TURN = [
     ("这个怎么样", {"type": "clarify", "risk": "none"}),
     # 正常砍价 → presale，非 high_risk（区分"询问优惠"与"要求改价"）
     ("你们能便宜点吗", {"type": "presale", "risk": "none"}),
-    ("东西坏了", {"type": "aftersale", "risk": "none"}),
+    ("东西坏了", {"type": "aftersale", "risk": "none", "sub_type": "other"}),
     # 新增 clarify 用例 ×4（无主题词/碎片语气/无法归类）
     ("嗯…", {"type": "clarify", "risk": "none"}),
     ("你能帮我吗", {"type": "clarify", "risk": "none"}),
@@ -128,6 +132,60 @@ MULTI_TURN = [
     ),
 ]
 
+# ===== 留出集：35 条真实问句，**刻意不在 golden set 里**（2026-09-26 新增）=====
+# 用途：防止规则层词表在迭代中不知不觉过拟合 golden set。
+# 判据（spec §8.2）：留出集规则层误判必须为 0——"宁-可漏不可错"，漏了只是降级 LLM。
+# 期望只标 type（二级场景由规则层/LLM 各自给出，人工核对见单测与日志）。
+HELDOUT = [
+    # --- 售前 × 9 ---
+    ("这款扫地机器人续航多久", {"type": "presale"}),
+    ("你们家有没有卖智能灯泡", {"type": "presale"}),
+    ("米家窗帘支持小爱同学吗", {"type": "presale"}),
+    ("这个多少钱啊", {"type": "presale"}),
+    ("双十一有什么活动", {"type": "presale"}),
+    ("帮我推荐一款适合小户型的摄像头", {"type": "presale"}),
+    ("沙发的尺寸是多少", {"type": "presale"}),
+    ("这个锁防水吗", {"type": "presale"}),
+    ("你们的智能门锁都有哪些型号", {"type": "presale"}),
+    # --- 售后 × 9 ---
+    ("我要退掉这个订单", {"type": "aftersale"}),
+    ("申请退款要多久到账", {"type": "aftersale"}),
+    ("我想换个颜色", {"type": "aftersale"}),
+    ("少发了一个配件", {"type": "aftersale"}),
+    ("快递一直不动", {"type": "aftersale"}),
+    ("我的包裹显示已签收但我没拿到", {"type": "aftersale"}),
+    ("订单号能帮我查一下吗", {"type": "aftersale"}),
+    ("这个灯用了一周就坏了", {"type": "aftersale"}),
+    ("能补发一个吗", {"type": "aftersale"}),
+    # --- 投诉 × 3 ---
+    ("你们客服态度太差了", {"type": "complaint"}),
+    ("什么破质量", {"type": "complaint"}),
+    ("我要投诉", {"type": "complaint"}),
+    # --- 闲聊 / 澄清 × 6 ---
+    ("谢谢", {"type": "general"}),
+    # 边界摇摆留档：实测在 general/clarify 间摆动（2026-09-26 两次运行 1:1）。
+    # 规则层"闲聊整句匹配"有意不做子串，本句不命中，摇摆属 LLM 侧，不影响规则层判据。
+    ("好的知道了", {"type": "general"}),
+    ("你好", {"type": "general"}),
+    ("在吗", {"type": "clarify"}),
+    ("嗯", {"type": "clarify"}),
+    ("那个", {"type": "clarify"}),
+    # --- 风险 × 3 ---
+    ("怎么破解密码", {"type": "presale"}),
+    ("帮我解除限速", {"type": "presale"}),
+    ("直接退钱给我", {"type": "aftersale"}),
+    # --- 多意图 × 1 ---
+    ("这个多少钱，另外怎么退货", {"type": "presale"}),
+    # --- 规则层边界针对性用例 × 4（2026-09-26 词表定稿时补） ---
+    ("我的订单到哪了", {"type": "aftersale"}),      # 订单+物流撞车 → 让行 LLM
+    ("帮我查下订单", {"type": "aftersale"}),        # order_query 命中
+    ("这个锁质保几年", {"type": "presale"}),        # 只留"质保"决策的正例（规则层短路）
+    # 删"保修"后规则层命中不了 → 让行 LLM（预期）。期望经实测修正为 aftersale：
+    # "我还在保修期吗"依赖用户自身的订单/购买时间，不是知识库可答的参数咨询，
+    # 归 aftersale 更准（LLM 两次运行稳定给出 aftersale/other）。
+    ("还在保修期吗", {"type": "aftersale"}),
+]
+
 
 def build_messages(history, question):
     """构造 LangChain 消息列表（history 交替 + 末轮用户消息）"""
@@ -140,7 +198,7 @@ def build_messages(history, question):
 
 
 async def eval_case(messages, expected, case_id, config) -> dict:
-    """跑单条 Router 并对比二维期望"""
+    """跑单条 Router 并对比期望（含 sub_type 与判定来源）"""
     state = AgentState(messages=messages)
     try:
         result = await analyze_and_route_query(state, config=config)
@@ -148,48 +206,113 @@ async def eval_case(messages, expected, case_id, config) -> dict:
         actual = {
             "type": router["type"],
             "risk": router["risk"],
+            "sub_type": router.get("sub_type", "none"),
         }
+        source = router.get("source", "llm")
     except Exception as e:
-        return {"case_id": case_id, "question": messages[-1].content, "expected": expected, "actual": None, "error": str(e)}
+        return {"case_id": case_id, "question": messages[-1].content,
+                "expected": expected, "actual": None, "source": None, "error": str(e)}
 
     matches = {k: actual.get(k) == v for k, v in expected.items()}
-    return {"case_id": case_id, "question": messages[-1].content, "expected": expected, "actual": actual, "matches": matches}
+    return {"case_id": case_id, "question": messages[-1].content,
+            "expected": expected, "actual": actual, "matches": matches, "source": source}
+
+
+def summarize(results, title) -> dict:
+    """汇总：各维度准确率 + 规则命中率 + **误判性质拆分**。
+
+    关键区分（spec §8.2）：
+      - 规则层短路且 type 错 = **真实误判**（词表问题，必须为 0）
+      - 让行 LLM 后 type 错 = **LLM 分歧**（与改造前同源，规则层无责）
+    不拆开就会把 LLM 的问题算到规则层头上。
+    """
+    dims = ["type", "risk", "sub_type"]
+    total = len(results)
+    dim_correct = {d: 0 for d in dims}
+    dim_total = {d: 0 for d in dims}          # 只统计标了该维期望的用例
+    all_correct = rule_hits = rule_bad = llm_bad = errors = 0
+
+    print(f"\n========== {title} 逐条明细 ==========")
+    for r in results:
+        if r.get("error"):
+            errors += 1
+            print(f"  [{r['case_id']}] ERROR: {r['error'][:100]}")
+            continue
+        a, e, src = r["actual"], r["expected"], r["source"]
+        all_correct += 1 if all(r["matches"].values()) else 0
+        if src == "rule":
+            rule_hits += 1
+            if not r["matches"]["type"]:
+                rule_bad += 1
+        elif not r["matches"]["type"]:
+            llm_bad += 1
+        for d in dims:
+            if d in e:
+                dim_total[d] += 1
+                dim_correct[d] += 1 if r["matches"][d] else 0
+        flags = "".join(f"[FAIL {d}:{e[d]}!={a[d]}]"
+                        for d in dims if d in e and not r["matches"][d]) or "[OK]"
+        print(f"  [{r['case_id']}] Q: {r['question']} | type={a['type']} "
+              f"sub={a['sub_type']} risk={a['risk']} src={src} {flags}")
+
+    print(f"\n---------- {title} 汇总 ----------")
+    print(f"总条数: {total} | 全维全对: {all_correct} ({all_correct / total:.1%})")
+    for d in dims:
+        n = dim_total[d]
+        if n:
+            print(f"  {d}: {dim_correct[d]}/{n} ({dim_correct[d] / n:.1%})")
+    print(f"  规则层短路: {rule_hits}/{total} ({rule_hits / total:.1%})"
+          f" | 其中判错(type): {rule_bad}"
+          f" | 让行 LLM: {total - rule_hits - errors}"
+          f" | 其中 LLM 分歧(type): {llm_bad}"
+          + (f" | 异常: {errors}" if errors else ""))
+    return {"total": total, "rule_hits": rule_hits, "rule_bad": rule_bad,
+            "errors": errors, "type_acc": dim_correct["type"], "type_n": dim_total["type"]}
 
 
 async def main() -> None:
-    all_cases = []
-    for i, (q, exp) in enumerate(SINGLE_TURN):
-        all_cases.append((f"单轮-{i:02d}", [HumanMessage(content=q)], exp))
-    for i, (history, q, exp) in enumerate(MULTI_TURN):
-        all_cases.append((f"多轮-{i:02d}", build_messages(history, q), exp))
+    args = sys.argv[1:]
+    if "--rule-off" in args:
+        # 绕过规则层跑纯 LLM，用于 A/B 对比（证明规则层未降低准确率）
+        import app.lg_agent.lg_builder as _lgb
+        _lgb.classify_by_rules = lambda _q: None
+        print(">>> --rule-off：已禁用规则层，走纯 LLM 路径")
+
+    golden = [(f"单轮-{i:02d}", [HumanMessage(content=q)], exp)
+              for i, (q, exp) in enumerate(SINGLE_TURN)]
+    golden += [(f"多轮-{i:02d}", build_messages(h, q), exp)
+               for i, (h, q, exp) in enumerate(MULTI_TURN)]
 
     results = []
-    for case_id, messages, expected in all_cases:
+    for case_id, messages, expected in golden:
         config = {"configurable": {"thread_id": f"golden-{case_id}"}}
         results.append(await eval_case(messages, expected, case_id, config))
+    golden_stat = summarize(results, "golden set(46)")
 
-    # ---- 汇总 ----
-    dims = ["type", "risk"]
-    dim_correct = {d: 0 for d in dims}
-    total = len(results)
-    all_correct = 0
-    print("\n========== 逐条明细 ==========")
-    for r in results:
-        if r.get("error"):
-            print(f"  [{r['case_id']}] ERROR: {r['error'][:100]}")
-            continue
-        a, e = r["actual"], r["expected"]
-        ok = all(r["matches"].values())
-        all_correct += 1 if ok else 0
-        for d in dims:
-            dim_correct[d] += 1 if r["matches"][d] else 0
-        flags = "".join("[OK]" if r["matches"][d] else f"[FAIL {e[d]}!={a[d]}]" for d in dims)
-        print(f"  [{r['case_id']}] Q: {r['question']} | type={a['type']} risk={a['risk']} {flags}")
+    heldout_stat = None
+    if "--heldout" in args:
+        results = []
+        for i, (q, exp) in enumerate(HELDOUT):
+            config = {"configurable": {"thread_id": f"heldout-{i}"}}
+            results.append(await eval_case([HumanMessage(content=q)], exp, f"留出-{i:02d}", config))
+        heldout_stat = summarize(results, "留出集(35)")
 
-    print("\n========== 汇总 ==========")
-    print(f"总条数: {total} | 二维全对: {all_correct} ({all_correct / total:.1%})")
-    for d in dims:
-        print(f"  {d}: {dim_correct[d]}/{total} ({dim_correct[d] / total:.1%})")
+    # ---- 验收判定（阈值见 SPEC_INTENT_RULE_LAYER.md §8.2）----
+    print("\n========== 验收判定 (spec §8.2) ==========")
+    def _verdict(ok):
+        return "PASS" if ok else "FAIL"
+    t_acc = golden_stat["type_acc"]
+    t_n = golden_stat["type_n"]
+    print(f"  [{_verdict(t_acc == t_n and t_n > 0)}] golden type 准确率 = {t_acc}/{t_n}（要求 100%）")
+    if not ("--rule-off" in args):
+        print(f"  [{_verdict(golden_stat['rule_bad'] == 0)}] "
+              f"golden 规则层误判(type) = {golden_stat['rule_bad']}（要求 0）")
+    # 规则层判定项仅在启用规则层时校验（--rule-off 下命中率恒 0，不构成失败）
+    if heldout_stat and "--rule-off" not in args:
+        print(f"  [{_verdict(heldout_stat['rule_bad'] == 0)}] "
+              f"留出集规则层误判(type) = {heldout_stat['rule_bad']}（要求 0）")
+        rate = heldout_stat["rule_hits"] / heldout_stat["total"]
+        print(f"  [{_verdict(rate >= 0.55)}] 留出集规则命中率 = {rate:.1%}（要求 ≥55%）")
 
 
 if __name__ == "__main__":

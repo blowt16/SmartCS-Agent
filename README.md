@@ -18,7 +18,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **场景+风险双维意图识别** | LangGraph StateGraph 单次合并识别：场景（售前/售后/投诉安抚/闲聊/图片/意图不明澄清）驱动分支 + 风险意图（违规拦截/高风险转人工）独立判断、拦截优先；意图不明时以电商统一风格询问用户真实意图；售后子场景（退货/物流/订单）由后续售后 Agent 内部判断 |
+| **规则层 + 三维意图识别** | 前置零延迟**规则判定层**：明确意图（售前/售后+二级场景/闲聊）关键词直接短路、省一次 LLM 调用，未命中才降级 LLM；四道让行闸门（风险信号词/多意图/二级撞车）保证安全——**规则层不判风险**，含风险信号词的消息一律交回 LLM。LLM 层单次合并识别三维：场景（售前/售后/投诉安抚/闲聊/图片/意图不明澄清）驱动分支 + **售后二级场景**（物流查询/退货退款/换货/补发/订单查询/兜底） + 风险意图（违规拦截/高风险转人工）独立判断、拦截优先；意图不明时以电商统一风格询问用户真实意图 |
 | **向量知识库检索** | pgvector（HNSW）Top-K 检索 + BM25 混合检索 + LLM 相关性评分，文档由管理端上传后秒级建索引 |
 | **混合检索 + 相关性评分** | BM25 + 向量检索 RRF 融合，LLM 逐条评分过滤不相关结果，不足时自动切换策略重检索 |
 | **文档向量检索管道** | 解析 → 清洗 → 语义分块 → Embedding → pgvector 入库（HNSW 索引），秒级索引，配合混合检索增强召回 |
@@ -32,13 +32,14 @@
 ```
 用户请求 → FastAPI API 层
   │
-  ├─ /api/langgraph/query ──→ LangGraph Agent（场景+风险双维意图识别）
+  ├─ /api/langgraph/query ──→ LangGraph Agent（规则层前置 + 三维意图识别）
+  │    │                        意图规则层（零延迟）命中即短路 → 未命中降级 LLM
   │    │                        risk 拦截优先级最高
   │    ├─ risk=violation → 风险拦截（明确拒绝 + 合规引导）
   │    ├─ risk=high_risk → 转人工（说明无法在线直接处理）
   │    ├─ 售前 presale → RAG 子图（Multi-Tool Workflow）
   │    │    └─ 向量检索（pgvector）→ 混合检索(BM25+向量) → 相关性评分(LLM)
-  │    ├─ 售后 aftersale → 售后占位节点（售后 Agent 接口预留，后续接入）
+  │    ├─ 售后 aftersale → 售后占位节点（二级场景物流/退货/换货/补发/订单查询已落 state，售后 Agent 接口预留，后续接入）
   │    ├─ 投诉安抚 complaint → 投诉安抚占位节点（安抚 Agent 接口预留，后续接入）
   │    ├─ 闲聊 general → 纯 LLM 闲聊
   │    ├─ 意图不明 clarify → 澄清节点（电商风格询问真实意图）
@@ -170,6 +171,7 @@ python scripts/download_jddc.py
 │   │   ├── lg_agent/                 # LangGraph 智能体
 │   │   │   ├── lg_builder.py         # StateGraph 构建与路由
 │   │   │   ├── lg_states.py          # 状态定义（Router/AgentState）
+│   │   │   ├── intent_rules.py       # 意图规则判定层（前置，零延迟短路）
 │   │   │   └── kg_sub_graph/         # 知识图谱子图
 │   │   │       └── agentic_rag_agents/
 │   │   │           └── components/

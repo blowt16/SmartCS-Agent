@@ -29,7 +29,7 @@
 
 SmartCS-Agent 是一个**基于 FastAPI + LangGraph 的智能电商客服系统**，深度集成了 pgvector 向量检索（标准 RAG 管道）、混合检索、语义缓存、多轮对话管理等功能。项目面向智能家居电商场景，内置 10 款产品知识文档、1,800 条电商 FAQ 和 2,600+ 条真实客服对话数据。
 
-**核心能力**: 场景+风险双维意图识别（单次合并输出，场景驱动分支、风险拦截优先）→ 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
+**核心能力**: 规则层前置 + 场景/二级场景/风险三维意图识别（规则层零延迟短路明确意图，未命中降级 LLM；场景驱动分支、风险拦截优先）→ 混合检索（HNSW ∥ pg_jieba BM25 → RRF → Reranker 精排）→ 流式响应
 
 ---
 
@@ -48,7 +48,7 @@ graph TB
     end
 
     subgraph "Agent 编排层 Orchestration"
-        C[LangGraph StateGraph<br/>场景+风险双维意图识别 + 子图工作流]
+        C[LangGraph StateGraph<br/>规则层前置 + 场景/二级场景/风险三维意图识别 + 子图工作流]
     end
 
     subgraph "LLM 服务层"
@@ -133,7 +133,7 @@ flowchart TB
 
     subgraph Agent["🤖 LangGraph Agent 层"]
         direction TB
-        ROUTER["意图路由器<br/>场景+风险双维合并识别"]
+        ROUTER["意图路由器<br/>规则层前置 + 场景/二级场景/风险三维识别"]
         RISK["风险拦截/转人工节点<br/>静态话术"]
         GEN["闲聊节点<br/>general"]
         IMG["图片分析节点<br/>Vision API"]
@@ -269,7 +269,7 @@ flowchart TB
 |------|------|---------|---------|
 | ① 入口 | HTTP 网关与应用装配 | `llm_backend/main.py`、`run.py`、`app/core/middleware.py`、`app/core/config.py` | §4.1（应用启动 + 请求分发） |
 | ② 前置 | 入口指代消解 + 语义缓存 | `main.py` 入口段、`app/services/pronoun_resolver.py`（统一消解器）、`redis_semantic_cache.py`、`pronoun_detector.py`（仅缓存侧残留） | §4.2（模块总图 + 统一消解/缓存子图 + 两侧现状对照） |
-| ③ 主图 | 双维意图识别与路由 | `app/lg_agent/lg_builder.py`、`lg_states.py`、`lg_prompts.py`；检查点 `psycopg_pool` + `AsyncPostgresSaver` | §4.3（主图运行 + 识别节点/路由子图） |
+| ③ 主图 | 三维意图识别（规则层前置）与路由 | `app/lg_agent/lg_builder.py`、`lg_states.py`、`lg_prompts.py`；检查点 `psycopg_pool` + `AsyncPostgresSaver` | §4.3（主图运行 + 识别节点/路由子图） |
 | ④ 业务 | 售前导购（RAG 检索） | `lg_builder.py:create_research_plan`、`kg_sub_graph/.../workflows/multi_agent/multi_tool.py`、`edges.py`、`components/{planner,customer_tools,summarize,final_answer}/`、`app/services/rag_retriever_service.py`、`reranker_service.py` | §4.4（模块总图 → 子图① 工作流 → 子图② 工具层 → 子图③ ragTool @tool → 子图④ 混合检索管线） |
 | ④ 业务 | 业务应答节点群 | `lg_builder.py` 各节点、`lg_prompts.py` 话术/模板 | §4.5 |
 | ⑤ 出口 | LLM 服务与 SSE 流式出口 | `app/services/llm_factory.py`、`deepseek_service.py`、`ollama_service.py`；`main.py process_stream` | §4.8 |
@@ -406,7 +406,7 @@ flowchart LR
 - 向量化通道由 `EMBEDDING_TYPE` 决定：现网日志为 qwen text-embedding-v4（DashScope，1024 维 + L2 归一化），可切 ollama/local 兜底（`embed_in_batches` 承担索引侧分批重试）。
 - 总开关：`SEMANTIC_CACHE_ENABLED=false`（缓存查与写全关，故缓存侧消解入口随之休眠）、`RESOLVE_ENABLED=true`（入口消解**生效中**；置 false 则完全退化为无消解行为）、`RESOLVE_SKIP_FILLER=true`，用于调试一键回滚。
 
-### 4.3 主图模块：LangGraph 双维意图识别与路由
+### 4.3 主图模块：LangGraph 规则层前置 + 三维意图识别与路由
 
 **模块职责**：系统的调度中枢。`lg_builder.py` 定义 9 节点 StateGraph，单次 LLM 低温结构化输出同时判定**场景 type + 风险 risk** 两个维度（risk 拦截优先级最高），按结果条件路由到业务节点；会话状态由 PostgresSaver 检查点持久化（thread_id 维度）。
 
@@ -446,8 +446,11 @@ flowchart TB
 flowchart TD
     A["进入识别节点"] --> B["经营范围预检：<br/>关键词 + 句式匹配，零延迟不调模型"]
     B -->|"明显超范围<br/>（卖服装 / 荐股票等）"| C["直接拦截：标记为闲聊 + 超范围原因<br/>→ 由闲聊节点输出拒绝话术"]
-    B -->|"通过预检"| D["组装消息：<br/>历史摘要 + 意图识别系统提示词"]
-    D --> E["大模型低温（温度=0）一次性输出：<br/>场景类型 + 风险等级 + 分类理由"]
+    B -->|"通过预检"| RL["意图规则层（零延迟·不调模型）：<br/>关键词表判定明确意图<br/>售前 / 售后含二级场景 / 闲聊"]
+    RL -->|"命中"| RC["直接短路：<br/>type + sub_type + 无风险<br/>（省一次 LLM 往返）"]
+    RC --> G
+    RL -->|"未命中／风险信号词／多意图"| D["组装消息：<br/>历史摘要 + 意图识别系统提示词"]
+    D --> E["大模型低温（温度=0）一次性输出：<br/>场景类型 + 售后二级场景 + 风险等级 + 分类理由"]
     E -->|"输出非法或失败"| F["降级为 闲聊 / 无风险<br/>（保证不中断报错）"]
     E -->|"成功"| G["得到路由结论 → 交给路由决策"]
     F --> G
@@ -476,11 +479,15 @@ flowchart TD
 
 | 维度 | 取值 | 说明 |
 |------|------|------|
-| `type` | presale / aftersale / complaint / general / image / clarify | 场景维度（6 类）；售后子场景（退货/物流/订单）不在识别层判定，下沉业务 Agent |
+| `type` | presale / aftersale / complaint / general / image / clarify | 场景维度（6 类） |
+| `sub_type` | logistics_query / return_refund / exchange / reship / order_query / other / none | 售后二级场景（仅 `type=aftersale` 时有效，否则 none）。**2026-09-26 恢复该维度**（推翻 2026-08-27 决策 #13）：识别层只答"用户说的是哪类诉求"（纯语义分类），"查订单/算差价/发起退货"等执行动作仍归售后 Agent。本次只落 state + 日志 + 评测，**不参与路由** |
 | `risk` | none / violation / high_risk | 风险维度；violation=违规拦截（解除限速/改装电池/越狱等），high_risk=转人工 |
+| `source` | rule / llm | 判定来源：规则层短路 / LLM 识别（供日志与评测统计规则命中率） |
 | `logic` | str | 分类理由/次要意图，注入应答节点 prompt |
 
-- 路由质量受控：golden set 46 条（单轮 41 + 多轮 5）二维准确率实测 46/46（`llm_backend/scripts/eval_intent_golden.py`，跑真实 Router 结构化输出）。
+**意图规则判定层**（`app/lg_agent/intent_rules.py`，2026-09-26 新增）：置于 LLM 之前，零延迟判定明确意图，命中即短路、未命中降级 LLM。**四道让行闸门**——风险信号词命中 / 未命中场景词 / 多意图（售前与售后词同时命中）/ 售后二级场景多命中，任一触发即交回 LLM。设计判据为"**宁可漏不可错**"：漏了只是降级 LLM（等同改造前），错了则短路走错分支。实测（真实问句留出集 35 条 + golden 46 条，合计 81 条）规则层误判 **0**；留出集命中率 57%。
+
+- 路由质量受控：golden set 46 条（单轮 41 + 多轮 5）+ 留出集 35 条，`type`/`risk` 实测 46/46（`llm_backend/scripts/eval_intent_golden.py`；`--heldout` 追加留出集，`--rule-off` 跑纯 LLM A/B）。
 - 多轮上下文由检查点承载：`thread_id`（前端 `X-Conversation-ID` 回传）→ `aget_state` 恢复 → 追加本轮 → 节点执行后自动写回；`lg_agent/main.py` 提供同图 CLI 调试入口。
 - 子图 `Send` map-reduce 与 PostgresSaver 序列化冲突（`Object of type Send is not JSON serializable`）已在售前节点规避（见 §4.4）。
 
@@ -820,7 +827,7 @@ flowchart TD
 
     STREAM --> SG["analyze_and_route_query<br/>ScopeGuard 关键词预检"]
     SG -->|"不通过"| GQ["general 闲聊节点<br/>超经营范围拒绝话术"]
-    SG -->|"通过"| RT["LLM 路由器<br/>场景+风险双维识别：type + risk"]
+    SG -->|"通过"| RT["意图规则层（零延迟）→ 未命中才走 LLM<br/>场景 + 售后二级场景 + 风险"]
 
     RT -->|"risk=violation"| RISK["5.4 风险拦截<br/>违规拒绝话术"]
     RT -->|"risk=high_risk"| TRANS["5.4 转人工<br/>无法在线处理话术"]
@@ -865,7 +872,7 @@ flowchart TD
     CACHE -->|"命中"| SHORT["⚡ 短路返回缓存回答<br/>不进图"]
     CACHE -->|"未命中"| SG
     SG -->|"不通过"| GEN["general 闲聊节点<br/>超经营范围拒绝话术"]
-    SG -->|"通过"| ROUTER["LLM 路由器<br/>场景+风险双维合并识别<br/>type + risk<br/>（ROUTER_TEMPERATURE=0）"]
+    SG -->|"通过"| ROUTER["意图规则层（零延迟短路）<br/>→ 未命中走 LLM<br/>type + sub_type + risk<br/>（ROUTER_TEMPERATURE=0）"]
 
     ROUTER -->|"risk=violation"| RISK["风险拦截<br/>明确拒绝 + 合规引导"]
     ROUTER -->|"risk=high_risk"| TRANS["转人工<br/>无法在线直接处理"]
@@ -950,7 +957,7 @@ flowchart TD
 
 ### 5.7 售后 / 投诉安抚占位节点
 
-节点 `aftersale_placeholder` / `complaint_placeholder`：**业务 Agent 接口占位**——返回"服务升级中"提示（静态话术，不走 LLM）。接口与 multi_tool 子图同构（`question+history → answer`），后续售后 Agent（工作流骨架 + LLM 决策点 + RAG tool，方式 C）/ 投诉安抚 Agent 子图就位后，仅替换路由目的地，识别模块与接口形状不动。售后子场景（退货退款/物流/订单查询）由售后 Agent 工作流骨架第一步结合订单/历史上下文判断，识别层不承担。
+节点 `aftersale_placeholder` / `complaint_placeholder`：**业务 Agent 接口占位**——返回"服务升级中"提示（静态话术，不走 LLM）。接口与 multi_tool 子图同构（`question+history → answer`），后续售后 Agent（工作流骨架 + LLM 决策点 + RAG tool，方式 C）/ 投诉安抚 Agent 子图就位后，仅替换路由目的地，识别模块与接口形状不动。售后二级场景（物流查询/退货退款/换货/补发/订单查询/兜底）**由识别层给出信号**（2026-09-26 恢复该维度），但只落 state/日志/评测、不参与路由；"查订单/算差价/发起退货"等执行动作仍由售后 Agent 结合订单与历史上下文承担。
 
 ```mermaid
 flowchart TD
@@ -1035,13 +1042,13 @@ flowchart TD
 
 ## 8. 项目亮点深度分析
 
-### 8.1 🌟 场景+风险双维合并意图识别路由
+### 8.1 🌟 规则层前置 + 场景/二级场景/风险三维合并意图识别路由
 
-**创新点**: 一次 LLM 低温结构化输出同时判定**场景意图 + 风险意图**两个维度，risk 拦截优先级最高（违规/高风险消息不进入任何业务处理路径），场景驱动路由并预留业务 Agent 接口。
+**创新点**: ① **规则判定层前置**——零延迟关键词判定明确意图，命中即短路（省一次 LLM 往返），未命中才降级 LLM；② 一次 LLM 低温结构化输出同时判定**场景意图 + 售后二级场景 + 风险意图**三个维度，risk 拦截优先级最高（违规/高风险消息不进入任何业务处理路径），场景驱动路由并预留业务 Agent 接口。
 
 ```python
 class Router(TypedDict):
-    """Classify user query: scenario + risk."""
+    """Classify user query: scenario + aftersale sub-scenario + risk."""
     logic: str                      # 分类理由（多意图时简述次要意图）
     type: Literal[
         "presale",                  # 售前：商品咨询/参数/价格活动/推荐导购
@@ -1051,18 +1058,27 @@ class Router(TypedDict):
         "image",                    # 图片
         "clarify",                  # 意图不明：语义无法归类 → 澄清节点
     ]
+    sub_type: Literal[              # 售后二级场景（仅 aftersale 有效，否则 none）
+        "logistics_query", "return_refund", "exchange",
+        "reship", "order_query", "other", "none",
+    ]
     risk: Literal[
         "none", "violation", "high_risk",
     ]                               # violation=违规咨询拦截；high_risk=高风险操作转人工
+    source: Literal["rule", "llm"]  # 判定来源（规则层短路 / LLM 识别）
 ```
 
 **技术价值**:
 
+- **规则层短路的四道让行闸门**（风险信号词 / 未命中场景词 / 多意图 / 二级场景多命中）体现"安全优先"——规则层**不判 risk**，含风险信号词的消息一律交回 LLM，故不产生新的漏拦面
+- **词表判据"宁可漏不可错"**：漏了只是降级 LLM（行为等同改造前），错了则短路走错分支。实测校准拒绝了三类看似增益的加词（泛词"怎么样"致误判、二级补词反降覆盖、裸词"订单"致撞车），均记入 spec §3.3
 - 原 4 类技术路由合并进场景体系（graphrag-query→presale，additional-query 删除——追问下沉到业务 Agent）
 - 多意图取主导意图（句首发/最强烈者；risk/complaint 永远优先），次要意图记入 logic
-- 售后子场景（退货/物流/订单）不由识别层判断——判断需订单/历史上下文，下沉到售后 Agent 工作流骨架第一步（简化设计 2026-08-27）
+- **售后二级场景识别层给信号、不判执行**（2026-09-26 恢复该维度，推翻 2026-08-27 决策 #13）：识别层只答"用户说的是哪类诉求"（纯语义分类，对话文本足够），"查订单/算差价/发起退货"等执行动作仍归售后 Agent。本次只落 state + 日志 + 评测，`route_query` 分支未改，用户可见行为零变化
+- 二级场景 `complaint` 有意不设：投诉语义一律走顶层 complaint 节点（口径写进 prompt）
 - 售后/投诉安抚占位节点接口与 RAG 子图同构，业务 Agent（售前/售后/安抚）就位后仅改路由目的地
-- 结构化输出校验失败降级 general/none 不抛异常；golden set 评测（46 条，含意图澄清/意图模糊/多意图/超范围/图片风险/多轮上下文）二维准确率 100%（脚本 `llm_backend/scripts/eval_intent_golden.py`）
+- 结构化输出校验失败降级 general/none 不抛异常；**sub_type 另有跨字段校正**（type≠aftersale→none，type=aftersale 且取值非法→other），因 schema 的 Literal 只能约束取值集合、约束不了跨字段搭配
+- 评测健全性：golden set 46 条（含意图澄清/意图模糊/多意图/超范围/图片风险/多轮上下文）`type`/`risk` 准确率 100%；另设**留出集 35 条**（刻意不在 golden 内）防词表过拟合，判据为规则层误判必须为 0。脚本 `llm_backend/scripts/eval_intent_golden.py`（`--heldout` / `--rule-off`）
 - 设计依据与演进方向（任务分配器/多 Agent 协同/主 Agent 汇总/并行规则）见 `docs/spec_plan/已完成/SPEC_INTENT_RECOGNITION_OPTIMIZATION.md` §8.3
 
 ### 8.2 🌟 混合检索 + RRF 融合 + Reranker 精排
@@ -1188,7 +1204,7 @@ POSTGRES_PASSWORD: smartcs_agent_pwd
 
 #### 10.2.1 单元测试覆盖不足（已部分缓解）
 
-已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（46 条二维准确率）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
+已建立 pytest 测试体系（`app/test/`：`test_entry_cache.py` / `test_fastapi.py` / `test_pronoun_resolve.py`，当前 9 项全通过），意图识别路由另有 golden set 评测脚本 `scripts/eval_intent_golden.py`（46 条 + 留出集 35 条，含 `--heldout` / `--rule-off`）。规则判定层 `app/lg_agent/intent_rules.py` 于 2026-09-26 接入，随附纯函数单测 `tests/test_intent_rules.py`（56 项，不调 LLM / 不连库）。但向量检索、语义缓存、混合检索等核心模块仍无 pytest 覆盖。
 
 > ⚠️ 2026-09-06 同步：`llm_backend/tests/` 现 80+ 项，已覆盖解析/分块归属/BM25 集成（真实 PG）/两 @tool 三态与 sku 批量/节点 RAG 门控/导入校验与模型约束；已知唯一失败 = `test_bm25_recalls_docs_with_partial_terms`（生产语料挤压非隔离缺陷，见 `未完成/SPEC_BM25_TEST_ISOLATION.md`）。本小节的"核心模块无 pytest 覆盖"已大幅缓解；语义缓存与 LangGraph Agent 行为验证仍待补。
 >
