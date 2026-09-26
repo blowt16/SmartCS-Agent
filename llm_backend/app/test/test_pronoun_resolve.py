@@ -28,6 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from app.core.config import settings
 from app.services.deepseek_service import DeepseekService
+from app.services.llm_factory import LLMFactory
 from app.services.ollama_service import OllamaService
 from app.services.pronoun_detector import detect_pronoun, DetectionDecision
 from app.services.pronoun_resolver import resolve_pronouns, _format_history
@@ -140,6 +141,91 @@ async def test_resolver():
         check("超时(100ms) → 降级为原始消息", r == "那个有货吗")
     finally:
         settings.RESOLVE_TIMEOUT_MS = old_timeout
+
+
+# ==================== 2c. 助手话术泄漏防线（问题 A，2026-09-26 端到端测出） ====================
+#
+# 背景（docs/项目问题.md #20）：真实多轮里助手（澄清节点）问
+# "亲～请问您想咨询商品信息、售后问题还是其他呢？"，用户答"我想问下"，
+# 消解结果把**助手的话术整段搬进用户消息**："我想问下商品信息、售后问题还是其他呢？"
+# → 下游意图识别命中"售后"兜底词 → 回"售后处理服务正在升级中"，答非所问。
+#
+# 本段必须用**真实 LLM** 跑——被改动的是 prompt，只有真调用能验证其行为。
+# 断言口径：消解结果不得引入**用户原话中不存在**的助手话术片段。
+#
+# ⚠️ 触发条件（实测定位，2026-09-26）：**助手把同一句澄清话术重复问了 ≥2 遍**。
+# 实测对照：助手只问 1 次 → 不泄漏；问 2 次/3 次 → 泄漏；两次问的是不同的话 → 不泄漏。
+# 机理：同一句在历史里出现两次，模型把它当成"用户反复谈到的话题"，于是补进消解结果。
+# 故 A-1/A-2 必须用**重复话术**的历史，否则测不出该缺陷（首版测试用单轮历史，误判为已修复）。
+
+_CLARIFY = "亲～请问您想咨询商品信息、售后问题还是其他呢？"
+
+# (用例名, 历史, 当前消息, 不得出现在消解结果中的助手话术片段)
+LEAK_CASES = [
+    ("A-1 澄清话术被重复两次（E2E 真实序列）",
+     [{"role": "user", "content": "在吗"}, {"role": "assistant", "content": _CLARIFY},
+      {"role": "user", "content": "嗯"}, {"role": "assistant", "content": _CLARIFY}],
+     "我想问下", ["售后问题", "商品信息"]),
+    ("A-2 澄清话术被重复三次",
+     [{"role": "user", "content": "在吗"}, {"role": "assistant", "content": _CLARIFY},
+      {"role": "user", "content": "嗯"}, {"role": "assistant", "content": _CLARIFY},
+      {"role": "user", "content": "那个"}, {"role": "assistant", "content": _CLARIFY}],
+     "我想问下", ["售后问题", "商品信息"]),
+    ("A-3 罗列选项的澄清话术重复两次",
+     [{"role": "user", "content": "你好"},
+      {"role": "assistant", "content": "亲～您是想了解商品价格、产品参数，还是售后政策呢？"},
+      {"role": "user", "content": "嗯"},
+      {"role": "assistant", "content": "亲～您是想了解商品价格、产品参数，还是售后政策呢？"}],
+     "我问个事", ["产品参数", "售后政策"]),
+    # 单轮不触发（实测 ok），保留为边界对照——防止修复后反向误伤
+    ("A-4 澄清话术只出现一次（边界对照）",
+     [{"role": "user", "content": "在吗"},
+      {"role": "assistant", "content": _CLARIFY}],
+     "我想问下", ["售后问题", "商品信息"]),
+]
+
+# 既有能力回归（修复 prompt 不得损伤这些）
+# (用例名, 历史, 当前消息, 必须包含的片段, 不得包含的片段)
+REGRESSION_CASES = [
+    ("R-1 指代替换",
+     [{"role": "user", "content": "扫地机器人X1多少钱"},
+      {"role": "assistant", "content": "扫地机器人X1售价2999元"}],
+     "那个有货吗", ["扫地机器人X1"], ["售价", "2999"]),
+    ("R-2 省略主语补全",
+     [{"role": "user", "content": "这款智能门锁支持指纹吗"},
+      {"role": "assistant", "content": "支持指纹和密码双重认证哦"}],
+     "多少钱", ["智能门锁"], ["双重认证"]),
+]
+
+
+async def test_resolve_no_assistant_leak():
+    """问题 A 防线 + 既有消解能力回归（真实 LLM 调用）。"""
+    print("[消解器] 助手话术泄漏防线 + 回归（真实 LLM）")
+    llm = LLMFactory.create_chat_service()
+
+    async def _resolve(history, query):
+        return await resolve_pronouns(
+            llm, history + [{"role": "user", "content": query}], query)
+
+    for name, history, query, forbidden in LEAK_CASES:
+        try:
+            r = await _resolve(history, query)
+        except Exception as e:
+            check(f"{name}（LLM 不可用，未验证）", False, f"{type(e).__name__}: {str(e)[:60]}")
+            continue
+        leaked = [f for f in forbidden if f in r]
+        check(f"{name}: '{query}' → '{r}'", not leaked, f"泄漏助手话术片段={leaked}")
+
+    for name, history, query, must, must_not in REGRESSION_CASES:
+        try:
+            r = await _resolve(history, query)
+        except Exception as e:
+            check(f"{name}（LLM 不可用，未验证）", False, f"{type(e).__name__}: {str(e)[:60]}")
+            continue
+        missing = [m for m in must if m not in r]
+        leaked = [m for m in must_not if m in r]
+        check(f"{name}: '{query}' → '{r}'", not missing and not leaked,
+              f"缺失={missing} 泄漏={leaked}")
 
 
 def test_history_truncation_configurable():
@@ -355,6 +441,7 @@ async def test_redis_smoke():
 async def main():
     test_detector()
     await test_resolver()
+    await test_resolve_no_assistant_leak()
     test_history_truncation_configurable()
     test_llm_service_signature()
     await test_deepseek_generate_passthrough()
