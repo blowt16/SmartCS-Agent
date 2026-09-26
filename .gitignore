@@ -75,3 +75,6 @@ llm_backend/evaluation/results/
 # AOCI agent host integration (machine-bound; do not commit)
 .mcp.json
 .mcp.json.backup.*
+
+# Archify visual-check 边车（每次运行自动生成，可重跑）
+docs/diagrams/*.visual-check.*
