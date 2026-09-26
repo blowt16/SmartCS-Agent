@@ -1,0 +1,246 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "意图识别与路由决策",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "D:/SmartCS-Agent/docs/diagrams/30-intent-routing.html"
+  },
+  "lanes": [
+    {
+      "id": "dest",
+      "label": "落点"
+    },
+    {
+      "id": "id",
+      "label": "识别节点"
+    },
+    {
+      "id": "static",
+      "label": "静态话术",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "in",
+    "scope",
+    "memory",
+    "router_llm",
+    "route",
+    "presale"
+  ],
+  "nodes": [
+    {
+      "id": "general",
+      "lane": "dest",
+      "col": 3,
+      "type": "backend",
+      "label": "respond_to_general_query",
+      "width": 171,
+      "sublabel": "含超范围拒绝话术"
+    },
+    {
+      "id": "clarify",
+      "lane": "dest",
+      "col": 2,
+      "type": "backend",
+      "label": "clarify_node",
+      "width": 90,
+      "sublabel": "→ 图 20"
+    },
+    {
+      "id": "image",
+      "lane": "dest",
+      "col": 5,
+      "type": "backend",
+      "label": "create_image_query",
+      "width": 130,
+      "sublabel": "→ Qwen-VL"
+    },
+    {
+      "id": "presale",
+      "lane": "dest",
+      "col": 4,
+      "type": "backend",
+      "label": "create_research_plan",
+      "width": 144,
+      "sublabel": "→ 图 10"
+    },
+    {
+      "id": "in",
+      "lane": "id",
+      "col": 0,
+      "type": "backend",
+      "label": "analyze_and_route_query",
+      "width": 164,
+      "sublabel": "进入 · lg_builder.py:48"
+    },
+    {
+      "id": "scope",
+      "lane": "id",
+      "col": 1,
+      "type": "security",
+      "label": "ScopeGuard 关键词预检",
+      "width": 151,
+      "sublabel": "零延迟，不调 LLM"
+    },
+    {
+      "id": "memory",
+      "lane": "id",
+      "col": 2,
+      "type": "backend",
+      "label": "MemoryManager",
+      "width": 96,
+      "sublabel": "压缩历史"
+    },
+    {
+      "id": "router_llm",
+      "lane": "id",
+      "col": 3,
+      "type": "backend",
+      "label": "Router 结构化输出",
+      "width": 124,
+      "sublabel": "ROUTER_TEMPERATURE=0"
+    },
+    {
+      "id": "route",
+      "lane": "id",
+      "col": 4,
+      "type": "backend",
+      "label": "route_query 优先级判定",
+      "width": 158,
+      "sublabel": "lg_builder.py:106"
+    },
+    {
+      "id": "risk_intercept",
+      "lane": "static",
+      "col": 2,
+      "type": "security",
+      "label": "风险拦截",
+      "width": 76,
+      "sublabel": "risk=violation"
+    },
+    {
+      "id": "transfer_human",
+      "lane": "static",
+      "col": 3,
+      "type": "security",
+      "label": "转人工",
+      "width": 76,
+      "sublabel": "risk=high_risk"
+    },
+    {
+      "id": "placeholders",
+      "lane": "static",
+      "col": 4,
+      "type": "security",
+      "label": "售后 / 投诉占位",
+      "width": 110,
+      "sublabel": "静态话术，不查订单"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_enter",
+      "from": "in",
+      "to": "scope",
+      "label": "进入识别"
+    },
+    {
+      "id": "e_pass",
+      "from": "scope",
+      "to": "memory",
+      "label": "放行"
+    },
+    {
+      "id": "e_scopeguard",
+      "from": "scope",
+      "to": "general",
+      "label": "超经营范围 → 直接降级",
+      "variant": "dashed"
+    },
+    {
+      "id": "e_mem",
+      "from": "memory",
+      "to": "router_llm",
+      "label": "历史摘要 + 系统提示词"
+    },
+    {
+      "id": "e_router",
+      "from": "router_llm",
+      "to": "route",
+      "label": "type + risk + logic"
+    },
+    {
+      "id": "e_violation",
+      "from": "route",
+      "to": "risk_intercept",
+      "label": "risk=violation"
+    },
+    {
+      "id": "e_highrisk",
+      "from": "route",
+      "to": "transfer_human",
+      "label": "risk=high_risk"
+    },
+    {
+      "id": "e_image",
+      "from": "route",
+      "to": "image",
+      "label": "本条消息带图片"
+    },
+    {
+      "id": "e_presale",
+      "from": "route",
+      "to": "presale",
+      "label": "type=presale",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e_general",
+      "from": "route",
+      "to": "general",
+      "label": "type=general"
+    },
+    {
+      "id": "e_clarify",
+      "from": "route",
+      "to": "clarify",
+      "label": "type=clarify"
+    },
+    {
+      "id": "e_placeholder",
+      "from": "route",
+      "to": "placeholders",
+      "label": "type=aftersale / complaint"
+    },
+    {
+      "id": "e_degrade",
+      "from": "route",
+      "to": "general",
+      "label": "结构化输出失败 → 降级 general / risk=none",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Router 的取值域",
+      "items": [
+        "type ∈ presale / aftersale / complaint / general / image / clarify",
+        "risk ∈ none / violation / high_risk",
+        "logic 为分类理由，注入应答节点 prompt"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "路由实测",
+      "items": [
+        "golden set 46 条（单轮 41 + 多轮 5）",
+        "二维准确率 46/46，跑真实 Router 结构化输出",
+        "结构化输出校验失败降级 general / none，不抛异常"
+      ]
+    }
+  ]
+}
