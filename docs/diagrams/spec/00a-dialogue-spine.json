@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "客服对话端到端主路径",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "D:/SmartCS-Agent/docs/diagrams/00a-dialogue-spine.html"
+  },
+  "lanes": [
+    { "id": "access", "label": "接入层" },
+    { "id": "graph",  "label": "Agent 主图" },
+    { "id": "io",     "label": "出口与存储" }
+  ],
+  "mainPath": ["user", "http_entry", "resolve", "router", "presale", "sse"],
+  "nodes": [
+    { "id": "user",       "lane": "access", "col": 0, "type": "external", "label": "用户提问", "sublabel": "浏览器 Chat UI", "width": 132 },
+    { "id": "http_entry", "lane": "access", "col": 1, "type": "backend",  "label": "POST /api/langgraph/query", "sublabel": "main.py:216", "width": 196 },
+    { "id": "resolve",    "lane": "access", "col": 2, "type": "backend",  "label": "入口指代消解", "sublabel": "pronoun_resolver.py", "tag": "多轮无条件 LLM", "width": 168 },
+    { "id": "router",     "lane": "graph",  "col": 3, "type": "backend",  "label": "意图识别与路由", "sublabel": "analyze_and_route_query", "width": 172 },
+    { "id": "presale",    "lane": "graph",  "col": 4, "type": "backend",  "label": "售前导购", "sublabel": "create_research_plan", "width": 168 },
+    { "id": "sse",        "lane": "io",     "col": 5, "type": "backend",  "label": "SSE 流式出口", "sublabel": "process_stream", "width": 148 }
+  ],
+  "edges": [
+    { "id": "ask",     "from": "user",       "to": "http_entry" },
+    { "id": "prep",    "from": "http_entry", "to": "resolve", "label": "取 history + image_path" },
+    { "id": "toroute", "from": "resolve",    "to": "router",  "label": "消解后的问题" },
+    { "id": "topresale", "from": "router",   "to": "presale", "label": "type=presale", "variant": "emphasis" },
+    { "id": "out",     "from": "presale",    "to": "sse",     "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "入口关键事实",
+      "items": [
+        "thread_id 三态：新会话 / 多轮续聊 / 中断恢复",
+        "入口消解：首条无历史直通、纯语气词跳过，其余多轮一律调 LLM"
+      ]
+    }
+  ]
+}
