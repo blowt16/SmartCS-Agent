@@ -5130,7 +5130,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1093 1606" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+      <svg viewBox="0 0 1085 1906" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
         <title id="archify-diagram-title">客服对话端到端运行流程</title>
         <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
@@ -5156,21 +5156,21 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1029" height="270" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1029" height="330" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 客户端</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="342" width="1029" height="270" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="364" class="t-dim" font-size="10" font-weight="600">02 / 入口层</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="402" width="1029" height="330" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="424" class="t-dim" font-size="10" font-weight="600">02 / 入口层</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="632" width="1029" height="270" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="654" class="t-dim" font-size="10" font-weight="600">03 / Agent 主图</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="752" width="1029" height="330" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="774" class="t-dim" font-size="10" font-weight="600">03 / Agent 主图</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="922" width="1029" height="270" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-3-exception" x="46" y="928" width="1017" height="258" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="944" class="t-security" font-size="10" font-weight="600">EX / 静态话术与兜底</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="1102" width="1029" height="330" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-3-exception" x="46" y="1108" width="1017" height="318" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="1124" class="t-security" font-size="10" font-weight="600">EX / 静态话术与兜底</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="1212" width="1029" height="270" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="1234" class="t-dim" font-size="10" font-weight="600">05 / 出口与存储</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="1452" width="1029" height="330" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="1474" class="t-dim" font-size="10" font-weight="600">05 / 出口与存储</text>
 
         <!-- Phase headers -->
         <line x1="188" y1="35" x2="588.4" y2="35" class="a-default" stroke-width="1.1"/>
@@ -5190,162 +5190,163 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <!-- Edge paths -->
-        <path data-edge-from="user" data-edge-to="http_entry" data-edge-key="0" data-edge-id="ask" data-composition-points="180,202;234,202;234,466" d="M 180 202 L 234 202 L 234 466" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="1" data-edge-id="hit" data-composition-points="542.4,1396;542.4,1498;980.4,1498;980.4,1388" d="M 542.4 1396 L 542.4 1498 L 980.4 1498 L 980.4 1388" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="resolve" data-edge-to="cache" data-edge-label="消解后按 user_id 查" data-edge-key="2" data-edge-id="lookup" data-composition-points="542.4,526;542.4,912;638.4,912;638.4,1362;622.4,1362" d="M 542.4 526 L 542.4 912 L 638.4 912 L 638.4 1362 L 622.4 1362" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="3" data-edge-id="miss" data-composition-points="542.4,1328;542.4,1057;662.4,1057;662.4,808" d="M 542.4 1328 L 542.4 1057 L 662.4 1057 L 662.4 808" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="clarify" data-edge-to="sse" data-edge-key="4" data-edge-id="out_clarify" data-composition-points="955.4,872;971.4,872;971.4,1057;1076.4,1057;1076.4,1362;1060.4,1362" d="M 955.4 872 L 971.4 872 L 971.4 1057 L 1076.4 1057 L 1076.4 1362 L 1060.4 1362" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="general" data-edge-to="sse" data-edge-key="5" data-edge-id="out_general" data-composition-points="955.4,752;973.4,752;973.4,1336" d="M 955.4 752 L 973.4 752 L 973.4 1336" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="image" data-edge-to="sse" data-edge-key="6" data-edge-id="out_image" data-composition-points="955.4,812;987.4,812;987.4,1336" d="M 955.4 812 L 987.4 812 L 987.4 1336" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="presale" data-edge-to="sse" data-edge-key="7" data-edge-id="out_presale" data-composition-points="955.4,692;1001.4,692;1001.4,1336" d="M 955.4 692 L 1001.4 692 L 1001.4 1336" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="static_replies" data-edge-to="sse" data-edge-key="8" data-edge-id="out_static" data-composition-points="955.4,1072;980.4,1072;980.4,1336" d="M 955.4 1072 L 980.4 1072 L 980.4 1336" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="http_entry" data-edge-to="resolve" data-edge-label="取 history + image_path" data-edge-key="9" data-edge-id="prep" data-composition-points="334,492;462.4,492" d="M 334 492 L 462.4 492" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="10" data-edge-id="to_clarify" data-composition-points="648.4,808;648.4,872;765.4,872" d="M 648.4 808 L 648.4 872 L 765.4 872" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="general" data-edge-label="type=general ｜ ScopeGuard 超范围" data-edge-key="11" data-edge-id="to_general" data-composition-points="655.4,756;655.4,616;749.4,616;749.4,752;765.4,752" d="M 655.4 756 L 655.4 616 L 749.4 616 L 749.4 752 L 765.4 752" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="12" data-edge-id="to_image" data-composition-points="662.4,808;662.4,918;749.4,918;749.4,812;765.4,812" d="M 662.4 808 L 662.4 918 L 749.4 918 L 749.4 812 L 765.4 812" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="13" data-edge-id="to_presale" data-composition-points="669.4,756;669.4,740;717.4,740;717.4,692;765.4,692" d="M 669.4 756 L 669.4 740 L 717.4 740 L 717.4 692 L 765.4 692" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="14" data-edge-id="to_static" data-composition-points="662.4,808;662.4,1208;860.4,1208;860.4,1098" d="M 662.4 808 L 662.4 1208 L 860.4 1208 L 860.4 1098" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="user" data-edge-to="http_entry" data-edge-key="0" data-edge-id="ask" data-composition-points="180,232;234,232;234,556" d="M 180 232 L 234 232 L 234 556" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="1" data-edge-id="hit" data-composition-points="542.4,1666;542.4,1798;980.4,1798;980.4,1658" d="M 542.4 1666 L 542.4 1798 L 980.4 1798 L 980.4 1658" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="resolve" data-edge-to="cache" data-edge-label="消解后按 user_id 查" data-edge-key="2" data-edge-id="lookup" data-composition-points="542.4,616;542.4,1092;638.4,1092;638.4,1632;622.4,1632" d="M 542.4 616 L 542.4 1092 L 638.4 1092 L 638.4 1632 L 622.4 1632" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="3" data-edge-id="miss" data-composition-points="542.4,1598;542.4,1267;662.4,1267;662.4,958" d="M 542.4 1598 L 542.4 1267 L 662.4 1267 L 662.4 958" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="clarify" data-edge-to="sse" data-edge-key="4" data-edge-id="out_clarify" data-composition-points="860.4,786;860.4,736;980.4,736;980.4,1606" d="M 860.4 786 L 860.4 736 L 980.4 736 L 980.4 1606" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="general" data-edge-to="sse" data-edge-key="5" data-edge-id="out_general" data-composition-points="955.4,1052;973.4,1052;973.4,1606" d="M 955.4 1052 L 973.4 1052 L 973.4 1606" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="image" data-edge-to="sse" data-edge-key="6" data-edge-id="out_image" data-composition-points="955.4,972;987.4,972;987.4,1606" d="M 955.4 972 L 987.4 972 L 987.4 1606" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="presale" data-edge-to="sse" data-edge-key="7" data-edge-id="out_presale" data-composition-points="955.4,892;1001.4,892;1001.4,1606" d="M 955.4 892 L 1001.4 892 L 1001.4 1606" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="static_replies" data-edge-to="sse" data-edge-key="8" data-edge-id="out_static" data-composition-points="955.4,1282;980.4,1282;980.4,1606" d="M 955.4 1282 L 980.4 1282 L 980.4 1606" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="http_entry" data-edge-to="resolve" data-edge-label="取 history + image_path" data-edge-key="9" data-edge-id="prep" data-composition-points="334,582;462.4,582" d="M 334 582 L 462.4 582" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="10" data-edge-id="scope_guard" data-composition-points="662.4,958;662.4,1098;860.4,1098;860.4,1078" d="M 662.4 958 L 662.4 1098 L 860.4 1098 L 860.4 1078" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="11" data-edge-id="to_clarify" data-composition-points="655.4,906;655.4,812;765.4,812" d="M 655.4 906 L 655.4 812 L 765.4 812" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="12" data-edge-id="to_general" data-composition-points="655.4,958;655.4,1059;765.4,1059" d="M 655.4 958 L 655.4 1059 L 765.4 1059" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="13" data-edge-id="to_image" data-composition-points="662.4,906;662.4,890;761.4,890;761.4,930;860.4,930;860.4,946" d="M 662.4 906 L 662.4 890 L 761.4 890 L 761.4 930 L 860.4 930 L 860.4 946" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="14" data-edge-id="to_presale" data-composition-points="669.4,906;669.4,736;749.4,736;749.4,892;765.4,892" d="M 669.4 906 L 669.4 736 L 749.4 736 L 749.4 892 L 765.4 892" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="15" data-edge-id="to_static" data-composition-points="662.4,958;662.4,1448;860.4,1448;860.4,1308" d="M 662.4 958 L 662.4 1448 L 860.4 1448 L 860.4 1308" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
         <g id="node-user" data-node-id="user" data-node-label="用户提问" tabindex="0" role="button" aria-label="聚焦用户提问，浏览器 Chat UI, 客户端" aria-pressed="false" data-node-kind="external" data-node-sublabel="浏览器 Chat UI" data-node-context="客户端">
           <title>用户提问 · 浏览器 Chat UI · 客户端</title>
-          <rect x="48" y="176" width="132" height="52" rx="6" class="c-mask"/>
-          <rect x="48" y="176" width="132" height="52" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 182) scale(0.6875)">
+          <rect x="48" y="206" width="132" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="206" width="132" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 212) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="114" y="197" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">用户提问</text>
-          <text data-detail="context" x="114" y="214" class="t-muted" font-size="8" text-anchor="middle">浏览器 Chat UI</text>
+          <text data-node-label="" data-detail-anchor="" x="114" y="227" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">用户提问</text>
+          <text data-detail="context" x="114" y="244" class="t-muted" font-size="8" text-anchor="middle">浏览器 Chat UI</text>
         </g>
 
         <g id="node-http_entry" data-node-id="http_entry" data-node-label="POST /api/langgraph/query" tabindex="0" role="button" aria-label="聚焦POST /api/langgraph/query，main.py:216, 入口层 › 入口与前置" aria-pressed="false" data-node-kind="backend" data-node-sublabel="main.py:216" data-node-context="入口层 › 入口与前置">
           <title>POST /api/langgraph/query · main.py:216 · 入口层 › 入口与前置</title>
-          <rect x="134" y="466" width="200" height="52" rx="6" class="c-mask"/>
-          <rect x="134" y="466" width="200" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(140 472) scale(0.6875)">
+          <rect x="134" y="556" width="200" height="52" rx="6" class="c-mask"/>
+          <rect x="134" y="556" width="200" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(140 562) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="234" y="487" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">POST /api/langgraph/query</text>
-          <text data-detail="context" x="234" y="504" class="t-muted" font-size="8" text-anchor="middle">main.py:216</text>
+          <text data-node-label="" data-detail-anchor="" x="234" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">POST /api/langgraph/query</text>
+          <text data-detail="context" x="234" y="594" class="t-muted" font-size="8" text-anchor="middle">main.py:216</text>
         </g>
 
         <g id="node-resolve" data-node-id="resolve" data-node-label="入口指代消解" tabindex="0" role="button" aria-label="聚焦入口指代消解，pronoun_resolver.py, 入口层 › 入口与前置" aria-pressed="false" data-node-kind="backend" data-node-sublabel="pronoun_resolver.py" data-node-tag="多轮无条件 LLM" data-node-context="入口层 › 入口与前置">
           <title>入口指代消解 · pronoun_resolver.py · 入口层 › 入口与前置 · 多轮无条件 LLM</title>
-          <rect x="462.4" y="458" width="160" height="68" rx="6" class="c-mask"/>
-          <rect x="462.4" y="458" width="160" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(468.4 464) scale(0.6875)">
+          <rect x="462.4" y="548" width="160" height="68" rx="6" class="c-mask"/>
+          <rect x="462.4" y="548" width="160" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(468.4 554) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="542.4" y="479" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">入口指代消解</text>
-          <text data-detail="context" x="542.4" y="496" class="t-muted" font-size="8" text-anchor="middle">pronoun_resolver.py</text>
-        <text data-detail="fine" x="542.4" y="514" class="t-backend" font-size="7" text-anchor="middle">多轮无条件 LLM</text>
+          <text data-node-label="" data-detail-anchor="" x="542.4" y="569" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">入口指代消解</text>
+          <text data-detail="context" x="542.4" y="586" class="t-muted" font-size="8" text-anchor="middle">pronoun_resolver.py</text>
+        <text data-detail="fine" x="542.4" y="604" class="t-backend" font-size="7" text-anchor="middle">多轮无条件 LLM</text>
         </g>
 
         <g id="node-router" data-node-id="router" data-node-label="意图识别与路由" tabindex="0" role="button" aria-label="聚焦意图识别与路由，analyze_and_route_query, Agent 主图 › 识别与路由" aria-pressed="false" data-node-kind="backend" data-node-sublabel="analyze_and_route_query" data-node-context="Agent 主图 › 识别与路由">
           <title>意图识别与路由 · analyze_and_route_query · Agent 主图 › 识别与路由</title>
-          <rect x="567.4" y="756" width="190" height="52" rx="6" class="c-mask"/>
-          <rect x="567.4" y="756" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(573.4 762) scale(0.6875)">
+          <rect x="567.4" y="906" width="190" height="52" rx="6" class="c-mask"/>
+          <rect x="567.4" y="906" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(573.4 912) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="662.4" y="777" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">意图识别与路由</text>
-          <text data-detail="context" x="662.4" y="794" class="t-muted" font-size="8" text-anchor="middle">analyze_and_route_query</text>
+          <text data-node-label="" data-detail-anchor="" x="662.4" y="927" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">意图识别与路由</text>
+          <text data-detail="context" x="662.4" y="944" class="t-muted" font-size="8" text-anchor="middle">analyze_and_route_query</text>
         </g>
 
         <g id="node-clarify" data-node-id="clarify" data-node-label="意图澄清" tabindex="0" role="button" aria-label="聚焦意图澄清，clarify_node, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="clarify_node" data-node-context="Agent 主图 › 业务分派">
           <title>意图澄清 · clarify_node · Agent 主图 › 业务分派</title>
-          <rect x="765.4" y="846" width="190" height="52" rx="6" class="c-mask"/>
-          <rect x="765.4" y="846" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 852) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="860.4" y="867" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">意图澄清</text>
-          <text data-detail="context" x="860.4" y="884" class="t-muted" font-size="8" text-anchor="middle">clarify_node</text>
-        </g>
-
-        <g id="node-general" data-node-id="general" data-node-label="闲聊应答" tabindex="0" role="button" aria-label="聚焦闲聊应答，respond_to_general_query, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="respond_to_general_query" data-node-context="Agent 主图 › 业务分派">
-          <title>闲聊应答 · respond_to_general_query · Agent 主图 › 业务分派</title>
-          <rect x="765.4" y="726" width="190" height="52" rx="6" class="c-mask"/>
-          <rect x="765.4" y="726" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 732) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="860.4" y="747" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">闲聊应答</text>
-          <text data-detail="context" x="860.4" y="764" class="t-muted" font-size="8" text-anchor="middle">respond_to_general_query</text>
-        </g>
-
-        <g id="node-image" data-node-id="image" data-node-label="图片分析" tabindex="0" role="button" aria-label="聚焦图片分析，create_image_query, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="create_image_query" data-node-context="Agent 主图 › 业务分派">
-          <title>图片分析 · create_image_query · Agent 主图 › 业务分派</title>
           <rect x="765.4" y="786" width="190" height="52" rx="6" class="c-mask"/>
           <rect x="765.4" y="786" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 792) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="860.4" y="807" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">图片分析</text>
-          <text data-detail="context" x="860.4" y="824" class="t-muted" font-size="8" text-anchor="middle">create_image_query</text>
+          <text data-node-label="" data-detail-anchor="" x="860.4" y="807" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">意图澄清</text>
+          <text data-detail="context" x="860.4" y="824" class="t-muted" font-size="8" text-anchor="middle">clarify_node</text>
+        </g>
+
+        <g id="node-general" data-node-id="general" data-node-label="闲聊应答" tabindex="0" role="button" aria-label="聚焦闲聊应答，respond_to_general_query, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="respond_to_general_query" data-node-context="Agent 主图 › 业务分派">
+          <title>闲聊应答 · respond_to_general_query · Agent 主图 › 业务分派</title>
+          <rect x="765.4" y="1026" width="190" height="52" rx="6" class="c-mask"/>
+          <rect x="765.4" y="1026" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 1032) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="860.4" y="1047" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">闲聊应答</text>
+          <text data-detail="context" x="860.4" y="1064" class="t-muted" font-size="8" text-anchor="middle">respond_to_general_query</text>
+        </g>
+
+        <g id="node-image" data-node-id="image" data-node-label="图片分析" tabindex="0" role="button" aria-label="聚焦图片分析，create_image_query, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="create_image_query" data-node-context="Agent 主图 › 业务分派">
+          <title>图片分析 · create_image_query · Agent 主图 › 业务分派</title>
+          <rect x="765.4" y="946" width="190" height="52" rx="6" class="c-mask"/>
+          <rect x="765.4" y="946" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 952) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="860.4" y="967" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">图片分析</text>
+          <text data-detail="context" x="860.4" y="984" class="t-muted" font-size="8" text-anchor="middle">create_image_query</text>
         </g>
 
         <g id="node-presale" data-node-id="presale" data-node-label="售前导购" tabindex="0" role="button" aria-label="聚焦售前导购，create_research_plan, Agent 主图 › 业务分派" aria-pressed="false" data-node-kind="backend" data-node-sublabel="create_research_plan" data-node-context="Agent 主图 › 业务分派">
           <title>售前导购 · create_research_plan · Agent 主图 › 业务分派</title>
-          <rect x="765.4" y="666" width="190" height="52" rx="6" class="c-mask"/>
-          <rect x="765.4" y="666" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 672) scale(0.6875)">
+          <rect x="765.4" y="866" width="190" height="52" rx="6" class="c-mask"/>
+          <rect x="765.4" y="866" width="190" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(771.4 872) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="860.4" y="687" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">售前导购</text>
-          <text data-detail="context" x="860.4" y="704" class="t-muted" font-size="8" text-anchor="middle">create_research_plan</text>
+          <text data-node-label="" data-detail-anchor="" x="860.4" y="887" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">售前导购</text>
+          <text data-detail="context" x="860.4" y="904" class="t-muted" font-size="8" text-anchor="middle">create_research_plan</text>
         </g>
 
         <g id="node-static_replies" data-node-id="static_replies" data-node-label="静态话术组" tabindex="0" role="button" aria-label="聚焦静态话术组，风险/转人工/售后/投诉, 静态话术与兜底 › 业务分派" aria-pressed="false" data-node-kind="security" data-node-sublabel="风险/转人工/售后/投诉" data-node-context="静态话术与兜底 › 业务分派">
           <title>静态话术组 · 风险/转人工/售后/投诉 · 静态话术与兜底 › 业务分派</title>
-          <rect x="765.4" y="1046" width="190" height="52" rx="6" class="c-mask"/>
-          <rect x="765.4" y="1046" width="190" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(771.4 1052) scale(0.6875)">
+          <rect x="765.4" y="1256" width="190" height="52" rx="6" class="c-mask"/>
+          <rect x="765.4" y="1256" width="190" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(771.4 1262) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="860.4" y="1067" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">静态话术组</text>
-          <text data-detail="context" x="860.4" y="1084" class="t-muted" font-size="8" text-anchor="middle">风险/转人工/售后/投诉</text>
+          <text data-node-label="" data-detail-anchor="" x="860.4" y="1277" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">静态话术组</text>
+          <text data-detail="context" x="860.4" y="1294" class="t-muted" font-size="8" text-anchor="middle">风险/转人工/售后/投诉</text>
         </g>
 
         <g id="node-cache" data-node-id="cache" data-node-label="语义缓存查找" tabindex="0" role="button" aria-label="聚焦语义缓存查找，Redis, 出口与存储 › 入口与前置" aria-pressed="false" data-node-kind="database" data-node-sublabel="Redis" data-node-tag="当前未启用" data-node-context="出口与存储 › 入口与前置">
           <title>语义缓存查找 · Redis · 出口与存储 › 入口与前置 · 当前未启用</title>
-          <rect x="462.4" y="1328" width="160" height="68" rx="6" class="c-mask"/>
-          <rect x="462.4" y="1328" width="160" height="68" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(468.4 1334) scale(0.6875)">
+          <rect x="462.4" y="1598" width="160" height="68" rx="6" class="c-mask"/>
+          <rect x="462.4" y="1598" width="160" height="68" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(468.4 1604) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="542.4" y="1349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">语义缓存查找</text>
-          <text data-detail="context" x="542.4" y="1366" class="t-muted" font-size="8" text-anchor="middle">Redis</text>
-        <text data-detail="fine" x="542.4" y="1384" class="t-database" font-size="7" text-anchor="middle">当前未启用</text>
+          <text data-node-label="" data-detail-anchor="" x="542.4" y="1619" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">语义缓存查找</text>
+          <text data-detail="context" x="542.4" y="1636" class="t-muted" font-size="8" text-anchor="middle">Redis</text>
+        <text data-detail="fine" x="542.4" y="1654" class="t-database" font-size="7" text-anchor="middle">当前未启用</text>
         </g>
 
         <g id="node-sse" data-node-id="sse" data-node-label="SSE 流式出口" tabindex="0" role="button" aria-label="聚焦SSE 流式出口，process_stream, 出口与存储 › 流式出口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="process_stream" data-node-context="出口与存储 › 流式出口">
           <title>SSE 流式出口 · process_stream · 出口与存储 › 流式出口</title>
-          <rect x="900.4" y="1336" width="160" height="52" rx="6" class="c-mask"/>
-          <rect x="900.4" y="1336" width="160" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(906.4 1342) scale(0.6875)">
+          <rect x="900.4" y="1606" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="900.4" y="1606" width="160" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(906.4 1612) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="980.4" y="1357" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SSE 流式出口</text>
-          <text data-detail="context" x="980.4" y="1374" class="t-muted" font-size="8" text-anchor="middle">process_stream</text>
+          <text data-node-label="" data-detail-anchor="" x="980.4" y="1627" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SSE 流式出口</text>
+          <text data-detail="context" x="980.4" y="1644" class="t-muted" font-size="8" text-anchor="middle">process_stream</text>
         </g>
 
         <!-- Edge labels -->
 
         <g data-detail="context" data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="1" data-edge-id="hit">
-          <rect x="694" y="1478" width="134.8" height="14" rx="3" class="c-mask"/>
-          <text x="761.4" y="1488" class="t-database" font-size="8" text-anchor="middle">命中直接返回（当前未启用）</text>
+          <rect x="694" y="1778" width="134.8" height="14" rx="3" class="c-mask"/>
+          <text x="761.4" y="1788" class="t-database" font-size="8" text-anchor="middle">命中直接返回（当前未启用）</text>
         </g>
         <g data-detail="context" data-edge-from="resolve" data-edge-to="cache" data-edge-label="消解后按 user_id 查" data-edge-key="2" data-edge-id="lookup">
-          <rect x="539.8" y="892" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="590.4" y="902" class="t-muted" font-size="8" text-anchor="middle">消解后按 user_id 查</text>
+          <rect x="539.8" y="1072" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="590.4" y="1082" class="t-muted" font-size="8" text-anchor="middle">消解后按 user_id 查</text>
         </g>
         <g data-detail="context" data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="3" data-edge-id="miss">
-          <rect x="583" y="1037" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="602.4" y="1047" class="t-muted" font-size="8" text-anchor="middle">未命中</text>
+          <rect x="583" y="1247" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="602.4" y="1257" class="t-muted" font-size="8" text-anchor="middle">未命中</text>
         </g>
 
 
@@ -5353,48 +5354,52 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <g data-detail="context" data-edge-from="http_entry" data-edge-to="resolve" data-edge-label="取 history + image_path" data-edge-key="9" data-edge-id="prep">
-          <rect x="338" y="472" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="398.2" y="482" class="t-muted" font-size="8" text-anchor="middle">取 history + image_path</text>
+          <rect x="338" y="562" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="398.2" y="572" class="t-muted" font-size="8" text-anchor="middle">取 history + image_path</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="10" data-edge-id="to_clarify">
-          <rect x="673.1" y="852" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="706.9" y="862" class="t-muted" font-size="8" text-anchor="middle">type=clarify</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="10" data-edge-id="scope_guard">
+          <rect x="715.6" y="1078" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="761.4" y="1088" class="t-database" font-size="8" text-anchor="middle">ScopeGuard 超范围</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="type=general ｜ ScopeGuard 超范围" data-edge-key="11" data-edge-id="to_general">
-          <rect x="618.1999999999999" y="596" width="168.4" height="14" rx="3" class="c-mask"/>
-          <text x="702.4" y="606" class="t-muted" font-size="8" text-anchor="middle">type=general ｜ ScopeGuard 超范围</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="11" data-edge-id="to_clarify">
+          <rect x="676.6" y="792" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="710.4" y="802" class="t-muted" font-size="8" text-anchor="middle">type=clarify</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="12" data-edge-id="to_image">
-          <rect x="676.9" y="898" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="705.9" y="908" class="t-muted" font-size="8" text-anchor="middle">type=image</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="12" data-edge-id="to_general">
+          <rect x="676.6" y="1039" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="710.4" y="1049" class="t-muted" font-size="8" text-anchor="middle">type=general</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="13" data-edge-id="to_presale">
-          <rect x="659.6" y="720" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="693.4" y="730" class="t-backend" font-size="8" text-anchor="middle">type=presale</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="13" data-edge-id="to_image">
+          <rect x="682.9" y="870" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="711.9" y="880" class="t-muted" font-size="8" text-anchor="middle">type=image</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="14" data-edge-id="to_static">
-          <rect x="713.1999999999999" y="1188" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="761.4" y="1198" class="t-muted" font-size="8" text-anchor="middle">risk / 售后 / 投诉</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="14" data-edge-id="to_presale">
+          <rect x="675.6" y="716" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="709.4" y="726" class="t-backend" font-size="8" text-anchor="middle">type=presale</text>
+        </g>
+        <g data-detail="context" data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="15" data-edge-id="to_static">
+          <rect x="713.1999999999999" y="1428" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="761.4" y="1438" class="t-muted" font-size="8" text-anchor="middle">risk / 售后 / 投诉</text>
         </g>
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="20" y="1506" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="20" data-legend-baseline="1526" data-legend-width="87">
-            <rect x="20" y="1518" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="42" y="1526" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
+          <text x="20" y="1806" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="20" data-legend-baseline="1826" data-legend-width="87">
+            <rect x="20" y="1818" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="42" y="1826" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="114" data-legend-baseline="1526" data-legend-width="61">
-            <rect x="114" y="1518" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="136" y="1526" class="t-muted" font-size="7.5" font-weight="500">策略</text>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="114" data-legend-baseline="1826" data-legend-width="61">
+            <rect x="114" y="1818" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="136" y="1826" class="t-muted" font-size="7.5" font-weight="500">策略</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="上下文 / 追踪" data-legend-x="182" data-legend-baseline="1526" data-legend-width="100">
-            <rect x="182" y="1518" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-            <text x="204" y="1526" class="t-muted" font-size="7.5" font-weight="500">上下文 / 追踪</text>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="上下文 / 追踪" data-legend-x="182" data-legend-baseline="1826" data-legend-width="100">
+            <rect x="182" y="1818" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="204" y="1826" class="t-muted" font-size="7.5" font-weight="500">上下文 / 追踪</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="289" data-legend-baseline="1526" data-legend-width="78">
-            <rect x="289" y="1518" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-            <text x="311" y="1526" class="t-muted" font-size="7.5" font-weight="500">外部系统</text>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="289" data-legend-baseline="1826" data-legend-width="78">
+            <rect x="289" y="1818" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="311" y="1826" class="t-muted" font-size="7.5" font-weight="500">外部系统</text>
           </g>
         </g>
       </svg>
