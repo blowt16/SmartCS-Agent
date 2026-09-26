@@ -5163,11 +5163,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / 业务落点</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="1070" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-2-exception" x="46" y="306" width="1058" height="92" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="322" class="t-security" font-size="10" font-weight="600">EX / 静态话术与兜底</text>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / 出口与存储</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="424" width="1070" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / 出口与存储</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-3-exception" x="46" y="430" width="1058" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="446" class="t-security" font-size="10" font-weight="600">EX / 静态话术与兜底</text>
 
         <!-- Phase headers -->
 
@@ -5176,14 +5176,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <!-- Edge paths -->
-        <path data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="0" data-edge-id="cache_hit" data-composition-points="680,465;680,449;984,449;984,465" d="M 680 465 L 680 449 L 984 449 L 984 465" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="1" data-edge-id="cache_miss" data-composition-points="680,465;680,290;153,290;153,145" d="M 680 465 L 680 290 L 153 290 L 153 145" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="2" data-edge-id="scope_guard" data-composition-points="244,109;474,109;474,217" d="M 244 109 L 474 109 L 474 217" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="3" data-edge-id="to_clarify" data-composition-points="146,145;146,166;680,166;680,217" d="M 146 145 L 146 166 L 680 166 L 680 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="4" data-edge-id="to_general" data-composition-points="244,122.33333333333333;260,122.33333333333333;260,36;488,36;488,217" d="M 244 122.33333333333333 L 260 122.33333333333333 L 260 36 L 488 36 L 488 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="5" data-edge-id="to_image" data-composition-points="244,129;864,129;864,217" d="M 244 129 L 864 129 L 864 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="6" data-edge-id="to_presale" data-composition-points="146,145;146,166;266,166;266,217" d="M 146 145 L 146 166 L 266 166 L 266 217" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="7" data-edge-id="to_static" data-composition-points="48,119;32,119;32,420;266,420;266,393" d="M 48 119 L 32 119 L 32 420 L 266 420 L 266 393" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="0" data-edge-id="cache_hit" data-composition-points="680,341;680,325;984,325;984,341" d="M 680 341 L 680 325 L 984 325 L 984 341" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="1" data-edge-id="cache_miss" data-composition-points="602,367;160,367;160,145" d="M 602 367 L 160 367 L 160 145" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="clarify" data-edge-to="sse" data-edge-key="2" data-edge-id="clarify_out" data-composition-points="680,269;680,290;991,290;991,341" d="M 680 269 L 680 290 L 991 290 L 991 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="general" data-edge-to="sse" data-edge-key="3" data-edge-id="general_out" data-composition-points="481,269;481,290;977,290;977,341" d="M 481 269 L 481 290 L 977 290 L 977 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="image" data-edge-to="sse" data-edge-key="4" data-edge-id="image_out" data-composition-points="956,243;1005,243;1005,341" d="M 956 243 L 1005 243 L 1005 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="presale" data-edge-to="sse" data-edge-key="5" data-edge-id="presale_out" data-composition-points="266,269;266,290;963,290;963,341" d="M 266 269 L 266 290 L 963 290 L 963 341" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="6" data-edge-id="scope_guard" data-composition-points="244,109;474,109;474,217" d="M 244 109 L 474 109 L 474 217" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="static_replies" data-edge-to="sse" data-edge-key="7" data-edge-id="static_out" data-composition-points="408,491;984,491;984,393" d="M 408 491 L 984 491 L 984 393" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="8" data-edge-id="to_clarify" data-composition-points="146,145;146,166;680,166;680,217" d="M 146 145 L 146 166 L 680 166 L 680 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="9" data-edge-id="to_general" data-composition-points="244,122.33333333333333;260,122.33333333333333;260,36;488,36;488,217" d="M 244 122.33333333333333 L 260 122.33333333333333 L 260 36 L 488 36 L 488 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="10" data-edge-id="to_image" data-composition-points="244,129;864,129;864,217" d="M 244 129 L 864 129 L 864 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="11" data-edge-id="to_presale" data-composition-points="146,145;146,296;266,296;266,269" d="M 146 145 L 146 296 L 266 296 L 266 269" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="12" data-edge-id="to_static" data-composition-points="48,119;20,119;20,491;124,491" d="M 48 119 L 20 119 L 20 491 L 124 491" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
         <g id="node-router" data-node-id="router" data-node-label="analyze_and_route_query" tabindex="0" role="button" aria-label="聚焦analyze_and_route_query，ScopeGuard + Router 双维识别, Agent 主图" aria-pressed="false" data-node-kind="backend" data-node-sublabel="ScopeGuard + Router 双维识别" data-node-context="Agent 主图">
@@ -5240,73 +5245,78 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="864" y="255" class="t-muted" font-size="8" text-anchor="middle">Qwen-VL</text>
         </g>
 
-        <g id="node-static_replies" data-node-id="static_replies" data-node-label="风险拦截 / 转人工 / 售后占位 / 投诉占位" tabindex="0" role="button" aria-label="聚焦风险拦截 / 转人工 / 售后占位 / 投诉占位，4 个静态话术节点合并, 静态话术与兜底" aria-pressed="false" data-node-kind="security" data-node-sublabel="4 个静态话术节点合并" data-node-context="静态话术与兜底">
-          <title>风险拦截 / 转人工 / 售后占位 / 投诉占位 · 4 个静态话术节点合并 · 静态话术与兜底</title>
-          <rect x="124" y="341" width="284" height="52" rx="6" class="c-mask"/>
-          <rect x="124" y="341" width="284" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(130 347) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="266" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">风险拦截 / 转人工 / 售后占位 / 投诉占位</text>
-          <text data-detail="context" x="266" y="379" class="t-muted" font-size="8" text-anchor="middle">4 个静态话术节点合并</text>
-        </g>
-
         <g id="node-cache" data-node-id="cache" data-node-label="语义缓存查找" tabindex="0" role="button" aria-label="聚焦语义缓存查找，Redis · 当前未启用, 出口与存储" aria-pressed="false" data-node-kind="database" data-node-sublabel="Redis · 当前未启用" data-node-context="出口与存储">
           <title>语义缓存查找 · Redis · 当前未启用 · 出口与存储</title>
-          <rect x="602" y="465" width="156" height="52" rx="6" class="c-mask"/>
-          <rect x="602" y="465" width="156" height="52" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(608 471) scale(0.6875)">
+          <rect x="602" y="341" width="156" height="52" rx="6" class="c-mask"/>
+          <rect x="602" y="341" width="156" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(608 347) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="680" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">语义缓存查找</text>
-          <text data-detail="context" x="680" y="503" class="t-muted" font-size="8" text-anchor="middle">Redis · 当前未启用</text>
+          <text data-node-label="" data-detail-anchor="" x="680" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">语义缓存查找</text>
+          <text data-detail="context" x="680" y="379" class="t-muted" font-size="8" text-anchor="middle">Redis · 当前未启用</text>
         </g>
 
         <g id="node-sse" data-node-id="sse" data-node-label="SSE 流式出口" tabindex="0" role="button" aria-label="聚焦SSE 流式出口，process_stream + stream_filter.py, 出口与存储" aria-pressed="false" data-node-kind="backend" data-node-sublabel="process_stream + stream_filter.py" data-node-context="出口与存储">
           <title>SSE 流式出口 · process_stream + stream_filter.py · 出口与存储</title>
-          <rect x="866" y="465" width="236" height="52" rx="6" class="c-mask"/>
-          <rect x="866" y="465" width="236" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(872 471) scale(0.6875)">
+          <rect x="866" y="341" width="236" height="52" rx="6" class="c-mask"/>
+          <rect x="866" y="341" width="236" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(872 347) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="984" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SSE 流式出口</text>
-          <text data-detail="context" x="984" y="503" class="t-muted" font-size="8" text-anchor="middle">process_stream + stream_filter.py</text>
+          <text data-node-label="" data-detail-anchor="" x="984" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SSE 流式出口</text>
+          <text data-detail="context" x="984" y="379" class="t-muted" font-size="8" text-anchor="middle">process_stream + stream_filter.py</text>
+        </g>
+
+        <g id="node-static_replies" data-node-id="static_replies" data-node-label="风险拦截 / 转人工 / 售后占位 / 投诉占位" tabindex="0" role="button" aria-label="聚焦风险拦截 / 转人工 / 售后占位 / 投诉占位，4 个静态话术节点合并, 静态话术与兜底" aria-pressed="false" data-node-kind="security" data-node-sublabel="4 个静态话术节点合并" data-node-context="静态话术与兜底">
+          <title>风险拦截 / 转人工 / 售后占位 / 投诉占位 · 4 个静态话术节点合并 · 静态话术与兜底</title>
+          <rect x="124" y="465" width="284" height="52" rx="6" class="c-mask"/>
+          <rect x="124" y="465" width="284" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(130 471) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="266" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">风险拦截 / 转人工 / 售后占位 / 投诉占位</text>
+          <text data-detail="context" x="266" y="503" class="t-muted" font-size="8" text-anchor="middle">4 个静态话术节点合并</text>
         </g>
 
         <!-- Edge labels -->
         <g data-detail="context" data-edge-from="cache" data-edge-to="sse" data-edge-label="命中直接返回（当前未启用）" data-edge-key="0" data-edge-id="cache_hit">
-          <rect x="764.6" y="429" width="134.8" height="14" rx="3" class="c-mask"/>
-          <text x="832" y="439" class="t-database" font-size="8" text-anchor="middle">命中直接返回（当前未启用）</text>
+          <rect x="764.6" y="305" width="134.8" height="14" rx="3" class="c-mask"/>
+          <text x="832" y="315" class="t-database" font-size="8" text-anchor="middle">命中直接返回（当前未启用）</text>
         </g>
         <g data-detail="context" data-edge-from="cache" data-edge-to="router" data-edge-label="未命中" data-edge-key="1" data-edge-id="cache_miss">
-          <rect x="397.1" y="270" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="416.5" y="280" class="t-muted" font-size="8" text-anchor="middle">未命中</text>
+          <rect x="361.6" y="347" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="381" y="357" class="t-muted" font-size="8" text-anchor="middle">未命中</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="2" data-edge-id="scope_guard">
+
+
+
+
+        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="ScopeGuard 超范围" data-edge-key="6" data-edge-id="scope_guard">
           <rect x="313.2" y="89" width="91.6" height="14" rx="3" class="c-mask"/>
           <text x="359" y="99" class="t-database" font-size="8" text-anchor="middle">ScopeGuard 超范围</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="3" data-edge-id="to_clarify">
+
+        <g data-detail="context" data-edge-from="router" data-edge-to="clarify" data-edge-label="type=clarify" data-edge-key="8" data-edge-id="to_clarify">
           <rect x="379.2" y="146" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="413" y="156" class="t-muted" font-size="8" text-anchor="middle">type=clarify</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="4" data-edge-id="to_general">
+        <g data-detail="context" data-edge-from="router" data-edge-to="general" data-edge-label="type=general" data-edge-key="9" data-edge-id="to_general">
           <rect x="340.2" y="16" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="374" y="26" class="t-muted" font-size="8" text-anchor="middle">type=general</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="5" data-edge-id="to_image">
+        <g data-detail="context" data-edge-from="router" data-edge-to="image" data-edge-label="type=image" data-edge-key="10" data-edge-id="to_image">
           <rect x="525" y="109" width="58" height="14" rx="3" class="c-mask"/>
           <text x="554" y="119" class="t-muted" font-size="8" text-anchor="middle">type=image</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="6" data-edge-id="to_presale">
-          <rect x="172.2" y="146" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="206" y="156" class="t-backend" font-size="8" text-anchor="middle">type=presale</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="presale" data-edge-label="type=presale" data-edge-key="11" data-edge-id="to_presale">
+          <rect x="172.2" y="276" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="206" y="286" class="t-backend" font-size="8" text-anchor="middle">type=presale</text>
         </g>
-        <g data-detail="context" data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="7" data-edge-id="to_static">
-          <rect x="100.80000000000001" y="400" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="149" y="410" class="t-muted" font-size="8" text-anchor="middle">risk / 售后 / 投诉</text>
+        <g data-detail="context" data-edge-from="router" data-edge-to="static_replies" data-edge-label="risk / 售后 / 投诉" data-edge-key="12" data-edge-id="to_static">
+          <rect x="23.800000000000004" y="471" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="72" y="481" class="t-muted" font-size="8" text-anchor="middle">risk / 售后 / 投诉</text>
         </g>
 
         <!-- Legend -->

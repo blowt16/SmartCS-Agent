@@ -8,30 +8,176 @@
     "output": "D:/SmartCS-Agent/docs/diagrams/00b-dialogue-dispatch.html"
   },
   "lanes": [
-    { "id": "graph",    "label": "Agent 主图" },
-    { "id": "branch",   "label": "业务落点" },
-    { "id": "fallback", "label": "静态话术与兜底", "variant": "exception" },
-    { "id": "io",       "label": "出口与存储" }
+    {
+      "id": "graph",
+      "label": "Agent 主图"
+    },
+    {
+      "id": "branch",
+      "label": "业务落点"
+    },
+    {
+      "id": "io",
+      "label": "出口与存储"
+    },
+    {
+      "id": "fallback",
+      "label": "静态话术与兜底",
+      "variant": "exception"
+    }
   ],
   "nodes": [
-    { "id": "router",         "lane": "graph",    "col": 0, "type": "backend",  "label": "analyze_and_route_query", "sublabel": "ScopeGuard + Router 双维识别", "width": 196 },
-    { "id": "presale",        "lane": "branch",   "col": 1, "type": "backend",  "label": "售前 create_research_plan", "sublabel": "→ 图 10 / 11", "width": 200 },
-    { "id": "general",        "lane": "branch",   "col": 2, "type": "backend",  "label": "闲聊 respond_to_general_query", "width": 214 },
-    { "id": "clarify",        "lane": "branch",   "col": 3, "type": "backend",  "label": "澄清 clarify_node", "sublabel": "→ 图 20", "width": 168 },
-    { "id": "image",          "lane": "branch",   "col": 4, "type": "backend",  "label": "图片 create_image_query", "sublabel": "Qwen-VL", "width": 184 },
-    { "id": "static_replies", "lane": "fallback", "col": 1, "type": "security", "label": "风险拦截 / 转人工 / 售后占位 / 投诉占位", "sublabel": "4 个静态话术节点合并", "width": 284 },
-    { "id": "cache",          "lane": "io",       "col": 3, "type": "database", "label": "语义缓存查找", "sublabel": "Redis · 当前未启用", "width": 156 },
-    { "id": "sse",            "lane": "io",       "col": 5, "type": "backend",  "label": "SSE 流式出口", "sublabel": "process_stream + stream_filter.py", "width": 236 }
+    {
+      "id": "router",
+      "lane": "graph",
+      "col": 0,
+      "type": "backend",
+      "label": "analyze_and_route_query",
+      "sublabel": "ScopeGuard + Router 双维识别",
+      "width": 196
+    },
+    {
+      "id": "presale",
+      "lane": "branch",
+      "col": 1,
+      "type": "backend",
+      "label": "售前 create_research_plan",
+      "sublabel": "→ 图 10 / 11",
+      "width": 200
+    },
+    {
+      "id": "general",
+      "lane": "branch",
+      "col": 2,
+      "type": "backend",
+      "label": "闲聊 respond_to_general_query",
+      "width": 214
+    },
+    {
+      "id": "clarify",
+      "lane": "branch",
+      "col": 3,
+      "type": "backend",
+      "label": "澄清 clarify_node",
+      "sublabel": "→ 图 20",
+      "width": 168
+    },
+    {
+      "id": "image",
+      "lane": "branch",
+      "col": 4,
+      "type": "backend",
+      "label": "图片 create_image_query",
+      "sublabel": "Qwen-VL",
+      "width": 184
+    },
+    {
+      "id": "static_replies",
+      "lane": "fallback",
+      "col": 1,
+      "type": "security",
+      "label": "风险拦截 / 转人工 / 售后占位 / 投诉占位",
+      "sublabel": "4 个静态话术节点合并",
+      "width": 284
+    },
+    {
+      "id": "cache",
+      "lane": "io",
+      "col": 3,
+      "type": "database",
+      "label": "语义缓存查找",
+      "sublabel": "Redis · 当前未启用",
+      "width": 156
+    },
+    {
+      "id": "sse",
+      "lane": "io",
+      "col": 5,
+      "type": "backend",
+      "label": "SSE 流式出口",
+      "sublabel": "process_stream + stream_filter.py",
+      "width": 236
+    }
   ],
   "edges": [
-    { "id": "to_presale",  "from": "router", "to": "presale",        "label": "type=presale", "variant": "emphasis" },
-    { "id": "to_general",  "from": "router", "to": "general",        "label": "type=general" },
-    { "id": "scope_guard", "from": "router", "to": "general",        "label": "ScopeGuard 超范围", "variant": "dashed" },
-    { "id": "to_clarify",  "from": "router", "to": "clarify",        "label": "type=clarify" },
-    { "id": "to_image",    "from": "router", "to": "image",          "label": "type=image" },
-    { "id": "to_static",   "from": "router", "to": "static_replies", "label": "risk / 售后 / 投诉" },
-    { "id": "cache_hit",   "from": "cache",  "to": "sse",            "label": "命中直接返回（当前未启用）", "variant": "dashed", "role": "return" },
-    { "id": "cache_miss",  "from": "cache",  "to": "router",         "label": "未命中" }
+    {
+      "id": "to_presale",
+      "from": "router",
+      "to": "presale",
+      "label": "type=presale",
+      "variant": "emphasis"
+    },
+    {
+      "id": "to_general",
+      "from": "router",
+      "to": "general",
+      "label": "type=general"
+    },
+    {
+      "id": "scope_guard",
+      "from": "router",
+      "to": "general",
+      "label": "ScopeGuard 超范围",
+      "variant": "dashed"
+    },
+    {
+      "id": "to_clarify",
+      "from": "router",
+      "to": "clarify",
+      "label": "type=clarify"
+    },
+    {
+      "id": "to_image",
+      "from": "router",
+      "to": "image",
+      "label": "type=image"
+    },
+    {
+      "id": "to_static",
+      "from": "router",
+      "to": "static_replies",
+      "label": "risk / 售后 / 投诉"
+    },
+    {
+      "id": "cache_hit",
+      "from": "cache",
+      "to": "sse",
+      "label": "命中直接返回（当前未启用）",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "cache_miss",
+      "from": "cache",
+      "to": "router",
+      "label": "未命中"
+    },
+    {
+      "id": "presale_out",
+      "from": "presale",
+      "to": "sse",
+      "variant": "emphasis"
+    },
+    {
+      "id": "general_out",
+      "from": "general",
+      "to": "sse"
+    },
+    {
+      "id": "clarify_out",
+      "from": "clarify",
+      "to": "sse"
+    },
+    {
+      "id": "image_out",
+      "from": "image",
+      "to": "sse"
+    },
+    {
+      "id": "static_out",
+      "from": "static_replies",
+      "to": "sse"
+    }
   ],
   "cards": [
     {
