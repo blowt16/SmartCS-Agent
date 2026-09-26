@@ -9,16 +9,12 @@
   },
   "lanes": [
     {
-      "id": "container",
-      "label": "容器节点"
+      "id": "spine",
+      "label": "主链（容器节点 → multi_tool 子图）"
     },
     {
-      "id": "plan",
-      "label": "multi_tool 子图 · 分解与派发"
-    },
-    {
-      "id": "exec",
-      "label": "multi_tool 子图 · 检索与汇总"
+      "id": "support",
+      "label": "支持 · 子图单例获取"
     },
     {
       "id": "fallback",
@@ -38,7 +34,7 @@
   "nodes": [
     {
       "id": "entry",
-      "lane": "container",
+      "lane": "spine",
       "col": 0,
       "type": "backend",
       "label": "create_research_plan",
@@ -46,8 +42,53 @@
       "width": 140
     },
     {
+      "id": "planner",
+      "lane": "spine",
+      "col": 1,
+      "type": "backend",
+      "label": "planner 任务分解",
+      "sublabel": "PLANNER_TEMPERATURE=0 结构化输出",
+      "width": 162
+    },
+    {
+      "id": "fanout",
+      "lane": "spine",
+      "col": 2,
+      "type": "messagebus",
+      "label": "Send 并行派发",
+      "sublabel": "每任务一个 Send",
+      "width": 94
+    },
+    {
+      "id": "tools",
+      "lane": "spine",
+      "col": 3,
+      "type": "backend",
+      "label": "customer_tools 检索节点",
+      "sublabel": "每子任务一次混合检索",
+      "width": 160
+    },
+    {
+      "id": "summarize",
+      "lane": "spine",
+      "col": 4,
+      "type": "backend",
+      "label": "summarize",
+      "sublabel": "_assemble_evidence 单证据串",
+      "width": 138
+    },
+    {
+      "id": "final",
+      "lane": "spine",
+      "col": 5,
+      "type": "backend",
+      "label": "final_answer",
+      "sublabel": "answer = summary",
+      "width": 87
+    },
+    {
       "id": "singleton",
-      "lane": "container",
+      "lane": "support",
       "col": 1,
       "type": "backend",
       "label": "get_research_graph()",
@@ -57,56 +98,11 @@
     {
       "id": "guard",
       "lane": "fallback",
-      "col": 1,
+      "col": 0,
       "type": "security",
       "label": "TimeoutGuard(30s)",
       "sublabel": "RAG_TIMEOUT_SECONDS",
       "width": 120
-    },
-    {
-      "id": "planner",
-      "lane": "plan",
-      "col": 2,
-      "type": "backend",
-      "label": "planner 任务分解",
-      "sublabel": "PLANNER_TEMPERATURE=0 结构化输出",
-      "width": 162
-    },
-    {
-      "id": "fanout",
-      "lane": "plan",
-      "col": 3,
-      "type": "messagebus",
-      "label": "Send 并行派发",
-      "sublabel": "每任务一个 Send",
-      "width": 94
-    },
-    {
-      "id": "tools",
-      "lane": "exec",
-      "col": 3,
-      "type": "backend",
-      "label": "customer_tools 检索节点",
-      "sublabel": "每子任务一次混合检索",
-      "width": 160
-    },
-    {
-      "id": "summarize",
-      "lane": "exec",
-      "col": 4,
-      "type": "backend",
-      "label": "summarize",
-      "sublabel": "_assemble_evidence 单证据串",
-      "width": 138
-    },
-    {
-      "id": "final",
-      "lane": "exec",
-      "col": 5,
-      "type": "backend",
-      "label": "final_answer",
-      "sublabel": "answer = summary",
-      "width": 87
     },
     {
       "id": "fallback_reply",

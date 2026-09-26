@@ -5130,7 +5130,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1216 652" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+      <svg viewBox="0 0 1233 528" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
         <title id="archify-diagram-title">售前导购编排流程</title>
         <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
@@ -5156,18 +5156,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1160" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 容器节点</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1177" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 主链（容器节点 → multi_tool 子图）</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="176" width="1160" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / multi_tool 子图 · 分解与派发</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="176" width="1177" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / 支持 · 子图单例获取</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="1160" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / multi_tool 子图 · 检索与汇总</text>
-
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="424" width="1160" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-3-exception" x="46" y="430" width="1148" height="92" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="54" y="446" class="t-security" font-size="10" font-weight="600">EX / 兜底</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="1177" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-2-exception" x="46" y="306" width="1165" height="92" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="322" class="t-security" font-size="10" font-weight="600">EX / 兜底</text>
 
         <!-- Phase headers -->
 
@@ -5176,18 +5173,18 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 
         <!-- Edge paths -->
-        <path data-edge-from="guard" data-edge-to="fallback_reply" data-edge-label="超时 → 降级话术" data-edge-key="0" data-edge-id="guard_out" data-composition-points="412.8,491;858.5999999999999,491" d="M 412.8 491 L 858.5999999999999 491" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="planner" data-edge-to="fanout" data-edge-label="每任务一个 Send" data-edge-key="1" data-edge-id="planner_out" data-composition-points="553.8,243;643.8,243" d="M 553.8 243 L 643.8 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="singleton" data-edge-to="planner" data-edge-label="运行子图" data-edge-key="2" data-edge-id="run_subgraph" data-composition-points="422.8,119;472.8,119;472.8,217" d="M 422.8 119 L 472.8 119 L 472.8 217" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="fanout" data-edge-to="tools" data-edge-label="N 个子任务并发" data-edge-key="3" data-edge-id="send_out" data-composition-points="690.8,269;690.8,290;786.8,290;786.8,367;770.8,367" d="M 690.8 269 L 690.8 290 L 786.8 290 L 786.8 367 L 770.8 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="summarize" data-edge-to="final" data-edge-label="answer = summary" data-edge-key="4" data-edge-id="sum_out" data-composition-points="1003.5999999999999,367;1098.3999999999999,367" d="M 1003.5999999999999 367 L 1098.3999999999999 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="entry" data-edge-to="guard" data-edge-label="30s 超时保护" data-edge-key="5" data-edge-id="to_guard" data-composition-points="188,119;270.4,119;270.4,449;352.8,449;352.8,465" d="M 188 119 L 270.4 119 L 270.4 449 L 352.8 449 L 352.8 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="entry" data-edge-to="singleton" data-edge-label="取进程级单例子图" data-edge-key="6" data-edge-id="to_singleton" data-composition-points="188,119;270.4,119;270.4,77;352.8,77;352.8,93" d="M 188 119 L 270.4 119 L 270.4 77 L 352.8 77 L 352.8 93" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="tools" data-edge-to="summarize" data-edge-label="按 chunk_id 去重" data-edge-key="7" data-edge-id="tools_out" data-composition-points="690.8,393;690.8,409;934.5999999999999,409;934.5999999999999,393" d="M 690.8 393 L 690.8 409 L 934.5999999999999 409 L 934.5999999999999 393" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="guard" data-edge-to="fallback_reply" data-edge-label="超时 → 降级话术" data-edge-key="0" data-edge-id="guard_out" data-composition-points="178,367;875,367" d="M 178 367 L 875 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="planner" data-edge-to="fanout" data-edge-label="每任务一个 Send" data-edge-key="1" data-edge-id="planner_out" data-composition-points="358,119;448,119" d="M 358 119 L 448 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="singleton" data-edge-to="planner" data-edge-label="运行子图" data-edge-key="2" data-edge-id="run_subgraph" data-composition-points="277,217;277,145" d="M 277 217 L 277 145" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="fanout" data-edge-to="tools" data-edge-label="N 个子任务并发" data-edge-key="3" data-edge-id="send_out" data-composition-points="542,119;627.2,119" d="M 542 119 L 627.2 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="summarize" data-edge-to="final" data-edge-label="answer = summary" data-edge-key="4" data-edge-id="sum_out" data-composition-points="1020,119;1114.8,119" d="M 1020 119 L 1114.8 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="entry" data-edge-to="guard" data-edge-label="30s 超时保护" data-edge-key="5" data-edge-id="to_guard" data-composition-points="48,119;32,119;32,228;118,228;118,341" d="M 48 119 L 32 119 L 32 228 L 118 228 L 118 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="entry" data-edge-to="singleton" data-edge-label="取进程级单例子图" data-edge-key="6" data-edge-id="to_singleton" data-composition-points="48,119;32,119;32,166;363,166;363,243;347,243" d="M 48 119 L 32 119 L 32 166 L 363 166 L 363 243 L 347 243" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="tools" data-edge-to="summarize" data-edge-label="按 chunk_id 去重" data-edge-key="7" data-edge-id="tools_out" data-composition-points="787.2,119;882,119" d="M 787.2 119 L 882 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <g id="node-entry" data-node-id="entry" data-node-label="create_research_plan" tabindex="0" role="button" aria-label="聚焦create_research_plan，主图售前节点, 容器节点" aria-pressed="false" data-node-kind="backend" data-node-sublabel="主图售前节点" data-node-context="容器节点">
-          <title>create_research_plan · 主图售前节点 · 容器节点</title>
+        <g id="node-entry" data-node-id="entry" data-node-label="create_research_plan" tabindex="0" role="button" aria-label="聚焦create_research_plan，主图售前节点, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="主图售前节点" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>create_research_plan · 主图售前节点 · 主链（容器节点 → multi_tool 子图）</title>
           <rect x="48" y="93" width="140" height="52" rx="6" class="c-mask"/>
           <rect x="48" y="93" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(54 99) scale(0.6875)">
@@ -5197,147 +5194,147 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="118" y="131" class="t-muted" font-size="8" text-anchor="middle">主图售前节点</text>
         </g>
 
-        <g id="node-singleton" data-node-id="singleton" data-node-label="get_research_graph()" tabindex="0" role="button" aria-label="聚焦get_research_graph()，进程级单例 · 双重检查锁, 容器节点" aria-pressed="false" data-node-kind="backend" data-node-sublabel="进程级单例 · 双重检查锁" data-node-context="容器节点">
-          <title>get_research_graph() · 进程级单例 · 双重检查锁 · 容器节点</title>
-          <rect x="282.8" y="93" width="140" height="52" rx="6" class="c-mask"/>
-          <rect x="282.8" y="93" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(288.8 99) scale(0.6875)">
+        <g id="node-planner" data-node-id="planner" data-node-label="planner 任务分解" tabindex="0" role="button" aria-label="聚焦planner 任务分解，PLANNER_TEMPERATURE=0 结构化输出, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PLANNER_TEMPERATURE=0 结构化输出" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>planner 任务分解 · PLANNER_TEMPERATURE=0 结构化输出 · 主链（容器节点 → multi_tool 子图）</title>
+          <rect x="196" y="93" width="162" height="52" rx="6" class="c-mask"/>
+          <rect x="196" y="93" width="162" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(202 99) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="352.8" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">get_research_graph()</text>
-          <text data-detail="context" x="352.8" y="131" class="t-muted" font-size="8" text-anchor="middle">进程级单例 · 双重检查锁</text>
+          <text data-node-label="" data-detail-anchor="" x="277" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">planner 任务分解</text>
+          <text data-detail="context" x="277" y="131" class="t-muted" font-size="8" text-anchor="middle">PLANNER_TEMPERATURE=0 结构化输出</text>
         </g>
 
-        <g id="node-planner" data-node-id="planner" data-node-label="planner 任务分解" tabindex="0" role="button" aria-label="聚焦planner 任务分解，PLANNER_TEMPERATURE=0 结构化输出, multi_tool 子图 · 分解与派发" aria-pressed="false" data-node-kind="backend" data-node-sublabel="PLANNER_TEMPERATURE=0 结构化输出" data-node-context="multi_tool 子图 · 分解与派发">
-          <title>planner 任务分解 · PLANNER_TEMPERATURE=0 结构化输出 · multi_tool 子图 · 分解与派发</title>
-          <rect x="391.8" y="217" width="162" height="52" rx="6" class="c-mask"/>
-          <rect x="391.8" y="217" width="162" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(397.8 223) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="472.8" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">planner 任务分解</text>
-          <text data-detail="context" x="472.8" y="255" class="t-muted" font-size="8" text-anchor="middle">PLANNER_TEMPERATURE=0 结构化输出</text>
-        </g>
-
-        <g id="node-fanout" data-node-id="fanout" data-node-label="Send 并行派发" tabindex="0" role="button" aria-label="聚焦Send 并行派发，每任务一个 Send, multi_tool 子图 · 分解与派发" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="每任务一个 Send" data-node-context="multi_tool 子图 · 分解与派发">
-          <title>Send 并行派发 · 每任务一个 Send · multi_tool 子图 · 分解与派发</title>
-          <rect x="643.8" y="217" width="94" height="52" rx="6" class="c-mask"/>
-          <rect x="643.8" y="217" width="94" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(649.8 223) scale(0.6875)">
+        <g id="node-fanout" data-node-id="fanout" data-node-label="Send 并行派发" tabindex="0" role="button" aria-label="聚焦Send 并行派发，每任务一个 Send, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="每任务一个 Send" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>Send 并行派发 · 每任务一个 Send · 主链（容器节点 → multi_tool 子图）</title>
+          <rect x="448" y="93" width="94" height="52" rx="6" class="c-mask"/>
+          <rect x="448" y="93" width="94" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(454 99) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="690.8" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Send 并行派发</text>
-          <text data-detail="context" x="690.8" y="255" class="t-muted" font-size="8" text-anchor="middle">每任务一个 Send</text>
+          <text data-node-label="" data-detail-anchor="" x="495" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Send 并行派发</text>
+          <text data-detail="context" x="495" y="131" class="t-muted" font-size="8" text-anchor="middle">每任务一个 Send</text>
         </g>
 
-        <g id="node-tools" data-node-id="tools" data-node-label="customer_tools 检索节点" tabindex="0" role="button" aria-label="聚焦customer_tools 检索节点，每子任务一次混合检索, multi_tool 子图 · 检索与汇总" aria-pressed="false" data-node-kind="backend" data-node-sublabel="每子任务一次混合检索" data-node-context="multi_tool 子图 · 检索与汇总">
-          <title>customer_tools 检索节点 · 每子任务一次混合检索 · multi_tool 子图 · 检索与汇总</title>
-          <rect x="610.8" y="341" width="160" height="52" rx="6" class="c-mask"/>
-          <rect x="610.8" y="341" width="160" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(616.8 347) scale(0.6875)">
+        <g id="node-tools" data-node-id="tools" data-node-label="customer_tools 检索节点" tabindex="0" role="button" aria-label="聚焦customer_tools 检索节点，每子任务一次混合检索, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="每子任务一次混合检索" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>customer_tools 检索节点 · 每子任务一次混合检索 · 主链（容器节点 → multi_tool 子图）</title>
+          <rect x="627.2" y="93" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="627.2" y="93" width="160" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(633.2 99) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="690.8" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">customer_tools 检索节点</text>
-          <text data-detail="context" x="690.8" y="379" class="t-muted" font-size="8" text-anchor="middle">每子任务一次混合检索</text>
+          <text data-node-label="" data-detail-anchor="" x="707.2" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">customer_tools 检索节点</text>
+          <text data-detail="context" x="707.2" y="131" class="t-muted" font-size="8" text-anchor="middle">每子任务一次混合检索</text>
         </g>
 
-        <g id="node-summarize" data-node-id="summarize" data-node-label="summarize" tabindex="0" role="button" aria-label="聚焦summarize，_assemble_evidence 单证据串, multi_tool 子图 · 检索与汇总" aria-pressed="false" data-node-kind="backend" data-node-sublabel="_assemble_evidence 单证据串" data-node-context="multi_tool 子图 · 检索与汇总">
-          <title>summarize · _assemble_evidence 单证据串 · multi_tool 子图 · 检索与汇总</title>
-          <rect x="865.5999999999999" y="341" width="138" height="52" rx="6" class="c-mask"/>
-          <rect x="865.5999999999999" y="341" width="138" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(871.5999999999999 347) scale(0.6875)">
+        <g id="node-summarize" data-node-id="summarize" data-node-label="summarize" tabindex="0" role="button" aria-label="聚焦summarize，_assemble_evidence 单证据串, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="_assemble_evidence 单证据串" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>summarize · _assemble_evidence 单证据串 · 主链（容器节点 → multi_tool 子图）</title>
+          <rect x="882" y="93" width="138" height="52" rx="6" class="c-mask"/>
+          <rect x="882" y="93" width="138" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(888 99) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="934.5999999999999" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">summarize</text>
-          <text data-detail="context" x="934.5999999999999" y="379" class="t-muted" font-size="8" text-anchor="middle">_assemble_evidence 单证据串</text>
+          <text data-node-label="" data-detail-anchor="" x="951" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">summarize</text>
+          <text data-detail="context" x="951" y="131" class="t-muted" font-size="8" text-anchor="middle">_assemble_evidence 单证据串</text>
         </g>
 
-        <g id="node-final" data-node-id="final" data-node-label="final_answer" tabindex="0" role="button" aria-label="聚焦final_answer，answer = summary, multi_tool 子图 · 检索与汇总" aria-pressed="false" data-node-kind="backend" data-node-sublabel="answer = summary" data-node-context="multi_tool 子图 · 检索与汇总">
-          <title>final_answer · answer = summary · multi_tool 子图 · 检索与汇总</title>
-          <rect x="1098.3999999999999" y="341" width="87" height="52" rx="6" class="c-mask"/>
-          <rect x="1098.3999999999999" y="341" width="87" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1104.3999999999999 347) scale(0.6875)">
+        <g id="node-final" data-node-id="final" data-node-label="final_answer" tabindex="0" role="button" aria-label="聚焦final_answer，answer = summary, 主链（容器节点 → multi_tool 子图）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="answer = summary" data-node-context="主链（容器节点 → multi_tool 子图）">
+          <title>final_answer · answer = summary · 主链（容器节点 → multi_tool 子图）</title>
+          <rect x="1114.8" y="93" width="87" height="52" rx="6" class="c-mask"/>
+          <rect x="1114.8" y="93" width="87" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1120.8 99) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1141.8999999999999" y="362" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">final_answer</text>
-          <text data-detail="context" x="1141.8999999999999" y="379" class="t-muted" font-size="8" text-anchor="middle">answer = summary</text>
+          <text data-node-label="" data-detail-anchor="" x="1158.3" y="114" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">final_answer</text>
+          <text data-detail="context" x="1158.3" y="131" class="t-muted" font-size="8" text-anchor="middle">answer = summary</text>
+        </g>
+
+        <g id="node-singleton" data-node-id="singleton" data-node-label="get_research_graph()" tabindex="0" role="button" aria-label="聚焦get_research_graph()，进程级单例 · 双重检查锁, 支持 · 子图单例获取" aria-pressed="false" data-node-kind="backend" data-node-sublabel="进程级单例 · 双重检查锁" data-node-context="支持 · 子图单例获取">
+          <title>get_research_graph() · 进程级单例 · 双重检查锁 · 支持 · 子图单例获取</title>
+          <rect x="207" y="217" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="207" y="217" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(213 223) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="277" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">get_research_graph()</text>
+          <text data-detail="context" x="277" y="255" class="t-muted" font-size="8" text-anchor="middle">进程级单例 · 双重检查锁</text>
         </g>
 
         <g id="node-guard" data-node-id="guard" data-node-label="TimeoutGuard(30s)" tabindex="0" role="button" aria-label="聚焦TimeoutGuard(30s)，RAG_TIMEOUT_SECONDS, 兜底" aria-pressed="false" data-node-kind="security" data-node-sublabel="RAG_TIMEOUT_SECONDS" data-node-context="兜底">
           <title>TimeoutGuard(30s) · RAG_TIMEOUT_SECONDS · 兜底</title>
-          <rect x="292.8" y="465" width="120" height="52" rx="6" class="c-mask"/>
-          <rect x="292.8" y="465" width="120" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(298.8 471) scale(0.6875)">
+          <rect x="58" y="341" width="120" height="52" rx="6" class="c-mask"/>
+          <rect x="58" y="341" width="120" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(64 347) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="352.8" y="486" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">TimeoutGuard(30s)</text>
-          <text data-detail="context" x="352.8" y="503" class="t-muted" font-size="8" text-anchor="middle">RAG_TIMEOUT_SECONDS</text>
+          <text data-node-label="" data-detail-anchor="" x="118" y="362" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">TimeoutGuard(30s)</text>
+          <text data-detail="context" x="118" y="379" class="t-muted" font-size="8" text-anchor="middle">RAG_TIMEOUT_SECONDS</text>
         </g>
 
         <g id="node-fallback_reply" data-node-id="fallback_reply" data-node-label="降级话术" tabindex="0" role="button" aria-label="聚焦降级话术，抱歉，系统处理超时，请稍后再试, 兜底" aria-pressed="false" data-node-kind="security" data-node-sublabel="抱歉，系统处理超时，请稍后再试" data-node-context="兜底">
           <title>降级话术 · 抱歉，系统处理超时，请稍后再试 · 兜底</title>
-          <rect x="858.5999999999999" y="465" width="152" height="52" rx="6" class="c-mask"/>
-          <rect x="858.5999999999999" y="465" width="152" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(864.5999999999999 471) scale(0.6875)">
+          <rect x="875" y="341" width="152" height="52" rx="6" class="c-mask"/>
+          <rect x="875" y="341" width="152" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(881 347) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="934.5999999999999" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">降级话术</text>
-          <text data-detail="context" x="934.5999999999999" y="503" class="t-muted" font-size="8" text-anchor="middle">抱歉，系统处理超时，请稍后再试</text>
+          <text data-node-label="" data-detail-anchor="" x="951" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">降级话术</text>
+          <text data-detail="context" x="951" y="379" class="t-muted" font-size="8" text-anchor="middle">抱歉，系统处理超时，请稍后再试</text>
         </g>
 
         <!-- Edge labels -->
         <g data-detail="context" data-edge-from="guard" data-edge-to="fallback_reply" data-edge-label="超时 → 降级话术" data-edge-key="0" data-edge-id="guard_out">
-          <rect x="594.6999999999999" y="471" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="635.6999999999999" y="481" class="t-muted" font-size="8" text-anchor="middle">超时 → 降级话术</text>
+          <rect x="485.5" y="347" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="526.5" y="357" class="t-muted" font-size="8" text-anchor="middle">超时 → 降级话术</text>
         </g>
         <g data-detail="context" data-edge-from="planner" data-edge-to="fanout" data-edge-label="每任务一个 Send" data-edge-key="1" data-edge-id="planner_out">
-          <rect x="557.8" y="223" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="598.8" y="233" class="t-backend" font-size="8" text-anchor="middle">每任务一个 Send</text>
+          <rect x="362" y="99" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="403" y="109" class="t-backend" font-size="8" text-anchor="middle">每任务一个 Send</text>
         </g>
         <g data-detail="context" data-edge-from="singleton" data-edge-to="planner" data-edge-label="运行子图" data-edge-key="2" data-edge-id="run_subgraph">
-          <rect x="423.6" y="99" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="447.8" y="109" class="t-backend" font-size="8" text-anchor="middle">运行子图</text>
+          <rect x="252.8" y="197" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="277" y="207" class="t-backend" font-size="8" text-anchor="middle">运行子图</text>
         </g>
         <g data-detail="context" data-edge-from="fanout" data-edge-to="tools" data-edge-label="N 个子任务并发" data-edge-key="3" data-edge-id="send_out">
-          <rect x="700.1999999999999" y="270" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="738.8" y="280" class="t-backend" font-size="8" text-anchor="middle">N 个子任务并发</text>
+          <rect x="546" y="99" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="584.6" y="109" class="t-backend" font-size="8" text-anchor="middle">N 个子任务并发</text>
         </g>
         <g data-detail="context" data-edge-from="summarize" data-edge-to="final" data-edge-label="answer = summary" data-edge-key="4" data-edge-id="sum_out">
-          <rect x="1007.6" y="347" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="1051" y="357" class="t-backend" font-size="8" text-anchor="middle">answer = summary</text>
+          <rect x="1024" y="99" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="1067.4" y="109" class="t-backend" font-size="8" text-anchor="middle">answer = summary</text>
         </g>
         <g data-detail="context" data-edge-from="entry" data-edge-to="guard" data-edge-label="30s 超时保护" data-edge-key="5" data-edge-id="to_guard">
-          <rect x="277.8" y="429" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="311.6" y="439" class="t-muted" font-size="8" text-anchor="middle">30s 超时保护</text>
+          <rect x="41.2" y="208" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="75" y="218" class="t-muted" font-size="8" text-anchor="middle">30s 超时保护</text>
         </g>
         <g data-detail="context" data-edge-from="entry" data-edge-to="singleton" data-edge-label="取进程级单例子图" data-edge-key="6" data-edge-id="to_singleton">
-          <rect x="268.20000000000005" y="57" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="311.6" y="67" class="t-backend" font-size="8" text-anchor="middle">取进程级单例子图</text>
+          <rect x="154.1" y="146" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="197.5" y="156" class="t-backend" font-size="8" text-anchor="middle">取进程级单例子图</text>
         </g>
         <g data-detail="context" data-edge-from="tools" data-edge-to="summarize" data-edge-label="按 chunk_id 去重" data-edge-key="7" data-edge-id="tools_out">
-          <rect x="769.3" y="389" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="812.6999999999999" y="399" class="t-backend" font-size="8" text-anchor="middle">按 chunk_id 去重</text>
+          <rect x="791.2" y="99" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="834.6" y="109" class="t-backend" font-size="8" text-anchor="middle">按 chunk_id 去重</text>
         </g>
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="20" y="552" class="t-primary" font-size="12" font-weight="650">图例</text>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="20" data-legend-baseline="572" data-legend-width="87">
-            <rect x="20" y="564" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-            <text x="42" y="572" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
+          <text x="20" y="428" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="20" data-legend-baseline="448" data-legend-width="87">
+            <rect x="20" y="440" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="42" y="448" class="t-muted" font-size="7.5" font-weight="500">Agent 逻辑</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="114" data-legend-baseline="572" data-legend-width="61">
-            <rect x="114" y="564" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-            <text x="136" y="572" class="t-muted" font-size="7.5" font-weight="500">策略</text>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="114" data-legend-baseline="448" data-legend-width="61">
+            <rect x="114" y="440" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="136" y="448" class="t-muted" font-size="7.5" font-weight="500">策略</text>
           </g>
-          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="工具操作" data-legend-x="182" data-legend-baseline="572" data-legend-width="78">
-            <rect x="182" y="564" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
-            <text x="204" y="572" class="t-muted" font-size="7.5" font-weight="500">工具操作</text>
+          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="工具操作" data-legend-x="182" data-legend-baseline="448" data-legend-width="78">
+            <rect x="182" y="440" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+            <text x="204" y="448" class="t-muted" font-size="7.5" font-weight="500">工具操作</text>
           </g>
         </g>
       </svg>
