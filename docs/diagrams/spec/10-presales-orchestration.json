@@ -1,0 +1,204 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "售前导购编排流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "D:/SmartCS-Agent/docs/diagrams/10-presales-orchestration.html"
+  },
+  "lanes": [
+    {
+      "id": "container",
+      "label": "容器节点"
+    },
+    {
+      "id": "plan",
+      "label": "multi_tool 子图 · 分解与派发"
+    },
+    {
+      "id": "exec",
+      "label": "multi_tool 子图 · 检索与汇总"
+    },
+    {
+      "id": "fallback",
+      "label": "兜底",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "entry",
+    "singleton",
+    "planner",
+    "fanout",
+    "tools",
+    "summarize",
+    "final"
+  ],
+  "nodes": [
+    {
+      "id": "entry",
+      "lane": "container",
+      "col": 0,
+      "type": "backend",
+      "label": "create_research_plan",
+      "sublabel": "主图售前节点",
+      "width": 140
+    },
+    {
+      "id": "singleton",
+      "lane": "container",
+      "col": 1,
+      "type": "backend",
+      "label": "get_research_graph()",
+      "sublabel": "进程级单例 · 双重检查锁",
+      "width": 140
+    },
+    {
+      "id": "guard",
+      "lane": "fallback",
+      "col": 1,
+      "type": "security",
+      "label": "TimeoutGuard(30s)",
+      "sublabel": "RAG_TIMEOUT_SECONDS",
+      "width": 120
+    },
+    {
+      "id": "planner",
+      "lane": "plan",
+      "col": 2,
+      "type": "backend",
+      "label": "planner 任务分解",
+      "sublabel": "PLANNER_TEMPERATURE=0 结构化输出",
+      "width": 162
+    },
+    {
+      "id": "fanout",
+      "lane": "plan",
+      "col": 3,
+      "type": "messagebus",
+      "label": "Send 并行派发",
+      "sublabel": "每任务一个 Send",
+      "width": 94
+    },
+    {
+      "id": "tools",
+      "lane": "exec",
+      "col": 3,
+      "type": "backend",
+      "label": "customer_tools 检索节点",
+      "sublabel": "每子任务一次混合检索",
+      "width": 160
+    },
+    {
+      "id": "summarize",
+      "lane": "exec",
+      "col": 4,
+      "type": "backend",
+      "label": "summarize",
+      "sublabel": "_assemble_evidence 单证据串",
+      "width": 138
+    },
+    {
+      "id": "final",
+      "lane": "exec",
+      "col": 5,
+      "type": "backend",
+      "label": "final_answer",
+      "sublabel": "answer = summary",
+      "width": 87
+    },
+    {
+      "id": "fallback_reply",
+      "lane": "fallback",
+      "col": 4,
+      "type": "security",
+      "label": "降级话术",
+      "sublabel": "抱歉，系统处理超时，请稍后再试",
+      "width": 152
+    }
+  ],
+  "edges": [
+    {
+      "id": "to_singleton",
+      "from": "entry",
+      "to": "singleton",
+      "label": "取进程级单例子图",
+      "variant": "emphasis"
+    },
+    {
+      "id": "to_guard",
+      "from": "entry",
+      "to": "guard",
+      "label": "30s 超时保护"
+    },
+    {
+      "id": "run_subgraph",
+      "from": "singleton",
+      "to": "planner",
+      "label": "运行子图",
+      "variant": "emphasis"
+    },
+    {
+      "id": "guard_out",
+      "from": "guard",
+      "to": "fallback_reply",
+      "label": "超时 → 降级话术",
+      "role": "error"
+    },
+    {
+      "id": "planner_out",
+      "from": "planner",
+      "to": "fanout",
+      "label": "每任务一个 Send",
+      "variant": "emphasis"
+    },
+    {
+      "id": "send_out",
+      "from": "fanout",
+      "to": "tools",
+      "label": "N 个子任务并发",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tools_out",
+      "from": "tools",
+      "to": "summarize",
+      "label": "按 chunk_id 去重",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sum_out",
+      "from": "summarize",
+      "to": "final",
+      "label": "answer = summary",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "planner 的回退规则",
+      "items": [
+        "任务数须在 [2, MAX_TASKS] 且非空、不重复",
+        "任一不满足 → 回退单分支，任务文本 = 原 query 原文（不采用 LLM 改写）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "子图不写主图检查点",
+      "items": [
+        "Send map-reduce 与 PostgresSaver 序列化冲突",
+        "子图编译时 __pregel_checkpointer: None"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "出口流式闸门",
+      "items": [
+        "summarize 逐 token 放行给用户",
+        "容器节点整段回填仅在无 token 流出时兜底，避免重复"
+      ]
+    }
+  ]
+}
