@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "售前检索管线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "D:/SmartCS-Agent/docs/diagrams/11-presales-retrieval.html"
+  },
+  "lanes": [
+    {
+      "id": "spine",
+      "label": "检索主链（唯一检索入口）"
+    },
+    {
+      "id": "assemble",
+      "label": "结果装配 · 未接入的 @tool",
+      "variant": "exception"
+    },
+    {
+      "id": "recall",
+      "label": "并行召回与动态补全 · 商品动态数据"
+    }
+  ],
+  "mainPath": [
+    "q",
+    "vec",
+    "rrf",
+    "rerank",
+    "out"
+  ],
+  "nodes": [
+    {
+      "id": "q",
+      "lane": "spine",
+      "col": 0,
+      "type": "backend",
+      "label": "RAGRetrieverService.search()",
+      "sublabel": "rag_retriever_service.py:107",
+      "width": 192
+    },
+    {
+      "id": "vec",
+      "lane": "spine",
+      "col": 1,
+      "type": "database",
+      "label": "语义通道",
+      "sublabel": "cosine_distance · HNSW · HYBRID_RETRIEVAL_TOP_N",
+      "width": 234
+    },
+    {
+      "id": "rrf",
+      "lane": "spine",
+      "col": 2,
+      "type": "backend",
+      "label": "RRF 融合",
+      "sublabel": "rrf_fuse · chunk_id 去重 · k=RRF_FUSION_K",
+      "width": 205
+    },
+    {
+      "id": "rerank",
+      "lane": "spine",
+      "col": 3,
+      "type": "backend",
+      "label": "Reranker 精排",
+      "sublabel": "bge-reranker-v2-m3 · RERANKER_TOP_K",
+      "width": 181
+    },
+    {
+      "id": "out",
+      "lane": "spine",
+      "col": 4,
+      "type": "backend",
+      "label": "召回片段",
+      "sublabel": "带 sku_codes 元数据",
+      "width": 100
+    },
+    {
+      "id": "render",
+      "lane": "assemble",
+      "col": 4,
+      "type": "backend",
+      "label": "doc_block_renderer",
+      "sublabel": "render_dynamic_rows + render_doc_blocks",
+      "width": 210
+    },
+    {
+      "id": "bm25",
+      "lane": "recall",
+      "col": 1,
+      "type": "database",
+      "label": "关键词通道",
+      "sublabel": "pg_jieba ts_rank_cd · BM25_TOP_K",
+      "width": 162
+    },
+    {
+      "id": "sku",
+      "lane": "recall",
+      "col": 4,
+      "type": "backend",
+      "label": "RAG 门控动态补全",
+      "sublabel": "fetch_by_skus 一次 WHERE SKU IN",
+      "width": 162
+    },
+    {
+      "id": "dynstore",
+      "lane": "recall",
+      "col": 2,
+      "type": "database",
+      "label": "product_price_stock",
+      "sublabel": "sku unique",
+      "width": 132
+    },
+    {
+      "id": "tool_rag",
+      "lane": "assemble",
+      "col": 0,
+      "type": "external",
+      "label": "rag_retrieval @tool",
+      "sublabel": "未接入",
+      "width": 132
+    },
+    {
+      "id": "tool_stock",
+      "lane": "assemble",
+      "col": 2,
+      "type": "external",
+      "label": "product_stock_lookup @tool",
+      "sublabel": "未接入",
+      "width": 178
+    }
+  ],
+  "edges": [
+    {
+      "id": "q_vec",
+      "from": "q",
+      "to": "vec",
+      "label": "问题向量化（qwen text-embedding-v4，1024 维）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "q_bm25",
+      "from": "q",
+      "to": "bm25",
+      "label": "jiebacfg ∪ jiebamp 分词后 to_tsquery"
+    },
+    {
+      "id": "vec_rrf",
+      "from": "vec",
+      "to": "rrf",
+      "label": "两路独立，单条失败不阻塞",
+      "variant": "emphasis",
+      "labelAt": [
+        502,
+        88
+      ]
+    },
+    {
+      "id": "bm25_rrf",
+      "from": "bm25",
+      "to": "rrf",
+      "label": "两路独立，单条失败不阻塞"
+    },
+    {
+      "id": "rrf_rerank",
+      "from": "rrf",
+      "to": "rerank",
+      "label": "按 chunk_id 标量融合",
+      "variant": "emphasis",
+      "labelAt": [
+        736,
+        88
+      ]
+    },
+    {
+      "id": "rerank_out",
+      "from": "rerank",
+      "to": "out",
+      "label": "重排后 top-5",
+      "variant": "emphasis",
+      "labelAt": [
+        938,
+        40
+      ]
+    },
+    {
+      "id": "degrade_out",
+      "from": "rerank",
+      "to": "out",
+      "label": "开关关 / 模型加载失败 / 评分异常 → 取融合 top-5",
+      "role": "error"
+    },
+    {
+      "id": "out_sku",
+      "from": "out",
+      "to": "sku",
+      "label": "收集命中块 sku_codes（去重保序）"
+    },
+    {
+      "id": "sku_store",
+      "from": "sku",
+      "to": "dynstore",
+      "label": "一次 WHERE sku IN 批量"
+    },
+    {
+      "id": "zero_hit",
+      "from": "out",
+      "to": "render",
+      "label": "零命中 / 无 sku 块（政策、通用）→ 不查动态库",
+      "variant": "dashed"
+    },
+    {
+      "id": "out_render",
+      "from": "out",
+      "to": "render",
+      "label": "动态区 + 静态块同码配对"
+    },
+    {
+      "id": "sku_render",
+      "from": "sku",
+      "to": "render",
+      "label": "动态区 + 静态块同码配对"
+    },
+    {
+      "id": "tool_rag_q",
+      "from": "tool_rag",
+      "to": "q",
+      "label": "同一入口，未接入",
+      "variant": "dashed"
+    },
+    {
+      "id": "tool_stock_sku",
+      "from": "tool_stock",
+      "to": "sku",
+      "label": "未接入",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "两个 @tool 未接入",
+      "items": [
+        "rag_retrieval / product_stock_lookup 有代码有单测",
+        "全项目无 bind_tools 调用，仅存在于注释与 docstring",
+        "线上走的是 customer_tools 节点硬编码调用"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "混合检索关键参数",
+      "items": [
+        "HYBRID_RETRIEVAL_TOP_N / BM25_TOP_K 各取 20 候选",
+        "RRF_FUSION_K=60，按名次融合不比分数",
+        "RERANKER_TOP_K=5，失败自动降级为融合 top-K"
+      ]
+    }
+  ]
+}
