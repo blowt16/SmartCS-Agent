@@ -314,10 +314,14 @@ async def clarify_node(
         else:
             model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=settings.LLM_TEMPERATURE, tags=["clarify"], extra_body={"thinking": {"type": "disabled"}})
 
-        system_prompt = CLARIFY_SYSTEM_PROMPT.format(
-            logic=state.router["logic"]
-        )
         question = state.messages[-1].content if state.messages else ""
+        # ⚠️ 模板含 {logic} 与 {question} 两个占位符，缺一即抛 KeyError，
+        # 被下方 except 吞掉 → 每次澄清都静默降级静态模板（同一句话、与 history 无关）。
+        # 该缺陷自澄清功能上线起存在且长期未被发现——golden set 只测路由节点、
+        # 从不执行本节点。回归防线见 tests/test_clarify_node.py
+        system_prompt = CLARIFY_SYSTEM_PROMPT.format(
+            logic=state.router["logic"], question=question
+        )
 
         # 使用 MemoryManager 管理对话历史，澄清需结合上文判断问什么
         from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.memory import MemoryCache
