@@ -287,7 +287,16 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
             detail=f"订单 {payload.order_no} 当前状态为「{order.status}」，只有已发货及之后的订单才能建运单",
         )
 
-    signed_at = _resolve_signed_at(payload.status, payload.signed_at, None)
+    # explicit_clear 也要接上,别让建单路径与编辑路径行为不一致:
+    # 补录时管理员选了「已签收」又把日期框清空 -> 前端按 §4.9 送 null ->
+    # 若这里不传 explicit_clear,那句 `given or existing or today` 会把 null 当成
+    # "没传"、补成今天,管理员看到的日期与提交的不一致。而 spec §4.5 明说
+    # 「已签收、日期不详」是有意的可达状态。
+    # pydantic v2 用 model_fields_set 分辨:显式传 null 时含 'signed_at',不传时不含。
+    signed_at = _resolve_signed_at(
+        payload.status, payload.signed_at, None,
+        explicit_clear=("signed_at" in payload.model_fields_set and payload.signed_at is None),
+    )
     _check_time_order(payload.shipped_at, signed_at, payload.status)
     trace = _parse_trace_or_400(payload.trace, payload.shipped_at, signed_at)
 

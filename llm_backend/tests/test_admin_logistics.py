@@ -501,6 +501,27 @@ async def test_create_signed_fills_today(admin_token):
         assert d["signed_at"] == datetime.now(timezone.utc).date().isoformat()
 
 
+async def test_create_signed_with_explicit_null_keeps_null(admin_token):
+    """已签收 + 显式传 signed_at:null -> 落库 NULL(不是补今天)。
+
+    与上一条的区别【只在「键在不在」】:上一条不传 signed_at(model_fields_set 里没有),
+    这条显式传 null。少了 explicit_clear 的话,`given or existing or today` 会把
+    显式 null 当成"没传"、补成今天 —— 而管理员在补录弹窗里清空日期框送的正是 null,
+    落库结果与他看到的界面不一致。spec §4.5 明说「已签收、日期不详」是有意的可达状态。
+
+    ⚠️ 这里不能用 `_new_shipment` 助手(它不便于表达"显式传 null"),直接发请求。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-19",
+            "carrier": "京东物流", "status": "已签收",
+            "shipped_at": "2026-09-20", "signed_at": None})
+        assert r.status_code == 200, r.text
+        assert r.json()["signed_at"] is None
+        assert r.json()["status"] == "已签收"
+
+
 async def test_create_signed_at_cleared_when_not_signed(admin_token):
     """非「已签收」传了 signed_at -> 落库为 null。"""
     async with _client() as c:
