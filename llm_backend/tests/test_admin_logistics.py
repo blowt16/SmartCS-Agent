@@ -941,3 +941,110 @@ async def test_stored_trace_can_be_resubmitted_unchanged(admin_token):
                         json={"trace": stored})
         assert r.status_code == 200, r.text
         assert r.json()["trace"] == stored
+
+
+# ==================== 删除 ====================
+
+async def test_delete_not_found(admin_token):
+    async with _client() as c:
+        r = await c.delete("/api/admin/logistics/999999", headers=_bearer(admin_token))
+        assert r.status_code == 404
+
+
+async def test_delete_ok(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-D-1")
+        r = await c.delete(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token))
+        assert r.status_code == 200
+        assert r.json() == {"id": s["id"], "deleted": True}
+        items = (await _list(c, admin_token))["items"]
+        assert items[0]["id"] is None       # 订单还在,只是回到未录入
+
+
+async def test_delete_returns_order_to_unrecorded(admin_token):
+    """删掉运单后该订单回到「未录入」而不是从列表消失 —— 列表由 orders 驱动。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-D-2")
+        await c.delete(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token))
+        d = await _list(c, admin_token)
+        row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
+        assert row["id"] is None
+        assert row["status"] is None
+
+
+# ==================== 级联(跨模块) ====================
+
+async def test_delete_order_cascades_shipment(admin_token):
+    """删订单必须连带删掉它的运单,不留孤儿。
+
+    测试订单号由后端生成 ORD-xxx,不会干扰
+    test_admin_orders.py::test_create_after_deleting_middle_order_no_collision。
+    """
+    from sqlalchemy import func as sa_func, select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.shipment import Shipment
+
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-CAS-1")
+        r = await c.delete(f"/api/admin/orders/{order['id']}", headers=_bearer(admin_token))
+        assert r.status_code == 200
+
+    async with AsyncSessionLocal() as s:
+        n = (await s.execute(
+            select(sa_func.count()).select_from(Shipment)
+            .where(Shipment.order_no == order["order_no"])
+        )).scalar_one()
+    assert n == 0
+
+
+async def test_delete_order_cascade_does_not_touch_others(admin_token):
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, a["order_no"], "TEST-CAS-2")
+        await _new_shipment(c, admin_token, b["order_no"], "TEST-CAS-3")
+        await c.delete(f"/api/admin/orders/{a['id']}", headers=_bearer(admin_token))
+        d = await _list(c, admin_token)
+        assert [x["order_no"] for x in d["items"]] == [b["order_no"]]
+
+
+# ==================== 索引与模型 ====================
+
+async def test_shipments_order_no_unique_index():
+    """shipments.order_no 上有唯一索引 —— 这是用户原始需求里的那个索引。
+
+    ⚠️ 必须连库查 pg_indexes,不能照抄 test_product_price_stock_model.py:
+    那个文件是 DB-free 的,走 __table__.constraints 读 UniqueConstraint.name,
+    而 unique=True 生成的约束在 Python 侧 name 是 None -> 会写成永远断言不到
+    任何索引的空测试。
+    """
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    async with engine.connect() as conn:
+        r = await conn.execute(text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE tablename = 'shipments' AND indexdef ILIKE '%order_no%'"
+        ))
+        defs = [row[0] for row in r]
+    assert defs, "shipments.order_no 上没有任何索引"
+    assert any("UNIQUE" in d for d in defs), defs
+
+
+async def test_shipments_tracking_no_unique_index():
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    async with engine.connect() as conn:
+        r = await conn.execute(text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE tablename = 'shipments' AND indexdef ILIKE '%tracking_no%'"
+        ))
+        defs = [row[0] for row in r]
+    assert any("UNIQUE" in d for d in defs), defs

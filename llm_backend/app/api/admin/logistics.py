@@ -429,3 +429,16 @@ async def update_shipment(
         .where(Shipment.id == shipment.id)
     )).one()
     return _serialize(*row)
+
+
+@router.delete("/{shipment_id}")
+async def delete_shipment(shipment_id: int, db: AsyncSession = Depends(get_db)):
+    """删除运单。订单不会被删,删除后它回到列表里的「未录入」行。"""
+    shipment = (await db.execute(
+        select(Shipment).where(Shipment.id == shipment_id)
+    )).scalar_one_or_none()
+    if shipment is None:
+        raise HTTPException(status_code=404, detail=f"运单不存在: {shipment_id}")
+
+    await db.delete(shipment)
+    return {"id": shipment_id, "deleted": True}
