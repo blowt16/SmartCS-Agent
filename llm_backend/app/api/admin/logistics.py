@@ -332,3 +332,59 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
         .where(Shipment.id == shipment.id)
     )).one()
     return _serialize(*row)
+
+
+@router.put("/{shipment_id}")
+async def update_shipment(
+    shipment_id: int,
+    payload: ShipmentUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """编辑运单。order_no 不可改(schema 里就没有,换订单应删除后重建)。"""
+    shipment = (await db.execute(
+        select(Shipment).where(Shipment.id == shipment_id)
+    )).scalar_one_or_none()
+    if shipment is None:
+        raise HTTPException(status_code=404, detail=f"运单不存在: {shipment_id}")
+
+    # exclude_unset 区分"没传"与"传了 null";trace 需要能清空,所以必须用它
+    data = payload.model_dump(exclude_unset=True)
+
+    # 三条规则都用 effective 值:管理员最常见的操作是「只把状态改成已签收」,
+    # 此时 shipped_at 根本没传。直接读 data 会让规则 B / C 的窗口校验形同失效。
+    effective_status = data.get("status", shipment.status)
+    effective_shipped = data.get("shipped_at", shipment.shipped_at)
+    effective_signed = _resolve_signed_at(
+        effective_status,
+        data.get("signed_at", shipment.signed_at),
+        shipment.signed_at,
+        explicit_clear=("signed_at" in data and data["signed_at"] is None),
+    )
+
+    _check_time_order(effective_shipped, effective_signed, effective_status)
+    data["signed_at"] = effective_signed
+    if "trace" in data:
+        data["trace"] = _parse_trace_or_400(data["trace"], effective_shipped, effective_signed)
+
+    # 🔴 rollback 会让 session 里所有 ORM 对象过期,之后再读它们的属性会触发惰性刷新,
+    # 异步下直接抛 MissingGreenlet。所以冲突分支要用的值必须在 try 之前取成局部变量 ——
+    # data.get("tracking_no", shipment.tracking_no) 的默认参数也是在这里就求值了。
+    # 这是项目踩过的坑,orders.py:115 有同款注释。
+    order_no = shipment.order_no
+    tracking_no = data.get("tracking_no", shipment.tracking_no)
+
+    for field, value in data.items():
+        setattr(shipment, field, value)
+
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        await db.rollback()
+        raise _conflict_409(e, order_no, tracking_no)
+
+    row = (await db.execute(
+        select(Order, Shipment)
+        .join(Shipment, Shipment.order_no == Order.order_no)
+        .where(Shipment.id == shipment.id)
+    )).one()
+    return _serialize(*row)

@@ -667,3 +667,145 @@ async def test_trace_length_is_checked_after_normalization(admin_token):
         # 原始不超、规范化后超 -> 400(而不是 422,也不是静默存下超长值)
         assert r.status_code == 400
         assert "规范化后" in r.json()["detail"]
+
+
+# ==================== 编辑 ====================
+
+async def test_update_not_found(admin_token):
+    async with _client() as c:
+        r = await c.put("/api/admin/logistics/999999", headers=_bearer(admin_token),
+                        json={"status": "运输中"})
+        assert r.status_code == 404
+
+
+async def test_update_to_signed_fills_today(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-1",
+                                shipped_at="2026-09-20")
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"status": "已签收"})
+        assert r.status_code == 200
+        assert r.json()["signed_at"] == datetime.now(timezone.utc).date().isoformat()
+
+
+async def test_update_from_signed_clears_signed_at(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-2",
+                                status="已签收", shipped_at="2026-09-20")
+        assert s["signed_at"] is not None
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"status": "运输中"})
+        assert r.status_code == 200
+        assert r.json()["signed_at"] is None
+
+
+async def test_update_trace_three_forms(admin_token):
+    """trace 传新文本 -> 覆盖;传 null -> 清空;不传 -> 原样不动。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-3",
+                                shipped_at="2026-09-20",
+                                trace="2026-09-20 14:32 | 广州 | 已揽收")
+        url = f"/api/admin/logistics/{s['id']}"
+        # 不传 -> 原样不动
+        d = (await c.put(url, headers=_bearer(admin_token), json={"carrier": "顺丰速运"})).json()
+        assert d["trace"] == "2026-09-20 14:32 | 广州 | 已揽收"
+        assert d["carrier"] == "顺丰速运"
+        # 传新文本 -> 覆盖
+        d = (await c.put(url, headers=_bearer(admin_token),
+                         json={"trace": "2026-09-21 09:00|深圳|派送中"})).json()
+        assert d["trace"] == "2026-09-21 09:00 | 深圳 | 派送中"
+        # 传 null -> 清空
+        d = (await c.put(url, headers=_bearer(admin_token), json={"trace": None})).json()
+        assert d["trace"] is None
+
+
+async def test_update_order_no_ignored(admin_token):
+    """order_no 不可改(schema 里没有该字段,pydantic 默认忽略额外字段)。"""
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, a["order_no"], "TEST-U-4")
+        d = (await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                         json={"order_no": b["order_no"], "status": "运输中"})).json()
+        assert d["order_no"] == a["order_no"]
+        assert d["status"] == "运输中"
+
+
+async def test_update_tracking_no_conflict(admin_token):
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        sa = await _new_shipment(c, admin_token, a["order_no"], "TEST-U-5")
+        sb = await _new_shipment(c, admin_token, b["order_no"], "TEST-U-6")
+        r = await c.put(f"/api/admin/logistics/{sb['id']}", headers=_bearer(admin_token),
+                        json={"tracking_no": "TEST-U-5"})
+        assert r.status_code == 409
+        assert "运单号已存在" in r.json()["detail"]
+
+
+async def test_update_trace_window_uses_effective_values(admin_token):
+    """只改轨迹、不传 shipped_at/signed_at 时,窗口校验仍要用库里的值。
+
+    漏了 effective 取值这条路径上窗口校验会静默失效 —— 这条用例专门钉它。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-7",
+                                status="已签收", shipped_at="2026-09-20", signed_at="2026-09-22")
+        # 末节点晚于库里的 signed_at(2026-09-22) -> 应 400
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"trace": "2026-09-25 10:00 | 广州 | 已签收"})
+        assert r.status_code == 400
+        assert "末节点" in r.json()["detail"]
+
+
+async def test_update_bad_trace_format(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-8")
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"trace": "2026-09-20 14:32 广州 已揽收"})
+        assert r.status_code == 400
+        assert "三段" in r.json()["detail"]
+
+
+async def test_update_can_clear_signed_at(admin_token):
+    """已签收的运单,签收时间必须能被清空成 NULL。
+
+    前端在「已签收」时渲染一个可空的日期框,管理员清空它 -> 显式传 null。
+    如果后端把「显式传 null」当成「没传」而回填旧值,那个框就是个摆设
+    (spec §4.5 规则 A 下方的说明:本模块有意支持「已签收、日期不详」)。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-9",
+                                status="已签收", shipped_at="2026-09-20",
+                                signed_at="2026-09-22")
+        assert s["signed_at"] == "2026-09-22"
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"signed_at": None})
+        assert r.status_code == 200, r.text
+        assert r.json()["signed_at"] is None
+        # 状态仍是已签收,只是日期不详
+        assert r.json()["status"] == "已签收"
+
+
+async def test_stored_trace_can_be_resubmitted_unchanged(admin_token):
+    """不变式:任何被接受过的值,都能原样再提交一次。
+
+    这是编辑路径的前提 —— 管理员打开编辑弹窗、什么都不改直接保存,
+    不能因为"规范化让文本变长"(每行 +4 字符)而被 422 打回。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-10",
+                                shipped_at="2026-09-20",
+                                trace="2026-09-20 14:32|广州|已揽收\n2026-09-21 08:00|深圳|派送中")
+        stored = s["trace"]
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"trace": stored})
+        assert r.status_code == 200, r.text
+        assert r.json()["trace"] == stored
