@@ -1,4 +1,5 @@
-"""管理端请求 schema(5 个模块的入参校验)。"""
+"""管理端请求 schema 与枚举常量(6 个模块的入参校验)。"""
+import re
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -67,15 +68,14 @@ class TicketUpdate(BaseModel):
 # 常量只在这里定义一次,logistics.py 反向 import(方向:api → schemas,无循环导入)
 
 SHIPPABLE_ORDER_STATUSES = ["已发货", "已送达", "已签收"]
-ORDER_STATUSES = ["处理中", "已发货", "已送达", "已签收"]
 SHIPMENT_STATUSES = ["待揽收", "已揽收", "运输中", "派送中", "已签收", "异常"]
 CARRIERS = ["京东物流", "顺丰速运", "中通快递", "圆通速递",
             "申通快递", "韵达快递", "邮政EMS", "德邦快递"]
 UNRECORDED = "未录入"          # 列表筛选用展示态,不是 shipments.status 的取值
 TRACE_MAX = 2000              # 轨迹文本上限,与前端 TEXTAREA 的 maxlength 对齐
 
-SHIPMENT_STATUS_PATTERN = "^(" + "|".join(SHIPMENT_STATUSES) + ")$"
-CARRIER_PATTERN = "^(" + "|".join(CARRIERS) + ")$"
+SHIPMENT_STATUS_PATTERN = "^(" + "|".join(re.escape(s) for s in SHIPMENT_STATUSES) + ")$"
+CARRIER_PATTERN = "^(" + "|".join(re.escape(c) for c in CARRIERS) + ")$"
 
 
 class ShipmentCreate(BaseModel):
