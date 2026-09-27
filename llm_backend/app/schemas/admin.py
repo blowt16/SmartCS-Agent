@@ -61,3 +61,38 @@ class TicketUpdate(BaseModel):
     status: Optional[str] = Field(None, pattern=r"^(待处理|已解决)$")
     detail: Optional[str] = None
     suggestion: Optional[str] = None
+
+
+# ==================== 物流:枚举常量与入参 ====================
+# 常量只在这里定义一次,logistics.py 反向 import(方向:api → schemas,无循环导入)
+
+SHIPPABLE_ORDER_STATUSES = ["已发货", "已送达", "已签收"]
+ORDER_STATUSES = ["处理中", "已发货", "已送达", "已签收"]
+SHIPMENT_STATUSES = ["待揽收", "已揽收", "运输中", "派送中", "已签收", "异常"]
+CARRIERS = ["京东物流", "顺丰速运", "中通快递", "圆通速递",
+            "申通快递", "韵达快递", "邮政EMS", "德邦快递"]
+UNRECORDED = "未录入"          # 列表筛选用展示态,不是 shipments.status 的取值
+TRACE_MAX = 2000              # 轨迹文本上限,与前端 TEXTAREA 的 maxlength 对齐
+
+SHIPMENT_STATUS_PATTERN = "^(" + "|".join(SHIPMENT_STATUSES) + ")$"
+CARRIER_PATTERN = "^(" + "|".join(CARRIERS) + ")$"
+
+
+class ShipmentCreate(BaseModel):
+    order_no: str = Field(..., min_length=1, max_length=32)
+    tracking_no: str = Field(..., min_length=1, max_length=50)
+    carrier: str = Field(..., pattern=CARRIER_PATTERN)
+    status: str = Field("待揽收", pattern=SHIPMENT_STATUS_PATTERN)
+    shipped_at: Optional[date] = None
+    signed_at: Optional[date] = None
+    trace: Optional[str] = Field(None, max_length=TRACE_MAX)
+
+
+class ShipmentUpdate(BaseModel):
+    tracking_no: Optional[str] = Field(None, min_length=1, max_length=50)
+    carrier: Optional[str] = Field(None, pattern=CARRIER_PATTERN)
+    status: Optional[str] = Field(None, pattern=SHIPMENT_STATUS_PATTERN)
+    shipped_at: Optional[date] = None
+    signed_at: Optional[date] = None
+    trace: Optional[str] = Field(None, max_length=TRACE_MAX)
+    # 注意:没有 order_no —— 订单号不可改
