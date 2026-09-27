@@ -382,10 +382,16 @@ async def test_trace_returned_normalized(admin_token):
 async def test_pagination_slices_without_overlap(admin_token):
     """分页切片与「total 与 page 无关」。
 
-    ⚠️ 这条不能省:上面 12 条用例一条都不带 page(`_list` 把 page_size 默认压成 100),
+    ⚠️ 这条不能省:上面 13 条用例一条都不带 page(`_list` 把 page_size 默认压成 100),
     于是 `(page - 1) * page_size` 这个 offset 计算、以及"count 查询与 page 无关"
-    这条设计理由,全都没被钉住 —— 谁把 offset 写成 `page * page_size`,
-    上面 12 条照样全绿。
+    这条设计理由,全都没被钉住。
+
+    实测过两个错误变体,才看清这条测试的价值区间:
+      · `offset = page * page_size` —— 页 1 就跳过全部行(100),13 条一起红,
+        被老用例抓得到,**不需要这条**
+      · `offset = page - 1` —— page=1 时与正确写法【等价】,只有 page>=2 出错。
+        实测 9 failed = 基线 8 + 【仅此一条】,其余 14 条全绿
+      → 真正的盲区是后者:一个在单页场景下完全正确的 offset 写法。
     """
     async with _client() as c:
         for _ in range(3):
