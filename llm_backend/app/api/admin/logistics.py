@@ -141,3 +141,66 @@ def _serialize(order: Order, shipment: Shipment | None) -> dict:
                       if shipment is not None and shipment.signed_at else None),
         "trace": shipment.trace if shipment is not None else None,
     }
+
+
+@router.get("")
+async def list_logistics(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(12, ge=1, le=100),
+    keyword: str = Query(""),
+    status: str | None = Query(None),
+    order_status: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """物流列表:列出【所有已发货及之后的订单】∪【任何已有运单的订单】。
+
+    驱动表是 orders 不是 shipments —— 未录物流的订单也要出现在列表里
+    (标「未录入」)。第二个 OR 分支保证订单状态被改回「处理中」时,
+    它的运单不会从页面上隐身。
+    """
+    # 第一个条件保证"没隐身":已发货及之后的订单(含未录入) ∪ 已有运单的订单
+    conds = [or_(
+        Order.status.in_(SHIPPABLE_ORDER_STATUSES),
+        Shipment.id.isnot(None),
+    )]
+
+    kw = (keyword or "").strip()
+    if kw:
+        conds.append(or_(
+            Shipment.tracking_no.ilike(f"%{kw}%"),
+            Order.order_no.ilike(f"%{kw}%"),
+            Order.product_name.ilike(f"%{kw}%"),
+            Order.buyer_name.ilike(f"%{kw}%"),
+            Shipment.carrier.ilike(f"%{kw}%"),
+        ))
+    if status == UNRECORDED:
+        conds.append(Shipment.id.is_(None))
+    elif status:
+        conds.append(Shipment.status == status)
+    if order_status:
+        conds.append(Order.status == order_status)
+
+    # total 的 count 必须带同一个 outer join:漏 join 时 SQLAlchemy 把两张表
+    # 补成笛卡尔积 —— 不报错,只发一条 SAWarning,total 会算成"运单数 × 订单数"。
+    # 也不能取 len(items)(分页下恒等于 page_size 且不报错)。
+    total = (await db.execute(
+        select(func.count()).select_from(Order)
+        .outerjoin(Shipment, Shipment.order_no == Order.order_no)
+        .where(*conds)
+    )).scalar_one()
+
+    rows = (await db.execute(
+        select(Order, Shipment)
+        .outerjoin(Shipment, Shipment.order_no == Order.order_no)
+        .where(*conds)
+        .order_by(Shipment.shipped_at.desc().nullslast(), Order.order_no.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [_serialize(order, shipment) for order, shipment in rows],
+    }

@@ -197,3 +197,179 @@ def test_parse_trace_does_not_split_on_unicode_separators():
     # splitlines 会把它当换行 -> 切成 2 行,每行都凑不出 3 段 -> 报错;
     # 按换行符拆则是 1 行 3 段,段中那个 U+2028 被 str.strip() 去掉(实测 isspace() 为 True)
     assert parse_trace(raw, None, None) == "2026-09-20 14:32 | 广州 | 已揽收"
+
+
+# ==================== 造数助手 ====================
+
+async def _new_order(c, token, *, status="已发货", order_date="2026-09-20"):
+    """建一个测试订单。订单号由后端生成 ORD-xxx —— 不要自己造前缀,否则会跑挂
+    test_admin_orders.py::test_create_after_deleting_middle_order_no_collision。"""
+    r = await c.post("/api/admin/orders", headers=_bearer(token), json={
+        "product_sku": SKU, "buyer_name": BUYER, "status": status, "order_date": order_date,
+    })
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _new_shipment(c, token, order_no, tracking_no, **kw):
+    body = {"order_no": order_no, "tracking_no": tracking_no, "carrier": "京东物流", **kw}
+    r = await c.post("/api/admin/logistics", headers=_bearer(token), json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _list(c, token, **params):
+    params.setdefault("keyword", BUYER)      # 把范围缩到本文件造的数据,不受种子影响
+    params.setdefault("page_size", MAX_PAGE_SIZE)
+    qs = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
+    r = await c.get(f"/api/admin/logistics?{qs}", headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# ==================== 列表 ====================
+
+async def test_list_item_fields(admin_token):
+    """列表元素字段集逐字段钉死 —— 少一个前端就渲染不出来。"""
+    async with _client() as c:
+        await _new_order(c, admin_token)
+        d = await _list(c, admin_token)
+        assert d["items"], "至少应有一行"
+        assert set(d["items"][0]) == ITEM_FIELDS
+
+
+async def test_list_shape(admin_token):
+    async with _client() as c:
+        await _new_order(c, admin_token)
+        d = await _list(c, admin_token)
+        assert set(d) == {"total", "page", "page_size", "items"}
+
+
+async def test_unrecorded_order_appears(admin_token):
+    """已发货但没录物流的订单必须出现在列表里,运单相关字段全为 null。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已发货")
+        d = await _list(c, admin_token)
+        row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
+        assert row["id"] is None
+        assert row["tracking_no"] is None
+        assert row["status"] is None
+        assert row["trace"] is None
+        assert row["order_status"] == "已发货"
+
+
+async def test_recorded_order_shows_shipment(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-0001",
+                            status="运输中", shipped_at="2026-09-20")
+        d = await _list(c, admin_token)
+        row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
+        assert row["id"] is not None
+        assert row["tracking_no"] == "TEST-0001"
+        assert row["carrier"] == "京东物流"
+        assert row["status"] == "运输中"
+        assert row["shipped_at"] == "2026-09-20"
+
+
+async def test_orphan_shipment_not_hidden(admin_token):
+    """订单建过运单后被改回「处理中」,该行仍要出现 —— 否则运单隐身,编辑删除都做不到。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已发货")
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-0002")
+        await c.put(f"/api/admin/orders/{order['id']}", headers=_bearer(admin_token),
+                    json={"status": "处理中"})
+        d = await _list(c, admin_token)
+        row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
+        assert row["order_status"] == "处理中"
+        assert row["id"] is not None
+
+
+async def test_total_is_exact_not_cartesian(admin_token):
+    """total 必须是精确的过滤后全量。
+
+    钉住 count 漏 join 的坑:漏 join 时 SQLAlchemy 会算出笛卡尔积
+    (运单数 × 订单数),不报错只发一条 SAWarning。所以断言必须用精确值,
+    `total > len(items)` 那种写法抓不到。
+    """
+    async with _client() as c:
+        for i in range(3):
+            await _new_order(c, admin_token)
+        d = await _list(c, admin_token)
+        assert d["total"] == 3
+
+
+async def test_keyword_matches_five_fields(admin_token):
+    """keyword 覆盖运单号 / 订单号 / 商品名 / 买家名 / 承运商 五个字段。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-KW-1",
+                            carrier="顺丰速运")
+        # 运单号
+        assert len((await _list(c, admin_token, keyword="TEST-KW-1"))["items"]) == 1
+        # 订单号(订单号唯一,顺带验证)
+        assert len((await _list(c, admin_token, keyword=order["order_no"]))["items"]) == 1
+        # 商品名 / 买家名 / 承运商
+        assert len((await _list(c, admin_token, keyword=order["product_name"][:4]))["items"]) >= 1
+        assert len((await _list(c, admin_token, keyword=BUYER))["items"]) == 1
+        assert len((await _list(c, admin_token, keyword="顺丰"))["items"]) == 1
+
+
+async def test_filter_by_shipment_status(admin_token):
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, a["order_no"], "TEST-F-1", status="运输中")
+        await _new_shipment(c, admin_token, b["order_no"], "TEST-F-2", status="派送中")
+        d = await _list(c, admin_token, status="派送中")
+        assert [x["order_no"] for x in d["items"]] == [b["order_no"]]
+
+
+async def test_filter_unrecorded(admin_token):
+    """status=未录入 -> 只返回 id 为 null 的行。"""
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, a["order_no"], "TEST-U-1")
+        d = await _list(c, admin_token, status="未录入")
+        assert [x["order_no"] for x in d["items"]] == [b["order_no"]]
+        assert all(x["id"] is None for x in d["items"])
+
+
+async def test_filter_by_order_status(admin_token):
+    async with _client() as c:
+        await _new_order(c, admin_token, status="已送达")
+        await _new_order(c, admin_token, status="已发货")
+        d = await _list(c, admin_token, order_status="已送达")
+        assert len(d["items"]) == 1
+        assert d["items"][0]["order_status"] == "已送达"
+
+
+async def test_sort_shipped_at_desc_nulls_last(admin_token):
+    """shipped_at 降序,未录入的(shipped_at 为 null)排最后。"""
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_order(c, admin_token)                       # 未录入
+        await _new_shipment(c, admin_token, a["order_no"], "TEST-S-1", shipped_at="2026-09-10")
+        await _new_shipment(c, admin_token, b["order_no"], "TEST-S-2", shipped_at="2026-09-15")
+        items = (await _list(c, admin_token))["items"]
+        assert [x["shipped_at"] for x in items] == ["2026-09-15", "2026-09-10", None]
+
+
+async def test_signed_at_null_when_not_signed(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-SA-1", status="运输中")
+        row = (await _list(c, admin_token))["items"][0]
+        assert row["signed_at"] is None
+
+
+async def test_trace_returned_normalized(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-T-1",
+                            shipped_at="2026-09-20",
+                            trace="2026-09-20 14:32|广州市|已揽收")
+        row = (await _list(c, admin_token))["items"][0]
+        assert row["trace"] == "2026-09-20 14:32 | 广州市 | 已揽收"
