@@ -433,7 +433,18 @@ async def update_shipment(
 
 @router.delete("/{shipment_id}")
 async def delete_shipment(shipment_id: int, db: AsyncSession = Depends(get_db)):
-    """删除运单。订单不会被删,删除后它回到列表里的「未录入」行。"""
+    """删除运单。订单不会被删,删除后它回到列表里的「未录入」行。
+
+    与建单/编辑端点【刻意不同】的两处,理由都写在这里而不是让人去猜:
+      · **不显式 flush** —— 那两处 flush 是为了把唯一键冲突收敛成 409、
+        并回读 join 后的行;这里两者都不需要(返回体是常量)。
+      · **不加 `_conflict_409` 那种按约束名分支的兜底** —— 连库查过,
+        全库【没有任何外键指向 shipments】,DELETE 也不可能违反 UNIQUE,
+        所以删除路径上 IntegrityError 不可达。
+    真正的删除失败(如并发下别人已删)在 SQLAlchemy 里只发 SAWarning
+    (非版本化 mapper 的 DELETE rowcount 不匹配),不会 500 —— 而且语义上没错:
+    目标状态(行没了)已达成。
+    """
     shipment = (await db.execute(
         select(Shipment).where(Shipment.id == shipment_id)
     )).scalar_one_or_none()

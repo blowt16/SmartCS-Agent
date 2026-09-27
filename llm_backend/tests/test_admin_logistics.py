@@ -959,19 +959,35 @@ async def test_delete_ok(admin_token):
         assert r.status_code == 200
         assert r.json() == {"id": s["id"], "deleted": True}
         items = (await _list(c, admin_token))["items"]
-        assert items[0]["id"] is None       # 订单还在,只是回到未录入
+        # 按 order_no 定位而不是取 items[0] —— 后者依赖"列表里恰好只有一行",
+        # 那只因 autouse fixture 清了数据才成立;将来多造一个订单就会指向错误的行。
+        row = next(x for x in items if x["order_no"] == order["order_no"])
+        assert row["id"] is None           # 订单还在,只是回到未录入
 
 
 async def test_delete_returns_order_to_unrecorded(admin_token):
-    """删掉运单后该订单回到「未录入」而不是从列表消失 —— 列表由 orders 驱动。"""
+    """删掉运单后该订单回到「未录入」而不是从列表消失 —— 列表由 orders 驱动。
+
+    ⚠️ 同时钉住【删除的作用域】:多造一个订单+运单,删掉第一个之后断言第二个的
+    `tracking_no` **仍在**。少了这半句,把 delete_shipment 改成
+    `delete(Shipment)`(删全表)也会通过 —— 每个用例只造一个运单时,
+    「删一个」和「删全部」无法区分。
+    """
     async with _client() as c:
         order = await _new_order(c, admin_token)
+        other = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, other["order_no"], "TEST-D-3")   # 不该被牵连
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-D-2")
+
         await c.delete(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token))
+
         d = await _list(c, admin_token)
         row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
         assert row["id"] is None
         assert row["status"] is None
+        # 另一个订单的运单不受影响(按运单身份断言,不是按订单身份)
+        other_row = next(x for x in d["items"] if x["order_no"] == other["order_no"])
+        assert other_row["tracking_no"] == "TEST-D-3"
 
 
 # ==================== 级联(跨模块) ====================
@@ -1002,6 +1018,14 @@ async def test_delete_order_cascades_shipment(admin_token):
 
 
 async def test_delete_order_cascade_does_not_touch_others(admin_token):
+    """删 a 的订单不能牵连 b 的【运单】。
+
+    ⚠️ 关键在最后那句断言的是【运单身份】而不是【订单身份】。
+    只断言 `[x["order_no"] for x in d["items"]] == [b["order_no"]]` 是不够的 ——
+    实测:把级联做过头(连 b 的运单也一起删了),b 照样出现在列表里(它已发货,
+    基础条件的第一分支就够),只是变成「未录入」,**那条断言照样通过**。
+    一条叫「does not touch others」的守卫,在 over-broad 级联下放行。
+    """
     async with _client() as c:
         a = await _new_order(c, admin_token)
         b = await _new_order(c, admin_token)
@@ -1010,6 +1034,9 @@ async def test_delete_order_cascade_does_not_touch_others(admin_token):
         await c.delete(f"/api/admin/orders/{a['id']}", headers=_bearer(admin_token))
         d = await _list(c, admin_token)
         assert [x["order_no"] for x in d["items"]] == [b["order_no"]]
+        # b 的运单必须原样还在(这才是本用例的名字所指的东西)
+        assert d["items"][0]["tracking_no"] == "TEST-CAS-3"
+        assert d["items"][0]["id"] is not None
 
 
 # ==================== 索引与模型 ====================
