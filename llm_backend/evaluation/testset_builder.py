@@ -21,31 +21,40 @@ from evaluation.llm_factory import build_judge_embeddings, build_judge_llm
 logger = get_logger(service="evaluation.testset_builder")
 
 
-async def load_corpus_documents(max_docs: int, user_id: str) -> List[Document]:
+async def load_corpus_documents(max_docs: int, user_id: str | None = None) -> List[Document]:
     """从 document_chunks 读取生产分块，包装为 ragas 合成器可用的 Document。
 
     Args:
         max_docs: 最多读取的分块数（控制合成器 docstore 建立成本，默认 RAGAS_MAX_CORPUS_DOCS）
-        user_id: 知识归属用户（scripts/ingest_knowledge.py 入库时传入的 user_id）
+        user_id: 可选的归属收窄。**不传 = 读全库**（排除 test_% 测试账号）。
+                 旧语义是"必填的语料来源"，已废弃 —— 见 SPEC_DOCUMENT_STATUS_FILTER D11：
+                 ① 原默认值 "1" 早就是坏的（数据已迁到 owner 6）；
+                 ② "为评测把同一内容再挂一份到第二个 user_id"实测会让检索 top-K
+                    出现完全重复的条目（RRF 按 chunk_id 去重，而 chunk_id 含 user_id），
+                    白占名额、压低 context_precision —— 恰恰违背本模块"语料复用生产
+                    分块，保证 reference_contexts 在生产检索中找得到"的立身之本。
 
     Raises:
-        RuntimeError: 该用户无任何分块（提示先入库）。
+        RuntimeError: 无任何可用分块。
     """
     async with AsyncSessionLocal() as session:
-        stmt = (
-            select(DocumentChunk)
-            .where(DocumentChunk.user_id == user_id)
-            .order_by(DocumentChunk.id)
-            .limit(max_docs)
-        )
+        stmt = select(DocumentChunk)
+        if user_id:
+            stmt = stmt.where(DocumentChunk.user_id == user_id)
+        else:
+            # 默认读全库:知识库是全平台的,文档身份为 md5(SPEC_DOCUMENT_STATUS_FILTER D4)。
+            # 排除 test_ 前缀账号 —— 它们是 pytest 夹具(conftest 的 test_user_id 约定),
+            # 测试被强杀时会留下残留块;混进合成语料会生成出自测试夹具的评测题。
+            stmt = stmt.where(~DocumentChunk.user_id.like("test_%"))
+        stmt = stmt.order_by(DocumentChunk.id).limit(max_docs)
         chunks = (await session.execute(stmt)).scalars().all()
 
     if not chunks:
         raise RuntimeError(
-            f"语料库为空：user_id='{user_id}' 无 document_chunks 记录"
-            "（请先 python -m scripts.ingest_knowledge <目录> <user_id> 入库）"
+            "语料库为空：document_chunks 无可用知识分块"
+            "（请先经管理端上传知识文档;或显式传 --user <owner_id> 收窄语料）"
         )
-    logger.info("评测语料加载完成: {} 块（user_id={}）", len(chunks), user_id)
+    logger.info("评测语料加载完成: {} 块（user_id={}）", len(chunks), user_id or "全库")
     return [
         Document(
             page_content=chunk.content,

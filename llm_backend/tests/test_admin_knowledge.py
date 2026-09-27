@@ -52,6 +52,22 @@ def _md_bytes(paragraphs: int = 3, para_len: int = 350) -> bytes:
     return ("\n\n".join(lines) + "\n").encode("utf-8")
 
 
+def _unique_md_bytes(paragraphs: int = 3) -> bytes:
+    """_md_bytes + 唯一标记。
+
+    ⚠️ 内容决定 md5，而 D5 之后 md5 **全平台唯一**（uq_documents_md5）：固定内容的
+    用例若被强杀（Ctrl-C / 进程被杀）留下残留行，下一次运行会直接判 duplicate，
+    报出与改动无关的失败。加唯一标记后每次内容不同 → md5 不同 → 不受残留影响。
+    """
+    return _md_bytes(paragraphs) + f"\n\n## 唯一标记\n{_uid()}\n".encode("utf-8")
+
+
+def _uid() -> str:
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
 def _bearer(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
@@ -123,13 +139,12 @@ def _staging_files() -> set[str]:
 # ==================== HTTP helper ====================
 
 
-async def _stage(client, token: str, user_id: str, content: bytes, filename: str) -> str:
-    """调 stage,返回 md5。"""
+async def _stage(client, token: str, content: bytes, filename: str) -> str:
+    """调 stage,返回 md5。不传 user_id —— 归属由 commit 从令牌取(D8)。"""
     r = await client.post(
         "/api/admin/knowledge/stage",
         headers=_bearer(token),
         files={"file": (filename, content, "text/markdown")},
-        data={"user_id": user_id},
     )
     assert r.status_code == 200, r.text
     return r.json()["md5"]
@@ -213,7 +228,7 @@ async def test_list_item_fields_have_no_title(client, admin_token):
 # ==================== 3~6 stage / unstage ====================
 
 
-async def test_stage_writes_disk_without_touching_db(client, admin_token, test_user_id):
+async def test_stage_writes_disk_without_touching_db(client, admin_token):
     """两阶段设计的核心断言:stage 只落盘,一行 DB 都不写。"""
     content = _md_bytes(paragraphs=2)
     filename = "暂存测试.md"
@@ -221,7 +236,6 @@ async def test_stage_writes_disk_without_touching_db(client, admin_token, test_u
     r = await client.post(
         "/api/admin/knowledge/stage", headers=_bearer(admin_token),
         files={"file": (filename, content, "text/markdown")},
-        data={"user_id": test_user_id},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -243,10 +257,10 @@ async def test_stage_writes_disk_without_touching_db(client, admin_token, test_u
         await _unstage(client, admin_token, md5)
 
 
-async def test_unstage_really_reverts(client, admin_token, test_user_id):
+async def test_unstage_really_reverts(client, admin_token):
     """取消能真撤销:暂存文件消失,且从头到尾没写过库。"""
     baseline = await _counts()
-    md5 = await _stage(client, admin_token, test_user_id, _md_bytes(paragraphs=2), "撤销测试.md")
+    md5 = await _stage(client, admin_token,_md_bytes(paragraphs=2), "撤销测试.md")
     assert (STAGING_DIR / f"{md5}.md").is_file()
 
     r = await client.delete(f"/api/admin/knowledge/stage/{md5}", headers=_bearer(admin_token))
@@ -256,9 +270,9 @@ async def test_unstage_really_reverts(client, admin_token, test_user_id):
     assert await _counts() == baseline
 
 
-async def test_unstage_is_idempotent(client, admin_token, test_user_id):
+async def test_unstage_is_idempotent(client, admin_token):
     """幂等:没东西可删也返回 200 + deleted:false,不是 404。"""
-    md5 = await _stage(client, admin_token, test_user_id, _md_bytes(paragraphs=2), "幂等测试.md")
+    md5 = await _stage(client, admin_token,_md_bytes(paragraphs=2), "幂等测试.md")
     first = await client.delete(f"/api/admin/knowledge/stage/{md5}", headers=_bearer(admin_token))
     assert first.status_code == 200
     assert first.json()["deleted"] is True
@@ -268,14 +282,13 @@ async def test_unstage_is_idempotent(client, admin_token, test_user_id):
     assert second.json() == {"md5": md5, "deleted": False}
 
 
-async def test_stage_rejects_exe_and_empty_file(client, admin_token, test_user_id):
+async def test_stage_rejects_exe_and_empty_file(client, admin_token):
     """stage 校验:被拒的文件不该在 _staging/ 留下垃圾。"""
     files_before = _staging_files()
 
     r1 = await client.post(
         "/api/admin/knowledge/stage", headers=_bearer(admin_token),
         files={"file": ("bad.exe", b"MZ\x90\x00", "application/octet-stream")},
-        data={"user_id": test_user_id},
     )
     assert r1.status_code == 400
     assert "不支持" in r1.json()["detail"]
@@ -283,7 +296,6 @@ async def test_stage_rejects_exe_and_empty_file(client, admin_token, test_user_i
     r2 = await client.post(
         "/api/admin/knowledge/stage", headers=_bearer(admin_token),
         files={"file": ("empty.md", b"", "text/markdown")},
-        data={"user_id": test_user_id},
     )
     assert r2.status_code == 400
 
@@ -295,18 +307,18 @@ async def test_stage_rejects_exe_and_empty_file(client, admin_token, test_user_i
 # ==================== 7~8 commit(SSE 进度 + done) ====================
 
 
-async def test_commit_sse_progress_and_done_event(client, admin_token, test_user_id):
+async def test_commit_sse_progress_and_done_event(client, admin_token):
     """commit 走完整链路:SSE 流式返回 + 进度单向递增 + 6 阶段齐全 + done 带完整文档行。
 
     用 33 段 md(> 25 个片段 → 4 个嵌入批次)才看得出「生成向量」的批次细分。
     """
-    content = _md_bytes(paragraphs=33, para_len=350)
+    content = _unique_md_bytes(paragraphs=33)
     filename = "大文件测试.md"
     desc = "管理端测试:大文件提交"
     before = await _counts()
     md5 = None
     try:
-        md5 = await _stage(client, admin_token, test_user_id, content, filename)
+        md5 = await _stage(client, admin_token,content, filename)
         status, ctype, events = await _commit_sse(client, admin_token, {
             "md5": md5, "original_filename": filename, "description": desc,
         })
@@ -369,14 +381,14 @@ async def test_commit_sse_progress_and_done_event(client, admin_token, test_user
             await _unstage(client, admin_token, md5)
 
 
-async def test_commit_failure_is_sse_error_event_not_http_4xx(client, admin_token, test_user_id):
+async def test_commit_failure_is_sse_error_event_not_http_4xx(client, admin_token):
     """错误分界(流已开始之后):HTTP 头已发出,失败只能走 error 事件,且保留暂存文件可重试。"""
     content = b"   \n\n  \t  \n   "   # 只含空白:过得了 stage 的空文件校验,倒在 commit 的解析
     filename = "空白测试.md"
     before = await _counts()
     md5 = None
     try:
-        md5 = await _stage(client, admin_token, test_user_id, content, filename)
+        md5 = await _stage(client, admin_token,content, filename)
         status, ctype, events = await _commit_sse(client, admin_token, {
             "md5": md5, "original_filename": filename,
         })
@@ -422,13 +434,13 @@ async def test_commit_invalid_md5_is_422(client, admin_token):
     assert r.status_code == 422
 
 
-async def test_commit_duplicate_does_not_add_row(client, admin_token, test_user_id):
+async def test_commit_duplicate_does_not_add_row(client, admin_token):
     """重复文件:第二次 commit 返回 duplicate:true,只更新描述,documents 不新增行。"""
-    content = _md_bytes(paragraphs=3)
+    content = _unique_md_bytes(paragraphs=3)
     filename = "重复测试.md"
     md5 = None
     try:
-        md5 = await _stage(client, admin_token, test_user_id, content, filename)
+        md5 = await _stage(client, admin_token,content, filename)
         _, _, events = await _commit_sse(client, admin_token, {
             "md5": md5, "original_filename": filename, "description": "第一次",
         })
@@ -439,7 +451,7 @@ async def test_commit_duplicate_does_not_add_row(client, admin_token, test_user_
         assert await _counts_by_md5(md5) == (1, first["document"]["chunk_count"])
 
         # 第一次 commit 已删掉暂存文件,同一文件再暂存一次(同一路径,天然幂等)
-        again_md5 = await _stage(client, admin_token, test_user_id, content, filename)
+        again_md5 = await _stage(client, admin_token,content, filename)
         assert again_md5 == md5
         _, _, events2 = await _commit_sse(client, admin_token, {
             "md5": md5, "original_filename": filename, "description": "第二次",
@@ -531,14 +543,14 @@ async def test_delete_missing_md5_404(client, admin_token):
 
 
 async def test_stage_commit_patch_delete_full_chain(
-    client, admin_token, test_user_id, cleanup_test_data
+    client, admin_token, cleanup_test_data
 ):
     """stage → commit(带描述) → 列表可见 → PATCH 停用 → DELETE → documents/chunks 都清空。"""
-    content = _md_bytes(paragraphs=3)
+    content = _unique_md_bytes(paragraphs=3)
     filename = "全链路测试.md"
     md5 = None
     try:
-        md5 = await _stage(client, admin_token, test_user_id, content, filename)
+        md5 = await _stage(client, admin_token,content, filename)
         status, ctype, events = await _commit_sse(client, admin_token, {
             "md5": md5, "original_filename": filename, "description": "全链路描述",
         })
@@ -572,3 +584,109 @@ async def test_stage_commit_patch_delete_full_chain(
         if md5:
             await _delete_doc(client, admin_token, md5)
             await _unstage(client, admin_token, md5)
+
+
+# ==================== 文档身份统一（SPEC_DOCUMENT_STATUS_FILTER A3/A4）====================
+
+
+async def test_second_admin_upload_is_duplicate(client, admin_token):
+    """A3：第二个管理员上传同一文件 → 判为重复，不新增行、不重复索引、不报假错误。
+
+    D5 之前这里会新建第二行 documents（内容与 embedding 与第一行逐字相同），
+    两行各被检索一次；且 `_finalize` 当时按 (user_id, md5) 查不到行，会报
+    「索引已执行但查不到对应文档记录」的假错误 —— 本用例同时守住这两条。
+
+    「第二个管理员」用不同令牌 → commit 取自令牌的 user_id 不同 → 旧约束
+    (user_id, md5) 不冲突；只有新约束 uq_documents_md5 才拦得住。
+    """
+    from conftest import _login, _temp_user
+
+    content = _unique_md_bytes(paragraphs=3)
+    filename = "跨管理员重复上传.md"
+    md5 = None
+    try:
+        md5 = await _stage(client, admin_token, content, filename)
+        _, _, events = await _commit_sse(client, admin_token, {
+            "md5": md5, "original_filename": filename, "description": "管理员A的描述",
+        })
+        first = events[-1]
+        assert first["type"] == "done", first
+        assert first["document"]["duplicate"] is False
+        after_first = await _counts()
+        assert await _counts_by_md5(md5) == (1, first["document"]["chunk_count"])
+
+        async with _temp_user("admin") as u2:
+            token2 = await _login(u2["email"], u2["password"])
+            md5_b = await _stage(client, token2, content, filename)
+            assert md5_b == md5, "同一文件指纹必须一致"
+            _, _, events2 = await _commit_sse(client, token2, {
+                "md5": md5, "original_filename": filename, "description": "",
+            })
+
+        second = events2[-1]
+        assert second["type"] == "done", f"不得出现 error 事件（假错误）: {second}"
+        assert second["document"]["duplicate"] is True
+        assert second["document"]["id"] == first["document"]["id"], "应命中先上传者那一行"
+        assert await _counts() == after_first, "不得新增 documents/chunks 行"
+        assert await _counts_by_md5(md5) == (1, first["document"]["chunk_count"])
+        # 空描述不覆盖（R3：前端新建路径未填描述时提交的是空串）
+        assert (await _db_state(md5))[0] == "管理员A的描述", (
+            "重复上传时提交空描述不得把已有描述抹成空串"
+        )
+    finally:
+        if md5:
+            await _delete_doc(client, admin_token, md5)
+            await _unstage(client, admin_token, md5)
+
+
+async def test_patch_updates_every_row_of_same_md5():
+    """A4：PATCH 按 md5 **全量**更新，不是只改 rows[0]。
+
+    用假 db 直接驱动路由函数 —— 真实构造"两行同 md5"需要临时 DROP uq_documents_md5
+    （正是本改动引入的不变式），在共享库上做 DDL 是侵入性的。本用例守护的是
+    `for doc in rows` 的循环写法：若退回旧的 `doc = rows[0]`，第二行不会被改，
+    本用例立刻失败 —— 而那正是"停用后仍能检索到"这个 bug 的直接来源。
+    """
+    from app.api.admin.knowledge import update_knowledge
+    from app.models.document import Document
+    from app.schemas.admin import KnowledgeUpdate
+
+    def _doc(uid: str) -> Document:
+        return Document(md5="a" * 32, original_filename="f.md", user_id=uid,
+                        file_type="md", file_size=1, chunk_count=1,
+                        description="原描述", status="enabled")
+
+    rows = [_doc("1"), _doc("2")]
+
+    class _FakeDB:
+        flushed = False
+
+        async def execute(self, _stmt, *_a, **_kw):
+            class _S:
+                def all(self):
+                    return rows
+
+            class _R:
+                def scalars(self):
+                    return _S()
+
+                def first(self):
+                    return rows[0]
+
+            return _R()
+
+        async def flush(self):
+            self.flushed = True
+
+        async def refresh(self, _obj):
+            pass
+
+    db = _FakeDB()
+    resp = await update_knowledge(md5="a" * 32,
+                                  payload=KnowledgeUpdate(status="disabled"),
+                                  db=db)
+    assert all(r.status == "disabled" for r in rows), (
+        f"按 md5 全量更新：两行都应被改，实际 {[r.status for r in rows]}"
+    )
+    assert db.flushed
+    assert resp["status"] == "disabled", "响应仍是第一行（前端契约不变）"

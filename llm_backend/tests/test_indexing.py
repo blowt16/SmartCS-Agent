@@ -48,8 +48,14 @@ async def test_success_with_metadata(svc, test_user_id, tmp_path, cleanup_test_d
     assert result["status"] == "success"
     assert result["chunks"] <= 3
 
+    # ⚠️ 必须 ORDER BY:下方第 58 行按 enumerate(rows) 断言 chunk_id 后缀为 _0000/_0001/…,
+    # 而 SQL 不保证无 ORDER BY 时的返回顺序(取决于行的物理布局,随插入/删除历史变化)。
+    # 缺这一句时本用例间歇性失败(项目问题 #19 记录的 flaky,真实根因即此)。
     async with AsyncSessionLocal() as s:
-        rows = (await s.execute(select(DocumentChunk).where(DocumentChunk.user_id == test_user_id))).scalars().all()
+        rows = (await s.execute(
+            select(DocumentChunk).where(DocumentChunk.user_id == test_user_id)
+            .order_by(DocumentChunk.chunk_index)
+        )).scalars().all()
         doc = (await s.execute(select(Document).where(Document.user_id == test_user_id))).scalar_one()
     assert doc.md5 and doc.file_type == "md" and doc.file_size > 0
     assert doc.chunk_count == len(rows)

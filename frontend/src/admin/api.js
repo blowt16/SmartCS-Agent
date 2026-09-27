@@ -77,11 +77,12 @@ export const updateTicket = (id, b) => request(`/api/admin/tickets/${id}`, { met
 //
 // ⚠️ 不要把这个函数改成通用上传器去服务客户端:两者契约不同(/api/upload 把处理类失败
 // 包进 200 的 status=failed),各留各的。
-export function stageFile({ file, userId, onProgress }) {
+export function stageFile({ file, onProgress }) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('user_id', userId);
+    // 不传 user_id:stage 只回答"平台里有没有这个文件",归属身份由 commit 从令牌取
+    // (SPEC_DOCUMENT_STATUS_FILTER D8 —— 原 user_id 参数在 stage 内无其他用处)。
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/admin/knowledge/stage');

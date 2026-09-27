@@ -46,8 +46,17 @@ async def init_db():
                 "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chapter VARCHAR(255)"
             ))
             # 唯一约束幂等(存量 null 允许多值)
+            # 文档身份:由 (user_id, md5) 改为 md5 全局唯一(SPEC_DOCUMENT_STATUS_FILTER D5)。
+            # ⚠️ 旧对象在 documents 上【同时是唯一约束和它拥有的索引】(pg_constraint
+            #    contype='u'),只写 DROP INDEX 会报 DependentObjectsStillExist 并回滚
+            #    整个 init_db 事务(本文件所有语句共用一个 engine.begin(),回滚会带走
+            #    其后全部迁移)。两行都写:兼容"约束形态"与"裸索引形态"两种历史环境。
             await conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_user_md5 ON documents (user_id, md5)"
+                "ALTER TABLE documents DROP CONSTRAINT IF EXISTS uq_documents_user_md5"
+            ))
+            await conn.execute(text("DROP INDEX IF EXISTS uq_documents_user_md5"))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_md5 ON documents (md5)"
             ))
             await conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_chunks_chunk_id ON document_chunks (chunk_id)"
