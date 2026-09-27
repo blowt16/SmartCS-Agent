@@ -204,3 +204,116 @@ async def list_logistics(
         "page_size": page_size,
         "items": [_serialize(order, shipment) for order, shipment in rows],
     }
+
+
+def _resolve_signed_at(status: str, given: date | None, existing: date | None,
+                       *, explicit_clear: bool = False) -> date | None:
+    """规则 A:signed_at 与 status 强绑定。
+
+    非「已签收」一律置 NULL;「已签收」显式传了用传的 -> 没传沿用原值 ->
+    原值也没有则补当天(UTC,不用 date.today() —— 本地日期在早 8 小时窗口内错位一天)。
+
+    ⚠️ `explicit_clear` 区分「管理员显式清空」与「没传」—— 少了它,`given or existing`
+    会把显式传的 None 当成"没传",回填库里的旧值,前端那个可清空的日期框就成了摆设。
+    本模块有意支持「已签收、日期不详」这个状态(spec §4.5 规则 A 下方的说明)。
+    """
+    if status != "已签收":
+        return None
+    if explicit_clear:
+        return None
+    return given or existing or datetime.now(timezone.utc).date()
+
+
+def _check_time_order(shipped: date | None, signed: date | None, status: str) -> None:
+    """规则 B:时间先后 + 已签收必须有发货时间。"""
+    if status == "已签收" and not shipped:
+        raise HTTPException(status_code=400, detail="已签收的运单必须有发货时间")
+    if shipped and signed and signed < shipped:
+        raise HTTPException(status_code=400, detail="签收时间不能早于发货时间")
+
+
+def _parse_trace_or_400(raw: str | None, shipped: date | None, signed: date | None) -> str | None:
+    """规则 C:校验并规范化轨迹,不合格式转 400。
+
+    ⚠️ 长度检查必须在【规范化之后】做,不能只靠 schema 的 max_length。
+    规范化每行会加 4 个字符(`14:32|广州|已揽收` → `14:32 | 广州 | 已揽收`),
+    所以 max_length 只能管住"录入长度",管不住"存下来的长度"。
+    实测:1974 字符的紧凑写法能过 max_length=2000,规范化后是 2290 ——
+    存下来之后,管理员在编辑弹窗里原样保存就会被 422 打回。
+    parse_trace 的输出是幂等的,所以在这一层卡住即可保证
+    "任何被接受过的值都能被原样再提交"。
+    """
+    try:
+        normalized = parse_trace(raw, shipped, signed)
+    except TraceFormatError as e:
+        raise HTTPException(status_code=400, detail=f"轨迹格式不对：{e}")
+    if normalized and len(normalized) > TRACE_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"轨迹规范化后 {len(normalized)} 字，超过上限 {TRACE_MAX} 字")
+    return normalized
+
+
+def _conflict_409(e: IntegrityError, order_no: str, tracking_no: str) -> HTTPException:
+    """按约束名区分两条唯一键 —— 都是 UniqueViolation,只能靠 diag.constraint_name 分辨。"""
+    name = getattr(getattr(e.orig, "diag", None), "constraint_name", "") or ""
+    if "order_no_key" in name:
+        return HTTPException(status_code=409, detail=f"订单 {order_no} 已有运单，请勿重复创建")
+    if "tracking_no_key" in name:
+        return HTTPException(status_code=409, detail=f"运单号已存在: {tracking_no}")
+    return HTTPException(status_code=409, detail="运单写入冲突，请重试")
+
+
+@router.post("")
+async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(get_db)):
+    """建运单(order_no 由前端从被点「补录」的那一行带入,不经过下拉)。"""
+    order = (await db.execute(
+        select(Order).where(Order.order_no == payload.order_no)
+    )).scalar_one_or_none()
+    if order is None:
+        raise HTTPException(status_code=400, detail=f"订单不存在: {payload.order_no}")
+
+    # 先查「已有运单」再查状态:订单被改回处理中但已有运单时,真实原因是前者,
+    # 报「状态不对」会误导管理员
+    exists_id = (await db.execute(
+        select(Shipment.id).where(Shipment.order_no == payload.order_no)
+    )).scalar_one_or_none()
+    if exists_id is not None:
+        raise HTTPException(status_code=409, detail=f"订单 {payload.order_no} 已有运单，请勿重复创建")
+
+    if order.status not in SHIPPABLE_ORDER_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"订单 {payload.order_no} 当前状态为「{order.status}」，只有已发货及之后的订单才能建运单",
+        )
+
+    signed_at = _resolve_signed_at(payload.status, payload.signed_at, None)
+    _check_time_order(payload.shipped_at, signed_at, payload.status)
+    trace = _parse_trace_or_400(payload.trace, payload.shipped_at, signed_at)
+
+    shipment = Shipment(
+        order_no=payload.order_no,
+        tracking_no=payload.tracking_no,
+        carrier=payload.carrier,
+        status=payload.status,
+        shipped_at=payload.shipped_at,
+        signed_at=signed_at,
+        trace=trace,
+    )
+    try:
+        db.add(shipment)
+        # flush 必须显式写:add() 本身不抛异常,冲突要到 flush/autoflush/commit 才暴露。
+        # 漏了它,唯一键冲突会从下面那次重取 SELECT 的 autoflush 冒出(在 try 之外 -> 500),
+        # 或从 get_db yield 之后的隐式 commit 冒出(响应已生成 -> 500)。
+        await db.flush()
+    except IntegrityError as e:
+        await db.rollback()
+        raise _conflict_409(e, payload.order_no, payload.tracking_no)
+
+    # 重取一次拿 join 出来的订单字段,不要在 ORM 对象上手工拼
+    row = (await db.execute(
+        select(Order, Shipment)
+        .join(Shipment, Shipment.order_no == Order.order_no)
+        .where(Shipment.id == shipment.id)
+    )).one()
+    return _serialize(*row)

@@ -10,7 +10,7 @@
 """
 import sys
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -420,3 +420,200 @@ async def test_filters_narrow_the_base_set(admin_token):
         assert len((await _list(c, admin_token, status="未录入"))["items"]) == 1
         assert len((await _list(c, admin_token,
                                status="未录入", order_status="处理中"))["items"]) == 0
+
+
+# ==================== 建单 ====================
+
+async def test_create_ok(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-1",
+                                shipped_at="2026-09-20", trace="2026-09-20 14:32 | 广州市 | 已揽收")
+        assert d["order_no"] == order["order_no"]
+        assert d["tracking_no"] == "TEST-C-1"
+        assert d["status"] == "待揽收"
+        assert d["order_status"] == "已发货"
+        assert d["product_name"] == order["product_name"]     # join 出来的字段也要有
+        assert set(d) == ITEM_FIELDS
+
+
+async def test_create_normalizes_trace(admin_token):
+    """无空格写法也要被规范化成 ' | '。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-2",
+                                shipped_at="2026-09-20",
+                                trace="2026-09-20 14:32|广州市|已揽收\n\n2026-09-21 08:05|深圳|派送中")
+        assert d["trace"] == ("2026-09-20 14:32 | 广州市 | 已揽收\n"
+                              "2026-09-21 08:05 | 深圳 | 派送中")
+
+
+async def test_create_order_not_found(admin_token):
+    async with _client() as c:
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": "ORD-999", "tracking_no": "TEST-C-3", "carrier": "京东物流"})
+        assert r.status_code == 400
+        assert "订单不存在" in r.json()["detail"]
+
+
+async def test_create_rejects_processing_order(admin_token):
+    """处理中且无运单的订单不能建运单。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="处理中")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-4", "carrier": "京东物流"})
+        assert r.status_code == 400
+        assert "只有已发货及之后的订单才能建运单" in r.json()["detail"]
+
+
+async def test_create_rejects_duplicate_order(admin_token):
+    """一单只能一个运单 —— 文案必须是「已有运单」,不能错报成运单号冲突。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-C-5")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-6", "carrier": "京东物流"})
+        assert r.status_code == 409
+        assert "已有运单" in r.json()["detail"]
+
+
+async def test_create_rejects_duplicate_tracking_no(admin_token):
+    """运单号撞号的 409 文案必须是「运单号已存在」,不能错报成订单冲突。
+
+    两个 409 靠约束名分支区分,只断言状态码抓不到错报。
+    """
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, a["order_no"], "TEST-C-7")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": b["order_no"], "tracking_no": "TEST-C-7", "carrier": "京东物流"})
+        assert r.status_code == 409
+        assert "运单号已存在" in r.json()["detail"]
+
+
+async def test_create_signed_fills_today(admin_token):
+    """status='已签收' 未传 signed_at -> 补当天(UTC)。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-8",
+                                status="已签收", shipped_at="2026-09-20")
+        assert d["signed_at"] == datetime.now(timezone.utc).date().isoformat()
+
+
+async def test_create_signed_at_cleared_when_not_signed(admin_token):
+    """非「已签收」传了 signed_at -> 落库为 null。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-9",
+                                status="运输中", signed_at="2026-09-25")
+        assert d["signed_at"] is None
+
+
+async def test_create_rejects_signed_before_shipped(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-10", "carrier": "京东物流",
+            "status": "已签收", "shipped_at": "2026-09-20", "signed_at": "2026-09-18"})
+        assert r.status_code == 400
+        assert "签收时间不能早于发货时间" in r.json()["detail"]
+
+
+async def test_create_rejects_signed_without_shipped(admin_token):
+    """已签收但没发货时间 -> 400(规则 B 的第二条)。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-11", "carrier": "京东物流",
+            "status": "已签收"})
+        assert r.status_code == 400
+        assert "必须有发货时间" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("field,bad", [("status", "已取消"), ("carrier", "顺丰")])
+async def test_create_rejects_bad_enum(admin_token, field, bad):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        body = {"order_no": order["order_no"], "tracking_no": "TEST-C-12",
+                "carrier": "京东物流", field: bad}
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json=body)
+        assert r.status_code == 422
+
+
+async def test_create_blank_trace_becomes_null(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-13", trace="   \n  ")
+        assert d["trace"] is None
+
+
+async def test_create_trace_over_max(admin_token):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-14",
+            "carrier": "京东物流", "trace": "x" * 2001})
+        assert r.status_code == 422
+
+
+# ==================== 轨迹格式(建单路径) ====================
+
+@pytest.mark.parametrize("trace,needle", [
+    ("2026-09-20 14:32 | 广州市", "三段"),
+    ("2026-09-20 14:32|广州|已揽收|多余", "三段"),
+    ("2026/09/20 14:32 | 广州 | 已揽收", "YYYY-MM-DD"),
+    ("2026-13-45 14:32 | 广州 | 已揽收", "YYYY-MM-DD"),
+    ("2026-09-20 14:32 |  | 已揽收", "不能为空"),
+])
+async def test_create_rejects_bad_trace(admin_token, trace, needle):
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-15",
+            "carrier": "京东物流", "trace": trace})
+        assert r.status_code == 400
+        assert needle in r.json()["detail"]
+        assert "第 1 行" in r.json()["detail"]
+
+
+async def test_create_rejects_trace_before_shipped(admin_token):
+    """首节点早于发货时间 -> 400。"""
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-16", "carrier": "京东物流",
+            "shipped_at": "2026-09-20", "trace": "2026-09-19 10:00 | 广州 | 已揽收"})
+        assert r.status_code == 400
+        assert "首节点" in r.json()["detail"]
+
+
+async def test_trace_length_is_checked_after_normalization(admin_token):
+    """长度上限必须卡在【规范化之后】的文本上,否则存下来的值会提交不回去。
+
+    构造:用紧凑写法(无空格)堆够行数,让原始长度在 TRACE_MAX 以内、
+    规范化后超出去。算术 —— 每行 `YYYY-MM-DD HH:MM|广州|已揽收` 原始 23 字符,
+    规范化后是 `YYYY-MM-DD HH:MM | 广州 | 已揽收` 27 字符(加 4);
+    含换行后 raw = 24N-1、normalized = 28N-1。取 N=78:
+    原始 1871 ≤ 2000,规范化后 2183 > 2000。
+    """
+    from app.api.admin.logistics import parse_trace
+    from app.schemas.admin import TRACE_MAX
+
+    base = datetime(2026, 9, 1, 0, 0)
+    raw = "\n".join(
+        f"{(base + timedelta(minutes=i)):%Y-%m-%d %H:%M}|广州|已揽收" for i in range(78))
+
+    # 先自证这个 fixture 真的落在两条线之间,否则用例是空跑
+    assert len(raw) <= TRACE_MAX, f"构造有误:原始 {len(raw)} 字符不该超上限"
+    assert len(parse_trace(raw, date(2026, 9, 1), None)) > TRACE_MAX, "构造有误:规范化后没超上限"
+
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-17",
+            "carrier": "京东物流", "status": "运输中", "shipped_at": "2026-09-01",
+            "trace": raw})
+        # 原始不超、规范化后超 -> 400(而不是 422,也不是静默存下超长值)
+        assert r.status_code == 400
+        assert "规范化后" in r.json()["detail"]
