@@ -113,24 +113,31 @@ def parse_trace(raw: str | None, shipped_at: date | None,
     return "\n".join(f"{n.dt:%Y-%m-%d %H:%M} | {n.loc} | {n.desc}" for n in nodes)
 
 
-def _serialize(o: Order, s: Shipment | None) -> dict:
+def _serialize(order: Order, shipment: Shipment | None) -> dict:
     """一行 = 一个订单 + 它的运单(可为 None = 未录入)。
 
-    入参顺序与 select(Order, Shipment) 一致。id 为 None 就是"未录入",
+    入参顺序与 select(Order, Shipment) 一致。shipment 为 None 就是"未录入",
     前端据此决定渲染「未录入」徽章还是「补录」按钮 —— 不另加布尔字段。
+
+    ⚠️ 判空一律用 `is not None`,**不要写 `if shipment`** —— 那是对象真值判断,
+    今天恰好等价(模型没有 __bool__/__len__),但一旦不等价,故障是【静默且全量】的:
+    12 个字段里运单那半边一起变 None、每条已录入的行都渲染成「未录入」,
+    而且不抛任何异常,只能靠肉眼发现。
     """
     return {
-        "id": s.id if s else None,
-        "order_no": o.order_no,
-        "order_status": o.status,
-        "product_name": o.product_name,
-        "category": o.category,
-        "buyer_name": o.buyer_name,
-        "tracking_no": s.tracking_no if s else None,
-        "carrier": s.carrier if s else None,
-        "status": s.status if s else None,
+        "id": shipment.id if shipment is not None else None,
+        "order_no": order.order_no,
+        "order_status": order.status,
+        "product_name": order.product_name,
+        "category": order.category,
+        "buyer_name": order.buyer_name,
+        "tracking_no": shipment.tracking_no if shipment is not None else None,
+        "carrier": shipment.carrier if shipment is not None else None,
+        "status": shipment.status if shipment is not None else None,
         # Date 列无时间部分,isoformat() 直接是 YYYY-MM-DD,不经 new Date() 无时区风险
-        "shipped_at": s.shipped_at.isoformat() if s and s.shipped_at else None,
-        "signed_at": s.signed_at.isoformat() if s and s.signed_at else None,
-        "trace": s.trace if s else None,
+        "shipped_at": (shipment.shipped_at.isoformat()
+                       if shipment is not None and shipment.shipped_at else None),
+        "signed_at": (shipment.signed_at.isoformat()
+                      if shipment is not None and shipment.signed_at else None),
+        "trace": shipment.trace if shipment is not None else None,
     }
