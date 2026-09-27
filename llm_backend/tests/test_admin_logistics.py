@@ -143,3 +143,43 @@ def test_parse_trace_window_boundaries():
     assert "末节点" in str(e.value)
     # 两端都为空 -> 不校验
     assert parse_trace(raw, None, None) is not None
+
+
+def test_parse_trace_line_numbers_survive_blank_lines():
+    """夹了空行之后,报错行号必须仍指向管理员看到的真实行号。
+
+    空行是本格式明确允许的写法,而"先丢空行再编号"会让其后的所有行号前移 ——
+    报错指到空行上,而行号是这条错误唯一的定位手段。
+    """
+    raw = "2026-09-20 14:32 | 广州 | 已揽收\n\n2026-09-20 09:00 | 深圳 | 发车"
+    with pytest.raises(TraceFormatError) as e:
+        parse_trace(raw, None, None)
+    assert "第 3 行" in str(e.value)          # 不是第 2 行
+
+    raw2 = "2026-09-20 14:32 | 广州 | 已揽收\n\n\n2026-09-20 09:00 | 深圳 | 发车"
+    with pytest.raises(TraceFormatError) as e2:
+        parse_trace(raw2, None, None)
+    assert "第 4 行" in str(e2.value)
+
+
+@pytest.mark.parametrize("raw,line_no", [
+    ("2026-09-20 14:32 | 广州 | 已揽收\n2026/09/21 08:05 | 深圳 | 派送中", 2),
+    ("2026-09-20 14:32 | 广州 | 已揽收\n2026-09-21 08:05 |  | 派送中", 2),
+])
+def test_parse_trace_reports_non_first_line_number(raw, line_no):
+    """非首行的行号也要对 —— 只测第 1 行的话,enumerate 恒返回 1 也能全绿。"""
+    with pytest.raises(TraceFormatError) as e:
+        parse_trace(raw, None, None)
+    assert f"第 {line_no} 行" in str(e.value)
+
+
+def test_parse_trace_trims_location_and_description():
+    """地点/描述两侧空格必须被 trim —— 规范化行为本身要被钉住,不能只靠"空字段被拦"间接要求。"""
+    out = parse_trace("2026-09-20 14:32 |  广州  |  已揽收  ", None, None)
+    assert out == "2026-09-20 14:32 | 广州 | 已揽收"
+
+
+def test_parse_trace_is_idempotent():
+    """输出必须幂等 —— 这是"存下来的值能原样再提交"的前提(spec §4.8 长度不变式)。"""
+    once = parse_trace("2026-9-2 9:05|广州|已揽收\n2026-09-03 08:00|深圳|派送中", None, None)
+    assert parse_trace(once, None, None) == once
