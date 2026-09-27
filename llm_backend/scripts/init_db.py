@@ -17,7 +17,7 @@ logger.info("Root directory: {}", ROOT_DIR)
 import asyncio
 from sqlalchemy import text
 from app.core.database import engine, Base
-from app.models import User, Conversation, Message, DocumentChunk, Document, ProductPriceStock, Order, Ticket
+from app.models import User, Conversation, Message, DocumentChunk, Document, ProductPriceStock, Order, Ticket, Shipment
 
 async def init_db():
     try:
