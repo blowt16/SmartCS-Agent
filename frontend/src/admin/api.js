@@ -61,6 +61,12 @@ export const createOrder = (b) => request('/api/admin/orders', { method: 'POST',
 export const updateOrder = (id, b) => request(`/api/admin/orders/${id}`, { method: 'PUT', body: JSON.stringify(cleanBody(b)) });
 export const deleteOrder = (id) => request(`/api/admin/orders/${id}`, { method: 'DELETE' });
 
+// ---- 物流 ----
+export const listLogistics = (p) => request(`/api/admin/logistics?${qs(p)}`);
+export const createShipment = (b) => request('/api/admin/logistics', { method: 'POST', body: JSON.stringify(cleanBody(b)) });
+export const updateShipment = (id, b) => request(`/api/admin/logistics/${id}`, { method: 'PUT', body: JSON.stringify(cleanBody(b)) });
+export const deleteShipment = (id) => request(`/api/admin/logistics/${id}`, { method: 'DELETE' });
+
 // ---- 知识库 ----
 export const listKnowledge = (p) => request(`/api/admin/knowledge?${qs(p)}`);
 export const unstageKnowledge = (md5) => request(`/api/admin/knowledge/stage/${encodeURIComponent(md5)}`, { method: 'DELETE' });
