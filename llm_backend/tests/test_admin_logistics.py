@@ -522,12 +522,19 @@ async def test_create_rejects_duplicate_tracking_no(admin_token):
 
 
 async def test_create_signed_fills_today(admin_token):
-    """status='已签收' 未传 signed_at -> 补当天(UTC)。"""
+    """status='已签收' 未传 signed_at -> 补当天(UTC)。
+
+    ⚠️ 断言写成「请求前后各取一次今天,落在两者之间」而不是「等于此刻的今天」:
+    端点算日期与断言算日期之间隔了一次 DB 往返,跨 UTC 零点时两者差一天。
+    (概率极低,但这类 flake 在 CI 上长期跑必然碰到,而且极难复现。)
+    """
     async with _client() as c:
         order = await _new_order(c, admin_token, status="已送达")
+        before = datetime.now(timezone.utc).date().isoformat()
         d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-8",
                                 status="已签收", shipped_at="2026-09-20")
-        assert d["signed_at"] == datetime.now(timezone.utc).date().isoformat()
+        after = datetime.now(timezone.utc).date().isoformat()
+        assert d["signed_at"] in (before, after)
 
 
 async def test_create_signed_with_explicit_null_keeps_null(admin_token):
@@ -679,14 +686,21 @@ async def test_update_not_found(admin_token):
 
 
 async def test_update_to_signed_fills_today(admin_token):
+    """状态改成已签收、没传日期 -> 补当天。
+
+    ⚠️ 断言用「请求前后各取一次今天」而不是「等于此刻的今天」—— 跨 UTC 零点时
+    端点算的日期与断言算的差一天(中间隔了一次 DB 往返)。
+    """
     async with _client() as c:
         order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-1",
                                 shipped_at="2026-09-20")
+        before = datetime.now(timezone.utc).date().isoformat()
         r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
                         json={"status": "已签收"})
-        assert r.status_code == 200
-        assert r.json()["signed_at"] == datetime.now(timezone.utc).date().isoformat()
+        after = datetime.now(timezone.utc).date().isoformat()
+        assert r.status_code == 200, r.text
+        assert r.json()["signed_at"] in (before, after)
 
 
 async def test_update_from_signed_clears_signed_at(admin_token):
@@ -710,16 +724,20 @@ async def test_update_trace_three_forms(admin_token):
                                 trace="2026-09-20 14:32 | 广州 | 已揽收")
         url = f"/api/admin/logistics/{s['id']}"
         # 不传 -> 原样不动
-        d = (await c.put(url, headers=_bearer(admin_token), json={"carrier": "顺丰速运"})).json()
+        r = await c.put(url, headers=_bearer(admin_token), json={"carrier": "顺丰速运"})
+        assert r.status_code == 200, r.text          # 不断状态码的话失败会以 KeyError 出现
+        d = r.json()
         assert d["trace"] == "2026-09-20 14:32 | 广州 | 已揽收"
         assert d["carrier"] == "顺丰速运"
         # 传新文本 -> 覆盖
-        d = (await c.put(url, headers=_bearer(admin_token),
-                         json={"trace": "2026-09-21 09:00|深圳|派送中"})).json()
-        assert d["trace"] == "2026-09-21 09:00 | 深圳 | 派送中"
+        r = await c.put(url, headers=_bearer(admin_token),
+                        json={"trace": "2026-09-21 09:00|深圳|派送中"})
+        assert r.status_code == 200, r.text
+        assert r.json()["trace"] == "2026-09-21 09:00 | 深圳 | 派送中"
         # 传 null -> 清空
-        d = (await c.put(url, headers=_bearer(admin_token), json={"trace": None})).json()
-        assert d["trace"] is None
+        r = await c.put(url, headers=_bearer(admin_token), json={"trace": None})
+        assert r.status_code == 200, r.text
+        assert r.json()["trace"] is None
 
 
 async def test_update_order_no_ignored(admin_token):
@@ -814,6 +832,69 @@ async def test_update_unrelated_field_keeps_null_signed_at(admin_token):
         assert r.json()["carrier"] == "顺丰速运"
         assert r.json()["signed_at"] is None        # 没被悄悄填成今天
         assert r.json()["status"] == "已签收"
+
+
+async def test_update_explicit_dates_are_applied(admin_token):
+    """显式传的 signed_at / shipped_at 必须真的落库。
+
+    ⚠️ 这条不能省:编辑弹窗里管理员最常干的就是改日期,而上面 11 条用例
+    【一条都没 PUT 过非 null 的日期字段】—— 实测把 `data.get("signed_at", ...)`
+    改成无视客户端的 `shipment.signed_at`,11 条全绿(变异存活)。
+    行为今天是对的,但没有东西拦得住它哪天坏掉。这正是本模块反复强调的
+    「输入框变摆设」缺陷的镜像:那边是清不掉,这边是改不动。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-12",
+                                status="已签收", shipped_at="2026-09-20",
+                                signed_at="2026-09-22")
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"shipped_at": "2026-09-18", "signed_at": "2026-09-21"})
+        assert r.status_code == 200, r.text
+        assert r.json()["shipped_at"] == "2026-09-18"
+        assert r.json()["signed_at"] == "2026-09-21"
+
+
+@pytest.mark.parametrize("field", ["tracking_no", "carrier", "status"])
+async def test_update_rejects_explicit_null_for_not_null_columns(admin_token, field):
+    """三个 NOT NULL 列传显式 null -> 400,不是误导性的 409「写入冲突」。
+
+    实测过:改之前 `PUT {"status": null}` 返回 `409 运单写入冲突，请重试` ——
+    那是【请求错误】不是冲突,管理员照着文案重试一万次也不会成功。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-13")
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={field: None})
+        assert r.status_code == 400
+        assert field in r.json()["detail"]
+
+
+@pytest.mark.parametrize("status,given,existing,explicit_clear,fill_today,expected", [
+    ("运输中", None, None, False, False, None),                    # 非已签收 -> 一律 NULL
+    ("运输中", date(2026, 9, 22), None, False, False, None),        # 同上,传了也不留
+    ("已签收", date(2026, 9, 22), None, False, False, date(2026, 9, 22)),   # 显式传值
+    ("已签收", None, date(2026, 9, 20), True, True, None),          # 显式清空
+    ("已签收", None, date(2026, 9, 20), False, False, date(2026, 9, 20)),   # 沿用原值
+    ("已签收", None, None, False, True, "TODAY"),                   # 没传+无原值+刚变成 -> 补当天
+    ("已签收", None, None, False, False, None),                     # 没传+无原值+本来就是 -> 保持 NULL
+])
+def test_resolve_signed_at_truth_table(status, given, existing,
+                                       explicit_clear, fill_today, expected):
+    """规则 A 的真值表(spec §4.5 那张表的七行逐行对应)。
+
+    直接测纯函数、不经 HTTP —— **间接覆盖会漏掉整条输入维度**:
+    上面 `test_update_explicit_dates_are_applied` 想补的那个缺口就是这么产生的。
+    """
+    from app.api.admin.logistics import _resolve_signed_at
+
+    out = _resolve_signed_at(status, given, existing,
+                             explicit_clear=explicit_clear, fill_today=fill_today)
+    if expected == "TODAY":
+        assert out == datetime.now(timezone.utc).date()
+    else:
+        assert out == expected
 
 
 async def test_stored_trace_can_be_resubmitted_unchanged(admin_token):

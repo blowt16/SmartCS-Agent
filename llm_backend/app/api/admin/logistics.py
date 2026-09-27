@@ -208,7 +208,7 @@ async def list_logistics(
 
 def _resolve_signed_at(status: str, given: date | None, existing: date | None,
                        *, explicit_clear: bool = False,
-                       fill_today: bool = True) -> date | None:
+                       fill_today: bool = False) -> date | None:
     """规则 A:signed_at 与 status 强绑定。
 
     非「已签收」一律置 NULL;「已签收」显式传了用传的 -> 没传沿用原值 ->
@@ -222,6 +222,10 @@ def _resolve_signed_at(status: str, given: date | None, existing: date | None,
     `became_signed`**。不传的话,「已签收、日期不详」(signed_at 为 NULL,本模块有意
     支持的状态)会在**任何一次无关编辑**后被填上今天的日期:管理员只改了个承运商,
     签收日期自己冒出来了 —— 凭空造了一条没人录入的数据。
+
+    ⚠️ 默认值是 **False**,不是 True —— 安全的那个方向。两个调用点都已显式传参,
+    所以行为与默认值无关;但万一将来有人漏传:不填只留下一个可见的「日期不详」,
+    填今天则是凭空造一条**看起来合理**的假数据。默认值应该站在能被发现的那一侧。
     """
     if status != "已签收":
         return None
@@ -310,9 +314,10 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
     # 「已签收、日期不详」是有意的可达状态。
     # pydantic v2 用 model_fields_set 分辨:显式传 null 时含 'signed_at',不传时不含。
     #
-    # fill_today=True 显式写出来(其实与默认值相同):建单路径上"刚变成已签收"恒成立
-    # —— 没有旧状态可言,管理员选了已签收又没给日期,补当天是唯一合理的解释。
-    # 编辑路径不一样,那里的 fill_today 要传 became_signed,见 Task 7。
+    # fill_today=True 必须显式写出来(默认值是 False,漏了就变成"已签收但日期不详"):
+    # 建单路径上"刚变成已签收"恒成立 —— 没有旧状态可言,管理员选了已签收又没给日期,
+    # 补当天是唯一合理的解释。编辑路径不一样,那里的 fill_today 要传 became_signed,
+    # 见 Task 7。
     signed_at = _resolve_signed_at(
         payload.status, payload.signed_at, None,
         explicit_clear=("signed_at" in payload.model_fields_set and payload.signed_at is None),
@@ -365,16 +370,30 @@ async def update_shipment(
     # exclude_unset 区分"没传"与"传了 null";trace 需要能清空,所以必须用它
     data = payload.model_dump(exclude_unset=True)
 
+    # ⚠️ 三个 NOT NULL 列不接受显式 null:放行的话 setattr(None) 会在 flush 时抛
+    # NotNullViolation,落进下面那个为 UniqueViolation 写的 except IntegrityError 兜底,
+    # 拿到空的 constraint_name -> 返回「运单写入冲突，请重试」。
+    # 那是【请求错误】不是冲突 —— 管理员照着文案重试一万次也不会成功。
+    # schema 层拦不住(三个字段都是 Optional[...] = Field(None, ...),None 是合法值),
+    # 所以在这里显式挡掉,给一个能指导修改的 400。
+    # 不要改成"静默丢弃 null":那会变成「保存了但没生效」,比 409 更难查。
+    for _f in ("tracking_no", "carrier", "status"):
+        if _f in data and data[_f] is None:
+            raise HTTPException(status_code=400, detail=f"{_f} 不能为 null")
+
     # 三条规则都用 effective 值:管理员最常见的操作是「只把状态改成已签收」,
     # 此时 shipped_at 根本没传。直接读 data 会让规则 B / C 的窗口校验形同失效。
+    # ⚠️ 必须【先】把旧状态取出来:下面那个 for 循环会就地改写 shipment 的属性,
+    # 之后再读 shipment.status 拿到的就是新值,became_signed 会恒为 False。
+    prev_status = shipment.status
     effective_status = data.get("status", shipment.status)
     effective_shipped = data.get("shipped_at", shipment.shipped_at)
-    # ⚠️ fill_today 必须传 became_signed,不能让它用默认的 True:
+    # ⚠️ fill_today 必须传 became_signed:
     # 规则 A 的"补当天"只适用于【刚变成已签收】。本来就已经签收、这次只是改了个
     # 无关字段(比如承运商)、又没传 signed_at 的,要【保持原样】—— 包括保持 NULL。
     # 否则「已签收、日期不详」这个 spec §4.5 明说有意的状态,会被任何一次无关编辑
     # 悄悄填上今天:管理员只改了承运商,签收日期自己冒出来,凭空造了一条没人录入的数据。
-    became_signed = effective_status == "已签收" and shipment.status != "已签收"
+    became_signed = effective_status == "已签收" and prev_status != "已签收"
     effective_signed = _resolve_signed_at(
         effective_status,
         data.get("signed_at", shipment.signed_at),
