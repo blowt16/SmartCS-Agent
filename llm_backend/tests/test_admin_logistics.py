@@ -855,6 +855,34 @@ async def test_update_explicit_dates_are_applied(admin_token):
         assert r.json()["signed_at"] == "2026-09-21"
 
 
+async def test_update_shipped_at_is_validated_against_new_value(admin_token):
+    """显式传的 shipped_at 必须参与规则 B 校验,不能用库里的旧值。
+
+    ⚠️ 上一条抓不到这个 —— `effective_shipped` **不写回 data**(只有
+    `effective_signed` 被写回 `data["signed_at"]`),它只喂给规则 B/C 校验,
+    所以响应体里的 `shipped_at` 无论用哪个值都是客户端传的那个,
+    **响应断言在结构上就抓不到**。
+
+    实测:把 `data.get("shipped_at", shipment.shipped_at)` 改成
+    `shipment.shipped_at` 后上面全部用例仍绿,而它是真漏洞 ——
+
+        PUT {"shipped_at": "2026-09-25"}  (已签收,库里 signed_at=2026-09-22)
+        变异体 -> 200,落库 shipped=09-25 / signed=09-22,规则 B 被击穿
+        正确   -> 400 签收时间不能早于发货时间
+
+    即直调接口能造出 `signed < shipped` 的数据,而规则 B 是 spec 说的"服务端兜底"。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-14",
+                                status="已签收", shipped_at="2026-09-20",
+                                signed_at="2026-09-22")
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"shipped_at": "2026-09-25"})
+        assert r.status_code == 400
+        assert "签收时间不能早于发货时间" in r.json()["detail"]
+
+
 @pytest.mark.parametrize("field", ["tracking_no", "carrier", "status"])
 async def test_update_rejects_explicit_null_for_not_null_columns(admin_token, field):
     """三个 NOT NULL 列传显式 null -> 400,不是误导性的 409「写入冲突」。
