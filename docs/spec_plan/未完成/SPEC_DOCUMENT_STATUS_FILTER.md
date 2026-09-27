@@ -1,6 +1,7 @@
 # SPEC：文档停用后禁止被检索（检索入口状态过滤 + 文档身份统一）
 
-> **归档状态**：⏳ 待实施（2026-09-27 定稿，经两轮对抗性审计修订）
+> **归档状态**：⏳ 待实施（2026-09-27 定稿）
+> 修订历程：初稿 → 两轮对抗性审计（一验事实、一挑漏洞）→ 修正 1 项阻断 + 2 项高危 + 8 项事实错误 → **Q2 已用户确认处置（D11 / §4.10）**。剩余待确认项：Q1、Q3~Q7。
 >
 > **关联文档**：`docs/项目问题.md` #17a（本条要修掉的已知限制）、`docs/spec_plan/已完成/SPEC_ADMIN_CONSOLE.md` §4.4 正文（第 314 行，当时裁定"不影响检索"的原文）与 §12 风险第 5 条（第 2743 行）、`frontend/src/admin/views/KnowledgeView.vue:85`（tooltip 出处）
 >
@@ -50,8 +51,13 @@
 4. 删除路径刻意不做级联删商品（`api/admin/products.py:116/149`），说明"静态知识块"被当**全平台共享资产**维护
 
 > **⚠️ 与 1.4 相反的证据（必须知道）**：`document_chunks.user_id` **不是**纯历史遗留，它在三处是有效的：
-> ① `chunk_id = {user_id}_{md5}_{index:04d}` 的组成部分；② `evaluation/testset_builder.py:34-40` 用它选评测语料；③ `evaluation/__main__.py:36-37` 的 `--user`（默认 `"1"`）是显式入参。
-> **D5 会切断"同一内容挂两个 user_id"的能力，从而打断现有评测入库流程** —— 见 §7 R7 与 §8 Q2。这是本方案唯一的实质性代价。
+> ① `chunk_id = {user_id}_{md5}_{index:04d}` 的组成部分（本次不动）；
+> ② `evaluation/testset_builder.py:37` 用它选评测语料；
+> ③ `evaluation/__main__.py:37` 的 `--user`（默认 `"1"`）是显式入参。
+>
+> **D5 会切断"同一内容挂两个 user_id"的能力**，原评测入库流程（`ingest_knowledge <dir> 1` → `--user 1`）因此失效 —— 这是本方案初稿认定的**唯一实质代价**。
+>
+> **✅ 已处置（D11 / §4.10）**：改为"评测语料默认读全库、`--user` 降级为可选收窄"。实测（§2.8）发现该流程本身就在污染指标（为评测再挂副本会让检索 top-8 出现 2 条完全重复条目），且默认值 `"1"` 今天已经是坏的。**换言之 D5 的代价已消除，还顺带修好一个既有 bug 与一处指标偏差。**
 
 ---
 
@@ -167,6 +173,36 @@ DROP INDEX IF EXISTS uq_documents_user_md5
 
 `IF EXISTS` 只抑制"对象不存在"，**不抑制"有依赖对象"**。正确写法见 §4.7。
 
+### 2.8 评测语料链路（Q2 的取证）
+
+**`--user` 只用在两处**（grep 整个 `evaluation/` 确认）：`testset_builder.py:37` 的语料筛选、`__main__.py:129` 的报告元数据。**`runner.py` 完全不用 user_id** —— 它跑的是真实子图，检索是全局的。所以 `--user` 筛的是「拿哪些块去出题」，**不是「检索范围」**。
+
+**今天的状态（实测）**：
+
+```
+库内分块: user 1 = 0 块, user 6 = 42 块
+→ `python -m evaluation`（默认 --user 1）今天报「语料库为空」
+```
+
+**历史报告记的 `user_id`**：
+
+| 报告 | user_id |
+|---|---|
+| `evaluation/results/ragas_20260824_160645.json` | `"5"` |
+| `evaluation/results/ragas_20260824_171355.json` | `"5"` |
+| `evaluation/results/ragas_20260824_173259.json` | `"5"` |
+
+而 `docs/项目问题.md:89` 记着「数据迁移：`documents` 2 行 + `document_chunks` 42 行 **`user_id` 1→6**」。串起来：**语料主人换过 1 → 5 → 6，而 `--user` 的默认值一直停在 `"1"`** —— 默认值今天就是坏的。
+
+**"再挂一份副本"这一步本身就在污染指标（实测）**：把 owner 6 的 38 块复制一份挂到 user 1 后，同一向量查询的 top-8：
+
+| | top-8 内完全重复的条目 |
+|---|---|
+| 现状（只有 owner 6） | **0 条** |
+| 双挂后 | **2 条**（内容逐字相同） |
+
+原因：RRF 按 `chunk_id` 去重，而 `chunk_id = {user_id}_{md5}_{i}` —— 两个 owner 的副本 `chunk_id` 不同，去重挡不住，两条一起进精排，**白占 top-K 名额、压低 `context_precision`**。这恰好违背 `SPEC_RAGAS_EVAL.md:51` 的原始设计原则（「语料复用生产分块…保证 reference_contexts 在生产检索中找得到」）。
+
 ---
 
 ## 3. 决策表
@@ -177,12 +213,13 @@ DROP INDEX IF EXISTS uq_documents_user_md5
 | **D2** | 过滤语义为**白名单**：`documents.status = 'enabled'` | 孤儿块 / `md5` 为空的块一律排除（用户已确认「宁可漏不可错」）。未知 status 值也被排除，比黑名单安全 |
 | **D3** | join 键用 `(user_id, md5)`，不用裸 `md5` | `uq_documents_user_md5` 保证该组合唯一 → join 不产生重复行；且**迁移前后都正确**，让发布顺序自由。代价见 §7 R4（`user_id` 漂移会让块静默消失，但两条写入路径都用同一个 `user_id` 变量写两张表，漂移只能来自手工 SQL） |
 | **D4** | 文档身份统一到 **md5（文件级）** | §1.4 |
-| **D5** | 唯一约束 `uq_documents_user_md5` → `uq_documents_md5`，**并迁移数据库** | 不改约束则多行同 md5 仍可产生，副作用 A/B 只是概率降低而非消除。代价见 §7 R7（打断评测入库流程） |
+| **D5** | 唯一约束 `uq_documents_user_md5` → `uq_documents_md5`，**并迁移数据库** | 不改约束则多行同 md5 仍可产生，副作用 A/B 只是概率降低而非消除。初稿认定的唯一实质代价（打断评测入库流程）**已由 D11 消除** —— 见 §1.4 反面证据框与 §7 R7 |
 | **D6** | `PATCH /{md5}` 改为**全量更新该 md5 的所有行** | 这是"停用生效"的直接保证。即使 D5 之后通常只有一行，保留循环让接口语义与"文件级"一致 |
 | **D7** | `description` **随 status 一起**变成文件级 | 在文件级身份下这是**正确**的，不是副作用——一份文件只有一个描述。（曾考虑"描述按行、状态按文件"，但那是无意义的自相矛盾） |
 | **D8** | `stage` 的重复检查改为**只查 md5**；随之删除 `user_id` 表单参数及前端传递链 | 改判 md5 后 `user_id` 在 `stage_knowledge` **函数体内再无任何用处**（已通读 126-173 行确认：仅 157 行使用一次）。留一个死参数正是本 bug 的同类病根 |
 | **D9** | `documents.user_id` **保留**，降级为「谁最先上传的」溯源信息 | 删列要动 `documents` + 迁移 + `owner_id` 出参 + 测试，收益不成比例 |
 | **D10** | 不做 RAG 结果的"停用"二次校验、不引入 `hnsw.iterative_scan` 等调参 | 当前数据量下无实测依据，属过早优化（见 §7 R5） |
+| **D11** | 评测语料改为**默认读全库**（`user_id` 变可选收窄），并排除 `test_%` 账号 | 见 §4.10。依据：① 默认值 `"1"` 今天已是坏的（§2.8）；② "再挂一份副本"实测造成检索重复条目、压低 `context_precision`；③ 对 owner 变更免疫，不用再跟着数据迁移改数字 |
 
 ---
 
@@ -556,6 +593,92 @@ WHERE dc.md5 IN (SELECT md5 FROM documents GROUP BY md5 HAVING count(*) > 1);
 
 ---
 
+### 4.10 评测语料读取改为默认读全库（D11）
+
+**位置**：`llm_backend/evaluation/testset_builder.py` `load_corpus_documents`（24-59 行）
+
+**改前**（35-48 行）：
+
+```python
+        stmt = (
+            select(DocumentChunk)
+            .where(DocumentChunk.user_id == user_id)
+            .order_by(DocumentChunk.id)
+            .limit(max_docs)
+        )
+        chunks = (await session.execute(stmt)).scalars().all()
+
+    if not chunks:
+        raise RuntimeError(
+            f"语料库为空：user_id='{user_id}' 无 document_chunks 记录"
+            "（请先 python -m scripts.ingest_knowledge <目录> <user_id> 入库）"
+        )
+    logger.info("评测语料加载完成: {} 块（user_id={}）", len(chunks), user_id)
+```
+
+**改后**：
+
+```python
+        stmt = select(DocumentChunk)
+        if user_id:
+            stmt = stmt.where(DocumentChunk.user_id == user_id)
+        else:
+            # 默认读全库:知识库是全平台的,文档身份为 md5(SPEC_DOCUMENT_STATUS_FILTER D4)。
+            # 排除 test_ 前缀账号 —— 它们是 pytest 夹具(conftest 的 test_user_id 约定),
+            # 测试被强杀时会留下残留块;混进合成语料会生成出自测试夹具的评测题。
+            stmt = stmt.where(~DocumentChunk.user_id.like("test_%"))
+        stmt = stmt.order_by(DocumentChunk.id).limit(max_docs)
+        chunks = (await session.execute(stmt)).scalars().all()
+
+    if not chunks:
+        raise RuntimeError(
+            "语料库为空：document_chunks 无可用知识分块"
+            "（请先经管理端上传知识文档;或显式传 --user <owner_id> 收窄语料）"
+        )
+    logger.info("评测语料加载完成: {} 块（user_id={}）", len(chunks), user_id or "全库")
+```
+
+**函数签名与 docstring 同步**（24-32 行）：
+
+```python
+async def load_corpus_documents(max_docs: int, user_id: str | None = None) -> List[Document]:
+    """从 document_chunks 读取生产分块，包装为 ragas 合成器可用的 Document。
+
+    Args:
+        max_docs: 最多读取的分块数（控制合成器 docstore 建立成本，默认 RAGAS_MAX_CORPUS_DOCS）
+        user_id: 可选的归属收窄。**不传 = 读全库**（排除 test_% 测试账号）。
+                 旧语义是"必填的语料来源"，已废弃 —— 见 SPEC_DOCUMENT_STATUS_FILTER D11。
+
+    Raises:
+        RuntimeError: 无任何可用分块。
+    """
+```
+
+**同文件第二处 `--user`** —— `evaluation/__main__.py:36-38`：
+
+```python
+    p.add_argument("--user", type=str, default=None,
+                   help="可选:按知识归属 user_id 收窄评测语料(不传 = 读全库)")
+```
+
+**报告元数据** —— `evaluation/__main__.py:129`：
+
+```python
+            "user_id": args.user or "all",
+```
+
+（`args.user` 为 `None` 时记 `"all"`，避免报告里出现 `null` 且自描述更清楚。）
+
+**为什么改**（完整取证见 §2.8）：
+
+1. **默认值今天就是坏的** —— 数据早已从 user 1 迁到 6，`python -m evaluation` 直接报「语料库为空」
+2. **原做法本身在污染指标** —— "为评测再挂一份副本"实测让检索 top-8 出现 2 条完全重复的条目，白占 top-K、压低 `context_precision`；去掉过滤恰好回到 `SPEC_RAGAS_EVAL.md:51` 想要的"语料复用生产分块"
+3. **对 owner 变更免疫** —— 语料主人历史上换过 1→5→6，硬编码的默认值每次都失效
+
+**遗留（本次不处理，登记为 R14）**：`max_docs` 仍按 `DocumentChunk.id` 截断，语料超过 `RAGAS_MAX_CORPUS_DOCS`（当前 100，实测语料 42 块未触发）后，后上传的文档出不了题。属既有缺陷，本次不加深。
+
+---
+
 ## 5. 验收断言
 
 > **⚠️ 通用防"空过"要求（初稿缺失，审计发现）**：
@@ -619,6 +742,21 @@ WHERE dc.md5 IN (SELECT md5 FROM documents GROUP BY md5 HAVING count(*) > 1);
 
 连续执行两次 `python -m scripts.init_db` → 两次都不报错；`pg_constraint` 中 `uq_documents_user_md5` 消失、`pg_indexes` 中 `uq_documents_md5` 存在。
 
+### A8 评测语料读取（D11）
+
+```
+1. load_corpus_documents(max_docs=100) 不传 user_id
+   → 返回全库分块（当前实测 42 块），且结果中不含任何 user_id LIKE 'test_%' 的块
+2. load_corpus_documents(max_docs=100, user_id='6')
+   → 返回 owner 6 的块（收窄语义仍可用）
+3. load_corpus_documents(max_docs=1, user_id='不存在的 owner')
+   → 抛 RuntimeError，且文案为"无可用知识分块"（不含"请先 ingest"的旧指引）
+4. `python -m evaluation --only-synthesize --testset-size 3` 不传 --user
+   → 能跑通（**当前会报「语料库为空」**，这是本项修好的既有 bug）
+```
+
+> A8-1 的"不含 test_%"断言需要先插入一块 `user_id='test_xxx'` 的假数据（用 `cleanup_test_data` 清理），否则恒真。
+
 ---
 
 ## 6. 测试落点
@@ -631,6 +769,7 @@ WHERE dc.md5 IN (SELECT md5 FROM documents GROUP BY md5 HAVING count(*) > 1);
 | A1b / A6 | `llm_backend/tests/test_rag_retriever.py`（**新建**） | 无现成文件；`test_static_dynamic_alignment.py` 有直连真库的写法可参照 |
 | A3 / A4 / A5 | `llm_backend/tests/test_admin_knowledge.py` | 同文件已有 `_stage`（126-135）/ `_commit_sse`（138）/ `_counts_by_md5`（83）helper |
 | A7 | 手工执行 + 实施记录登记 | 迁移脚本无 pytest 先例 |
+| A8-1~3 | `llm_backend/tests/` 内新建（或并入 `test_rag_retriever.py`） | `load_corpus_documents` 是纯 DB 读，无需 LLM；A8-4 依赖 RAGAS judge key，**只做手工验收不写自动化** |
 
 ### 既有测试影响评估（逐个核对过）
 
@@ -669,7 +808,8 @@ D5 之后，`test_user_id` **不再能隔离测试语料**：语料内容是**�
 | **R4** | **`user_id` 漂移导致块静默消失**：D3 的 `(user_id, md5)` join 依赖两表 `user_id` 一致，而两者**既无外键也无测试保证**（`document_chunk.py:15` 与 `document.py:13` 是独立列） | 当前 0 例外（已按 `(user_id, md5)` LEFT JOIN 查过：42 块 0 孤儿）。两条写入路径都用同一个 `user_id` 变量写两张表（`indexing_service`），漂移只能来自手工 SQL。**若消失，表现为整份文档从检索中静默消失、不报错、管理端仍显示正常片段数。** D5 之后 md5 已唯一，裸 `md5` join 是等效且无此失效模式的替代 —— 本 spec 选 `(user_id, md5)` 是为了让**迁移前后都正确**、发布顺序自由。可实施时再权衡 |
 | **R5** | **大规模下的 ANN 召回**：数据量增长后，若优化器选择「HNSW 索引扫描 + join 后过滤」，被过滤掉的块会占用 ANN 名额，可能降低有效召回 | **本次无实测依据**（当前 42 行，索引根本未启用），故不预先调参（D10）。pgvector 实测版本 **0.8.6**，其 `hnsw.iterative_scan` 是将来需要时的现成手段。**触发条件**：chunks 量级上万且监控到召回下降时再评估 |
 | **R6** | **语义缓存会把停用文档的答案继续端给用户**（审计新发现） | `main.py:311-320` 语义缓存**命中即短路返回、跳过整个图（含检索）**；缓存内容是 `graphrag/chat` 链路的**完整回答**（`:365-370` 回写），不是消解结果。key = user_id + 消解后消息，TTL `REDIS_CACHE_EXPIRE=3600`。**当前 `.env:56` 设 `SEMANTIC_CACHE_ENABLED=false` 已关闭**（`redis_semantic_cache.py:233/301` 双闸门），但 `config.py:64` **默认 `True`** —— 任何没有那行 .env 的环境（新部署、.env 丢失/被覆盖）都会开启，届时停用文档内容可从缓存答案中泄漏最长达 1 小时。**检索层过滤器对此完全够不着。** 见 §8 Q1 |
-| **R7** | **打断评测入库流程**（审计新发现，本方案唯一实质代价） | `evaluation/__main__.py:36-37` 的 `--user` 默认 `"1"`；`testset_builder.py:34-40` 按 `user_id` 选语料，报错信息还指引 `ingest_knowledge <目录> <user_id>`。D5 之后同一内容无法挂到第二个 user_id 上 → `ingest_knowledge <dir> 1` 全部判重复 → user 1 语料为 0 → 评测报「语料库为空」，且**照着报错提示做永远做不成**（死循环）。见 §8 Q2 |
+| **R7** | ~~打断评测入库流程~~（审计新发现） | **✅ 已处置（D11 / §4.10）**：不改约束，改评测侧 —— 语料改为默认读全库、`--user` 降级为可选收窄。原风险链：`evaluation/__main__.py:36-37` 的 `--user` 默认 `"1"`，D5 之后 `ingest_knowledge <dir> 1` 全部判重复 → user 1 语料为 0 → 报「语料库为空」，而报错信息又指引你去做这件做不到的事（死循环）。现按 §4.10 一并修掉，且**顺带修好一个既有 bug（默认值今天就是坏的）与一处指标偏差**（§2.8 实测重复条目） |
+| **R14** | **评测语料的 `max_docs` 截断偏差**（既有缺陷） | `testset_builder.py` 按 `DocumentChunk.id` 排序后 `limit(max_docs)`（`RAGAS_MAX_CORPUS_DOCS` 当前 100，实测语料 42 块**未触发**）。语料超限后按上传顺序取前 100 → 后上传的文档出不了题。本次不加深（范围内已有）但**不修**，登记备查 |
 | **R8** | **评测合成器不过滤 status**（审计新发现） | `evaluation/testset_builder.py:34-59` 只 `where(user_id==...)`，**没 join `documents`**。停用一份内容过期的文档后，`--only-synthesize` 仍从它生成 `reference_contexts` → 参考答案来自已停用块，而检索侧已排除 → `context_recall`/`context_precision` 掉分，报告看起来像"检索退化"，实为评测集与检索口径不一致 |
 | **R9** | **停用会连带关掉该文档 sku 的动态价格/库存补全**（审计新发现） | `customer_tools/node.py:55-77`：动态补全的候选 sku **只从命中块收集**（`d.get("sku_codes")`），零命中就不查 `product_price_stock`。停用《京东智能家具产品知识文档.docx》→ 其 38 块的 sku 全部退出检索 → 客服回答"XX 沙发多少钱"时**既拿不到静态参数，也拿不到本可正常返回的价格库存**（那张表的数据还在）。这比"检索不到该文档内容"更宽。见 §8 Q3 |
 | **R10** | **暂存文件路径竞态**（既有缺陷，D8 后命中概率上升） | `knowledge.py:153` 暂存路径 = `STAGING_DIR / f"{md5}{ext}"`（同一文件 = 同一路径）。A 与 B 并发上传同一文件 → 同一路径 → 先完成者 `os.remove`（`_finalize:266`）会抹掉后者的暂存文件 → 后者报 `FileNotFoundError` / error 事件。**D8 之后"第二个管理员上传同一文件"从边角变成被鼓励的正常流程** |
@@ -684,7 +824,7 @@ D5 之后，`test_user_id` **不再能隔离测试语料**：语料内容是**�
 | # | 事项 | 建议 |
 |---|---|---|
 | **Q1** | **语义缓存（R6）本次是否处理？** 处置选项：① 仅登记为已知残留 + 在 README 明确"部署必须把 `SEMANTIC_CACHE_ENABLED` 设为 false"；② 把 `config.py:64` 的默认值改为 `False`（一行，让"忘记配 .env"的失败方向变安全）；③ 停用文档时主动清理缓存（要动缓存层，超出本 spec 范围） | **建议 ②**。一行改动即可让默认失败方向安全，成本最低；③ 留作独立任务 |
-| **Q2** | **评测入库流程（R7）怎么适配？** 选项：① 把 `evaluation --user` 默认值由 `"1"` 改为 `"6"`（直接用生产语料评测，`--user` 保留为可选的语料筛选）；② 评测改用独立内容集；③ 因此放弃 D5（退回方案丙，接受无数据库兜底） | **建议 ①** —— 用真实生产语料评测本身更合理，且是一行改动。**但这条会改变评测的口径语义，需要你确认** |
+| **Q2** | ~~评测入库流程（R7）怎么适配？~~ | **✅ 已定（2026-09-27，用户确认）**：采用「默认读全库 + 排除 `test_%` 测试账号 + `--user` 降级为可选收窄」，代码形态见 §4.10。放弃的备选：①a 默认值改 `"6"`（下次 owner 变更还会坏）；② 评测改用独立内容集（违背 `SPEC_RAGAS_EVAL.md:51`）；③ 因此放弃 D5（不划算） |
 | **Q3** | **动态价格/库存连带停用（R9）是否符合预期？** 停用知识文档后，该文档覆盖的 sku 不再能查到价格库存（数据仍在 `product_price_stock`） | 需要你判断。若不符合预期，修法是在 `customer_tools/node.py` 里让 sku 候选不依赖命中块（但那是另一个模块的设计变更，应拆独立任务） |
 | **Q4** | **A4 的测试成本**：是否值得为一个"理论上不可能"的状态写绕过唯一约束的测试？ | 建议写。该断言守护的正是本次 bug 的直接来源（`rows[0]` 写法），回归价值高 |
 | **Q5** | **R5 的 ANN 召回**：是否接受"当前不调参，待实测触发再处理"？ | 建议接受。当前规模无证据，预先调参违反"先实测再定方案" |
@@ -701,6 +841,7 @@ D5 之后，`test_user_id` **不再能隔离测试语料**：语料内容是**�
 |---|---|
 | `docs/项目问题.md:114`（#17a） | **改写为已解决**：保留问题描述原文，追加「✅ 已解决（日期）」+ 实施提交 hash + 落地证据。**同时新增一条**记录 R6（语义缓存）与 R9（动态价格连带）两条残留 |
 | `docs/spec_plan/已完成/SPEC_ADMIN_CONSOLE.md` | **不改写历史正文**（§13 第 13 行、§4.4 第 314 行、§12 第 2743 行的原文保留）。在该文档的**归档状态行**追加注记：「§4.4 / §12-5 的『停用不影响检索』限制已于 2026-09-27 由 SPEC_DOCUMENT_STATUS_FILTER 推翻」 |
+| `docs/spec_plan/已完成/SPEC_RAGAS_EVAL.md` | **不改写历史正文**（第 236 行的 `python -m evaluation --testset-size 20 --user 1  # 全流程（MVP 默认）` 原文保留）。在该文档的**归档状态行**追加注记：「`--user` 已于 2026-09-27 降级为可选收窄参数、默认读全库，由 SPEC_DOCUMENT_STATUS_FILTER D11 推翻」 |
 | `docs/superpowers/specs/2026-09-26-系统运行流程图-design.md:334` | 追加注记：该"注意"条目已失效 |
 | `docs/superpowers/plans/2026-09-26-系统运行流程图.md:745` | 历史 plan，**不改** |
 | `docs/superpowers/plans/2026-09-22-管理端.md`（67-68、2007 行） | 历史 plan，**不改** |
@@ -719,8 +860,11 @@ D5 之后，`test_user_id` **不再能隔离测试语料**：语料内容是**�
 3. **§4.6 模型约束** + **§4.8 索引查重** → 与步骤 2 同批
 4. **§4.3 PATCH 全量更新** → 验收 A4、A5
 5. **§4.4 `_finalize` + §4.5 stage 与 `user_id` 链** → 验收 A3（**必须与步骤 3 同批**，否则出现假错误）
-6. **前端 §4.9 tooltip 删除** → 浏览器实测停用后客服确实检索不到
-7. **§8 各 Q 项的处置落地**
-8. **§9 文档同步** → 按 §6 生命周期规则归档本 spec
+6. **§4.10 评测语料（D11）** → 验收 A8（**与步骤 2/3 无依赖，可独立提交**）
+7. **前端 §4.9 tooltip 删除** → 浏览器实测停用后客服确实检索不到
+8. **§8 剩余 Q 项的处置落地**（Q1/Q3 待定；Q4~Q7 见各自建议）
+9. **§9 文档同步** → 按 §6 生命周期规则归档本 spec
 
-> 步骤 1 与 2~8 无依赖，可先合并提交步骤 1 —— 它单独就能让「停用后检索不到」成立（只是多管理员场景不彻底）。
+> 步骤 1 与 2~9 无依赖，可先合并提交步骤 1 —— 它单独就能让「停用后检索不到」成立（只是多管理员场景不彻底）。
+>
+> 步骤 6 同理可独立先做 —— 它修的是既有 bug（默认值坏掉）与评测指标偏差，与本次的身份统一没有耦合。
