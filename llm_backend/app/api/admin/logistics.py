@@ -207,21 +207,31 @@ async def list_logistics(
 
 
 def _resolve_signed_at(status: str, given: date | None, existing: date | None,
-                       *, explicit_clear: bool = False) -> date | None:
+                       *, explicit_clear: bool = False,
+                       fill_today: bool = True) -> date | None:
     """规则 A:signed_at 与 status 强绑定。
 
     非「已签收」一律置 NULL;「已签收」显式传了用传的 -> 没传沿用原值 ->
-    原值也没有则补当天(UTC,不用 date.today() —— 本地日期在早 8 小时窗口内错位一天)。
+    原值也没有【且 fill_today】才补当天(UTC,不用 date.today() ——
+    本地日期在早 8 小时窗口内错位一天)。
 
     ⚠️ `explicit_clear` 区分「管理员显式清空」与「没传」—— 少了它,`given or existing`
     会把显式传的 None 当成"没传",回填库里的旧值,前端那个可清空的日期框就成了摆设。
-    本模块有意支持「已签收、日期不详」这个状态(spec §4.5 规则 A 下方的说明)。
+
+    ⚠️ `fill_today` 区分「刚变成已签收」与「本来就是已签收」—— **编辑路径必须传
+    `became_signed`**。不传的话,「已签收、日期不详」(signed_at 为 NULL,本模块有意
+    支持的状态)会在**任何一次无关编辑**后被填上今天的日期:管理员只改了个承运商,
+    签收日期自己冒出来了 —— 凭空造了一条没人录入的数据。
     """
     if status != "已签收":
         return None
     if explicit_clear:
         return None
-    return given or existing or datetime.now(timezone.utc).date()
+    if given is not None:
+        return given
+    if existing is not None:
+        return existing
+    return datetime.now(timezone.utc).date() if fill_today else None
 
 
 def _check_time_order(shipped: date | None, signed: date | None, status: str) -> None:
@@ -299,9 +309,14 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
     # "没传"、补成今天,管理员看到的日期与提交的不一致。而 spec §4.5 明说
     # 「已签收、日期不详」是有意的可达状态。
     # pydantic v2 用 model_fields_set 分辨:显式传 null 时含 'signed_at',不传时不含。
+    #
+    # fill_today=True 显式写出来(其实与默认值相同):建单路径上"刚变成已签收"恒成立
+    # —— 没有旧状态可言,管理员选了已签收又没给日期,补当天是唯一合理的解释。
+    # 编辑路径不一样,那里的 fill_today 要传 became_signed,见 Task 7。
     signed_at = _resolve_signed_at(
         payload.status, payload.signed_at, None,
         explicit_clear=("signed_at" in payload.model_fields_set and payload.signed_at is None),
+        fill_today=True,
     )
     _check_time_order(payload.shipped_at, signed_at, payload.status)
     trace = _parse_trace_or_400(payload.trace, payload.shipped_at, signed_at)
@@ -354,11 +369,18 @@ async def update_shipment(
     # 此时 shipped_at 根本没传。直接读 data 会让规则 B / C 的窗口校验形同失效。
     effective_status = data.get("status", shipment.status)
     effective_shipped = data.get("shipped_at", shipment.shipped_at)
+    # ⚠️ fill_today 必须传 became_signed,不能让它用默认的 True:
+    # 规则 A 的"补当天"只适用于【刚变成已签收】。本来就已经签收、这次只是改了个
+    # 无关字段(比如承运商)、又没传 signed_at 的,要【保持原样】—— 包括保持 NULL。
+    # 否则「已签收、日期不详」这个 spec §4.5 明说有意的状态,会被任何一次无关编辑
+    # 悄悄填上今天:管理员只改了承运商,签收日期自己冒出来,凭空造了一条没人录入的数据。
+    became_signed = effective_status == "已签收" and shipment.status != "已签收"
     effective_signed = _resolve_signed_at(
         effective_status,
         data.get("signed_at", shipment.signed_at),
         shipment.signed_at,
         explicit_clear=("signed_at" in data and data["signed_at"] is None),
+        fill_today=became_signed,
     )
 
     _check_time_order(effective_shipped, effective_signed, effective_status)

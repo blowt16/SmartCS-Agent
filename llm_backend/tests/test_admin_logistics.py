@@ -793,6 +793,29 @@ async def test_update_can_clear_signed_at(admin_token):
         assert r.json()["status"] == "已签收"
 
 
+async def test_update_unrelated_field_keeps_null_signed_at(admin_token):
+    """改无关字段不能把「已签收、日期不详」填成今天。
+
+    规则 A 的"补当天"只适用于【刚变成已签收】(靠 fill_today=became_signed 区分)。
+    本来就已经签收、这次只改了个承运商、又没传 signed_at 的,必须保持原样 ——
+    这里原样就是 NULL。
+
+    少了这条,上一行那个"有意支持的状态"会被任何一次无关编辑摧毁:
+    管理员只改了承运商,签收日期自己冒出来,凭空造了一条没人录入的数据。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已送达")
+        s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-11",
+                                status="已签收", shipped_at="2026-09-20", signed_at=None)
+        assert s["signed_at"] is None       # 先自证 fixture 真的造出了"日期不详"
+        r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                        json={"carrier": "顺丰速运"})
+        assert r.status_code == 200, r.text
+        assert r.json()["carrier"] == "顺丰速运"
+        assert r.json()["signed_at"] is None        # 没被悄悄填成今天
+        assert r.json()["status"] == "已签收"
+
+
 async def test_stored_trace_can_be_resubmitted_unchanged(admin_token):
     """不变式:任何被接受过的值,都能原样再提交一次。
 
