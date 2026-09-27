@@ -477,6 +477,29 @@ async def test_create_rejects_duplicate_order(admin_token):
         assert "已有运单" in r.json()["detail"]
 
 
+async def test_create_duplicate_beats_processing_status(admin_token):
+    """②「已有运单」必须判在 ③「状态合法」【之前】。
+
+    这条顺序是业务要求(端点里的注释写了理由):订单建过运单后被改回处理中时,
+    真实原因是"已有运单",报"状态不对"会误导管理员 —— 他改回状态就好了,
+    但改了也没用,运单早就在了。
+
+    ⚠️ 少了这条用例,把两个校验块对调后【其余 21 条全绿】(实测确认),
+    一个在单测里完全看不出来的改动就会让这条规则静默失效。
+    """
+    async with _client() as c:
+        order = await _new_order(c, admin_token, status="已发货")
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-C-21")
+        # 把订单改回处理中 —— 此时它既有运单、状态又不合法
+        await c.put(f"/api/admin/orders/{order['id']}", headers=_bearer(admin_token),
+                    json={"status": "处理中"})
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": order["order_no"], "tracking_no": "TEST-C-22", "carrier": "京东物流"})
+        assert r.status_code == 409
+        assert "已有运单" in r.json()["detail"]
+        assert "只有已发货及之后" not in r.json()["detail"]   # 不能报成状态问题
+
+
 async def test_create_rejects_duplicate_tracking_no(admin_token):
     """运单号撞号的 409 文案必须是「运单号已存在」,不能错报成订单冲突。
 
@@ -618,7 +641,7 @@ async def test_trace_length_is_checked_after_normalization(admin_token):
     含换行后 raw = 24N-1、normalized = 28N-1。取 N=78:
     原始 1871 ≤ 2000,规范化后 2183 > 2000。
     """
-    from app.api.admin.logistics import parse_trace
+    # parse_trace 在文件顶部已导入,这里不要重复导入(会让人怀疑是不是另一个对象)
     from app.schemas.admin import TRACE_MAX
 
     base = datetime(2026, 9, 1, 0, 0)

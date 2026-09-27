@@ -255,11 +255,17 @@ def _parse_trace_or_400(raw: str | None, shipped: date | None, signed: date | No
 
 
 def _conflict_409(e: IntegrityError, order_no: str, tracking_no: str) -> HTTPException:
-    """按约束名区分两条唯一键 —— 都是 UniqueViolation,只能靠 diag.constraint_name 分辨。"""
+    """按约束名区分两条唯一键 —— 都是 UniqueViolation,只能靠 diag.constraint_name 分辨。
+
+    ⚠️ 用【精确名】而不是子串匹配。子串 `"order_no_key" in name` 在本库今天就已经
+    同时命中 `orders_order_no_key` 与 `shipments_order_no_key`（连库查过）——
+    当前不可达（本端点只往 shipments 插），但那是命名巧合，不是被强制的不变量。
+    精确名在 spec §4.4 的表格里本来就有。
+    """
     name = getattr(getattr(e.orig, "diag", None), "constraint_name", "") or ""
-    if "order_no_key" in name:
+    if name == "shipments_order_no_key":
         return HTTPException(status_code=409, detail=f"订单 {order_no} 已有运单，请勿重复创建")
-    if "tracking_no_key" in name:
+    if name == "shipments_tracking_no_key":
         return HTTPException(status_code=409, detail=f"运单号已存在: {tracking_no}")
     return HTTPException(status_code=409, detail="运单写入冲突，请重试")
 
