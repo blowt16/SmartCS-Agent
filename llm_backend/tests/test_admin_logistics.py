@@ -313,10 +313,19 @@ async def test_keyword_matches_five_fields(admin_token):
         assert len((await _list(c, admin_token, keyword="TEST-KW-1"))["items"]) == 1
         # 订单号(订单号唯一,顺带验证)
         assert len((await _list(c, admin_token, keyword=order["order_no"]))["items"]) == 1
-        # 商品名 / 买家名 / 承运商
+        # 商品名
         assert len((await _list(c, admin_token, keyword=order["product_name"][:4]))["items"]) >= 1
+        # 买家名:BUYER 本身就把范围缩到本文件造的数据,所以可以断言恰好 1 条
         assert len((await _list(c, admin_token, keyword=BUYER))["items"]) == 1
-        assert len((await _list(c, admin_token, keyword="顺丰"))["items"]) == 1
+
+        # 承运商:⚠️ 【不能断言"恰好 1 条"】—— `keyword="顺丰"` 会命中【全库】所有顺丰的运单,
+        # 包括种子数据(实测 Task 10 跑完种子后有 2 条,于是这条断言红:assert 3 == 1)。
+        # 这是本文件里唯一一处把 keyword 从 BUYER 换成裸子串的断言,于是成了唯一一处
+        # 依赖"库里恰好有什么"的断言 —— 会表现成"换个库就红"的假 flaky。
+        # 改成:命中集合【包含本单】,且命中项【都与关键字一致】。两条都不依赖全局内容。
+        hits = (await _list(c, admin_token, keyword="顺丰"))["items"]
+        assert order["order_no"] in [x["order_no"] for x in hits]
+        assert all("顺丰" in (x["carrier"] or "") for x in hits)
 
 
 async def test_filter_by_shipment_status(admin_token):

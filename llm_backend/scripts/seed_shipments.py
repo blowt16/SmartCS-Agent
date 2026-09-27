@@ -12,9 +12,13 @@
      (tracking_no / carrier 不在 set_ 里,保留)
   2. tracking_no 不在 set_ 里 -> 上面的"确定性生成"只在首次插入成立,
      重跑不会把漂移的运单号改回来(有意:管理员手改的号应被尊重)
-  3. 跨订单撞号会让【整个脚本中止】:若种子要用的 JDV... 号已被别的订单占用,
-     ON CONFLICT (order_no) 拦不住它,整条多行 INSERT 抛 UniqueViolation,
-     单语句单事务 -> 全脚本失败。概率极低(JDV 前缀是种子专用),但记着这条排查方向
+  3. 跨订单撞号【可能】让整个脚本中止 —— 但要看目标订单有没有已存在的行(实测确认):
+     · 目标订单【没有】运单行 -> 走插入分支 -> 整条多行 INSERT 抛 UniqueViolation,
+       单语句单事务 -> 全脚本失败,一行都不写
+     · 目标订单【已有】运单行 -> 走 ON CONFLICT (order_no) 的 DO UPDATE 分支,
+       【不报错也不中止】,只是种子想用的那个号静默没生效(库里保留原来的号)
+     重跑场景多数是后者(种子上次已经写过),所以这条不是"一定会炸"而是"看情况"。
+     概率都极低(JDV 前缀是种子专用),但记着这条排查方向
 """
 import asyncio
 import sys
@@ -94,8 +98,10 @@ async def main() -> int:
         )).all()
 
         if not orders:
-            logger.warning("没有「已送达/已签收」的订单,请先跑 seed_orders.py")
-            return 0
+            # 用 error + return 1 而不是 warning + return 0 —— 与 seed_orders.py 一致。
+            # 串在初始化脚本里时,「跳过」和「成功」必须能被调用方区分出来。
+            logger.error("没有「已送达/已签收」的订单,请先跑 seed_orders.py")
+            return 1
 
         rows = []
         for index, (order_no, order_status, order_date) in enumerate(orders):
@@ -116,6 +122,16 @@ async def main() -> int:
             # 那类单留在页面上演示「未录入 + 补录」,比种出一条自相矛盾的轨迹好。
             if signed_at and (signed_at - shipped_at).days < 1:
                 logger.warning("跳过 {}:发货/签收窗口不足一天", order_no)
+                continue
+
+            # ⚠️ 同上,另一半:轨迹节点不能落到未来。
+            # `shipped_at` 被 min(..., today) 钳到【今天】时(「今天下的单」),
+            # 两个状态的模板末节点偏移(派送中 +18h、已签收 +22h,都从 09:00 起算)
+            # 必然落到【明天】—— 演示数据不该声称一个还没发生的事件已经发生。
+            # 已签收那一半由上面的窗口护栏挡住了;派送中【没有签收日可作上界】,
+            # 所以在这里按同样思路单独挡一次。
+            if shipped_at == today:
+                logger.warning("跳过 {}:发货日被钳到今天,轨迹节点会落到未来", order_no)
                 continue
 
             trace = build_trace(shipped_at, shipment_status)
