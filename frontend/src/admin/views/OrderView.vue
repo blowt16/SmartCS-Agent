@@ -166,23 +166,11 @@
           </div>
 
           <div>
-            <label class="block text-sm text-gray-600 mb-1">状态</label>
-            <select v-model="form.status" :class="INPUT_CLASS">
-              <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
-            </select>
-          </div>
-
-          <div>
             <label class="block text-sm text-gray-600 mb-1">下单日期</label>
             <input v-model="form.order_date" type="date" :class="INPUT_CLASS" />
             <p v-if="fieldErrors.order_date" class="text-xs text-red-500 mt-1">{{ fieldErrors.order_date }}</p>
           </div>
 
-          <!-- 仅在「已签收」时渲染:未签收的订单不该有签收日期(后端也强制非已签收置 NULL) -->
-          <div v-if="form.status === '已签收'">
-            <label class="block text-sm text-gray-600 mb-1">签收日期</label>
-            <input v-model="form.signed_date" type="date" :class="INPUT_CLASS" />
-          </div>
         </div>
 
         <div class="flex items-center justify-end gap-3 mt-6">
@@ -212,10 +200,14 @@ import AdminModal from '../components/AdminModal.vue';
 import Pagination from '../components/Pagination.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 
-const STATUSES = ['处理中', '已发货', '已送达', '已签收'];
-// 徽章配色在页面里决定(StatusBadge 不做「传 status 自动配色」,§6.2)
-// 「已签收」用 teal 与「已送达」的 green 区分:两者并排出现时靠颜色也能分辨
-const STATUS_COLOR = { 处理中: 'amber', 已发货: 'blue', 已送达: 'green', 已签收: 'teal' };
+// 顶部筛选下拉用。订单状态由运单派生,不可编辑 —— 这里只做只读筛选。
+const STATUSES = ['处理中', '已发货', '已签收', '售后处理中', '已退款·交易关闭'];
+// 徽章配色在本页决定(StatusBadge 不做「传 status 自动配色」)。
+// ⚠️ 顺序必须与后端 ORDER_STATUSES(app/services/order_status.py)一致。
+const STATUS_COLOR = {
+  处理中: 'amber', 已发货: 'blue', 已签收: 'teal',
+  售后处理中: 'red', '已退款·交易关闭': 'gray',
+};
 const INPUT_CLASS = 'w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-primary';
 
 // 买家列:「姓名 编码」,编码为空只显示姓名。
@@ -316,9 +308,7 @@ const form = reactive({
   buyer_name: '',
   buyer_code: '',
   amount: '',
-  status: '处理中',
   order_date: '',
-  signed_date: '',
 });
 
 // 本地日期:<input type="date"> 与用户日历一致,不走 toISOString()(那是 UTC,国内会差一天)
@@ -333,14 +323,6 @@ watch(form, () => {
   Object.keys(fieldErrors).forEach((k) => { fieldErrors[k] = ''; });
 });
 
-// 签收日期与状态联动(表单里只在「已签收」时出现):
-//   切到「已签收」→ 自动带出今天,用户仍可手改(补录历史订单)
-//   切走        → 清空,与后端「非已签收恒置 NULL」的约定保持一致
-watch(() => form.status, (next, prev) => {
-  if (next === '已签收' && prev !== '已签收') form.signed_date = todayStr();
-  else if (next !== '已签收') form.signed_date = '';
-});
-
 function openCreate() {
   editing.value = null;
   Object.assign(form, {
@@ -348,9 +330,7 @@ function openCreate() {
     buyer_name: '',
     buyer_code: '',
     amount: '',
-    status: '处理中',
     order_date: todayStr(),
-    signed_date: '',
   });
   saveError.value = '';
   modalVisible.value = true;
@@ -364,9 +344,7 @@ function openEdit(row) {
     buyer_name: row.buyer_name || '',
     buyer_code: row.buyer_code || '',
     amount: row.amount,
-    status: row.status,
     order_date: row.order_date,
-    signed_date: row.signed_date || '',
   });
   saveError.value = '';
   modalVisible.value = true;
@@ -407,10 +385,7 @@ async function save() {
       buyer_name: form.buyer_name.trim(),
       buyer_code: form.buyer_code.trim(),
       amount: form.amount === '' ? '' : Number(form.amount),
-      status: form.status,
       order_date: form.order_date,
-      // 空串转 null:后端把「非已签收」一律置 NULL,已签收但留空则由后端补当天
-      signed_date: form.signed_date || null,
     };
     if (editing.value) await updateOrder(editing.value.id, body);
     else await createOrder({ ...body, product_sku: form.product_sku });
