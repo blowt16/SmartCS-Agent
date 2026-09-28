@@ -26,7 +26,7 @@
         @change="applyFilter"
       >
         <option value="">全部订单状态</option>
-        <!-- 四个值全给:订单建过运单后可能被改回「处理中」,那种行只能靠它筛出来 -->
+        <!-- 五个值全给:待揽收运单对应的订单就是「处理中」,不筛它就捞不出来 -->
         <option v-for="s in ORDER_STATUSES" :key="s" :value="s">{{ s }}</option>
       </select>
       <button
@@ -264,14 +264,18 @@ import AdminModal from '../components/AdminModal.vue';
 import Pagination from '../components/Pagination.vue';
 import StatusBadge from '../components/StatusBadge.vue';
 
-const STATUSES = ['待揽收', '已揽收', '运输中', '派送中', '已签收', '异常'];
-const ORDER_STATUSES = ['处理中', '已发货', '已送达', '已签收'];
+// 运单状态 8 值(与 app/services/order_status.py 的 SHIPMENT_STATUSES 一致)
+const STATUSES = ['待揽收', '已揽收', '运输中', '派送中', '已签收', '异常', '退货中', '已退货'];
+// 订单状态 5 值 —— 必须含「处理中」:待揽收运单对应的订单就是它
+const ORDER_STATUSES = ['处理中', '已发货', '已签收', '售后处理中', '已退款·交易关闭'];
 const CARRIERS = ['京东物流', '顺丰速运', '中通快递', '圆通速递',
                   '申通快递', '韵达快递', '邮政EMS', '德邦快递'];
 // 徽章配色在页面里决定(StatusBadge 不做「传 status 自动配色」)
+// ⚠️「待揽收」用 slate 不用 gray —— gray 留给「未录入」徽章(本文件 L107-112)。
+//    两者同列且语义相反(一个等揽收、一个还没建单),新数据下会成排出现。
 const STATUS_COLOR = {
-  待揽收: 'gray', 已揽收: 'blue', 运输中: 'green',
-  派送中: 'amber', 已签收: 'teal', 异常: 'red',
+  待揽收: 'slate', 已揽收: 'blue', 运输中: 'green', 派送中: 'amber',
+  已签收: 'teal', 异常: 'red', 退货中: 'purple', 已退货: 'gray',
 };
 const TRACE_MAX = 2000;   // 与后端 schemas/admin.py 的 TRACE_MAX 保持一致
 const TRACE_PLACEHOLDER =
@@ -420,9 +424,8 @@ function validateTrace(raw, shippedAt, signedAt) {
   return '';
 }
 
-// 签收时间与状态的联动。⚠️ 不能照抄 OrderView.vue:339-342 —— 那段 watcher
-// 分不清「用户手动切换」与「回填」,回填时会把库里的签收日期覆盖成今天
-// (详见 spec §9⑤)。这里用 filling 标记在回填期间短路它。
+// 签收时间与状态的联动。⚠️ 回填期间必须短路(见下面的 filling 标记)——
+// 否则分不清「用户手动切换」与「回填」,回填时会把库里的签收日期覆盖成今天。
 let filling = false;
 watch(() => form.status, (next, prev) => {
   if (filling) return;

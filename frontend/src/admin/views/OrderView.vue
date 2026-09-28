@@ -203,7 +203,9 @@ import StatusBadge from '../components/StatusBadge.vue';
 // 顶部筛选下拉用。订单状态由运单派生,不可编辑 —— 这里只做只读筛选。
 const STATUSES = ['处理中', '已发货', '已签收', '售后处理中', '已退款·交易关闭'];
 // 徽章配色在本页决定(StatusBadge 不做「传 status 自动配色」)。
-// ⚠️ 顺序必须与后端 ORDER_STATUSES(app/services/order_status.py)一致。
+// 键集必须覆盖后端 ORDER_STATUSES(app/services/order_status.py)的全部状态;
+// 缺键会静默落到 L92 的 'gray' 兜底,与「已退款·交易关闭」的灰撞色。
+// 顺序无关 —— 本对象按状态名取值(按下标绑色的是 ConsoleView 的 ORDER_COLORS)。
 const STATUS_COLOR = {
   处理中: 'amber', 已发货: 'blue', 已签收: 'teal',
   售后处理中: 'red', '已退款·交易关闭': 'gray',
