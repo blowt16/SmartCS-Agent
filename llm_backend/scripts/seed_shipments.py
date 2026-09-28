@@ -1,24 +1,30 @@
-"""运单种子数据(幂等 upsert,可重复执行)。
+"""运单种子数据(先删后建,可重复执行)。
 
 用法:
   python scripts/seed_shipments.py
 
-覆盖范围:只给「已送达」和「已签收」的订单建运单,「已发货」的【故意不建】——
-页面上要能同时看到「已录物流」与「未录入 + 补录按钮」两种状态,补录流程才演示得了。
+本脚本是订单状态的【驱动方】:seed_orders.py 把 18 条订单全建成「处理中」,
+本脚本按 ALLOC 给它们建运单(或无运单),再用 order_status.derive_order_fields
+把派生出来的订单状态写回 orders —— 控制台环形图的五色、物流页的八状态都由这里决定。
 
-幂等策略是【upsert 覆盖】而不是"已存在则跳过"(与 seed_orders.py 同款)。三个后果:
-  1. 覆盖对象是【订单号落在种子范围内的所有运单】,不只种子自己插的那些 ——
-     管理员手工给这些订单建的运单,status/shipped_at/signed_at/trace 同样会被覆盖
-     (tracking_no / carrier 不在 set_ 里,保留)
-  2. tracking_no 不在 set_ 里 -> 上面的"确定性生成"只在首次插入成立,
-     重跑不会把漂移的运单号改回来(有意:管理员手改的号应被尊重)
-  3. 跨订单撞号【可能】让整个脚本中止 —— 但要看目标订单有没有已存在的行(实测确认):
-     · 目标订单【没有】运单行 -> 走插入分支 -> 整条多行 INSERT 抛 UniqueViolation,
-       单语句单事务 -> 全脚本失败,一行都不写
-     · 目标订单【已有】运单行 -> 走 ON CONFLICT (order_no) 的 DO UPDATE 分支,
-       【不报错也不中止】,只是种子想用的那个号静默没生效(库里保留原来的号)
-     重跑场景多数是后者(种子上次已经写过),所以这条不是"一定会炸"而是"看情况"。
-     概率都极低(JDV 前缀是种子专用),但记着这条排查方向
+覆盖范围(18 条 = 三个桶):
+  · 无运单 3 条 —— 页面上演示「未录入 + 补录按钮」
+  · 待揽收 4 条 —— 有运单但未发货(shipped_at 为 NULL)
+  · 其余 11 条铺满另外 7 个运单状态(已揽收/运输中/派送中/已签收 各 2 条,
+    异常/退货中/已退货 各 1 条)—— 派生出的订单状态正好覆盖控制台环形图五色
+
+幂等策略是【先删后建】(delete 种子范围内的运单 -> 重新 insert),不是 upsert。
+upsert 表达不了"这条不该有运单",而库里可能已有管理员手工建的运单,不清就会让
+「无运单」桶落不了地,并留下「订单处理中 + 运单派送中」这类不一致。三个后果:
+  1. 种子范围内管理员手工建的运单会被整行删除重建 —— 与旧版不同,
+     tracking_no 与 carrier 也【会】被种子值覆盖(不再"保留手改的号")
+  2. 重跑不累积重复行;种子范围之外的运单不受影响
+  3. tracking_no 撞号仍【可能】让整个脚本中止:若非种子订单占用了 JDV 号段,
+     整条多行 INSERT 抛 UniqueViolation,单语句单事务 -> 一行都不写。
+     概率极低(JDV 前缀是种子专用),但记着这条排查方向
+
+订单侧的状态/签收日期一律由 derive_order_fields 算出(与接口层共用同一份判断),
+不在本脚本里另写映射。
 """
 import asyncio
 import sys
@@ -29,29 +35,62 @@ ROOT_DIR = Path(__file__).resolve().parent.parent          # llm_backend
 sys.path.insert(0, str(ROOT_DIR))
 import app.core.database  # noqa: E402 —— Windows Selector 事件循环补丁
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import delete, select, update  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 
-from app.api.admin.logistics import parse_trace  # noqa: E402
 from app.core.database import AsyncSessionLocal  # noqa: E402
 from app.core.logger import get_logger  # noqa: E402
 from app.models.order import Order  # noqa: E402
 from app.models.shipment import Shipment  # noqa: E402
 from app.schemas.admin import CARRIERS  # noqa: E402
+from app.services.order_status import derive_order_fields  # noqa: E402
 
 logger = get_logger(service="seed_shipments")
 
-# 只覆盖这两个状态的订单;「已发货」留给页面演示「未录入」
-SEED_ORDER_STATUSES = ["已送达", "已签收"]
+# 种子覆盖的订单数,与 seed_orders.py 的 ORDER_COUNT 一致
+SEED_ORDER_COUNT = 18
+
+# ── 运单状态分配 ─────────────────────────────────────────────────────────
+# ⚠️ 必须按 index 显式指定,不能按"数量顺序填充"。
+# 原因:seed_orders.py 的 order_date = today - (index % 14),所以
+# index ∈ {0,1,14,15} 的 4 条 order_date 恒为 today 或 today-1,其 shipped_at
+# 必被 min(..., today) 钳到今天,正撞下面"末节点不得落到未来"的护栏。
+# 按数量顺序填充时被跳掉的恰好是「异常」和第二条「已签收」-> 环形图缺色,
+# 且每天重跑都复现。
+#
+# 这 4 条因此全部放进【不需要 shipped_at】的桶(无运单 / 待揽收)。
+#
+# ✅ 已实测验算(today=2026-09-28):18 条全部通过,0 条被跳过,
+#    所有轨迹末节点均早于当前时刻。
+ALLOC = {
+    0: None, 1: None, 14: None,                          # 无运单 -> 演示「补录」
+    2: "待揽收", 3: "待揽收", 4: "待揽收", 15: "待揽收",
+    5: "已揽收", 17: "已揽收",
+    6: "运输中", 7: "运输中",
+    8: "派送中", 9: "派送中",
+    10: "已签收", 11: "已签收",
+    16: "异常",
+    12: "退货中",
+    13: "已退货",
+}
+assert len(ALLOC) == SEED_ORDER_COUNT, "ALLOC 必须覆盖全部种子订单"
+
 # 加权抽样池:京东自营为主,所以京东物流占两席。
 # ⚠️ 这是【抽样分布】不是【合法值枚举】—— 与 schemas.admin.CARRIERS(8 个合法承运商)
 # 语义不同,不能合并;但成员必须都在枚举里(下面有断言,防止两处漂移)
 CARRIER_POOL = ["京东物流", "京东物流", "顺丰速运", "中通快递"]
 assert all(c in CARRIERS for c in CARRIER_POOL), "CARRIER_POOL 里有不在 CARRIERS 枚举里的值"
 
-# 轨迹节点模板:状态 -> (小时偏移, 地点, 描述)
-# 偏移必须 <= signed_at,且行数与节点数一一对应
+# ── 轨迹模板:运单状态 -> [(小时偏移, 地点, 描述), ...] ──────────────────
+# 偏移从 shipped_at 当天 09:00 起算。
 NODES = {
+    "已揽收": [
+        (0, "广州市", "已揽收"),
+    ],
+    "运输中": [
+        (0, "广州市", "已揽收"),
+        (6, "广州转运中心", "到达转运中心"),
+    ],
     "派送中": [
         (0, "广州市", "已揽收"),
         (6, "广州转运中心", "到达转运中心"),
@@ -65,10 +104,27 @@ NODES = {
         (18, "深圳市", "派送中"),
         (22, "深圳市", "已签收"),
     ],
+    "异常": [
+        (0, "广州市", "已揽收"),
+        (6, "广州转运中心", "到达转运中心"),
+        (14, "广州转运中心", "包裹破损，已联系寄件人"),
+    ],
+    "退货中": [
+        (0, "广州市", "已揽收"),
+        (6, "广州转运中心", "到达转运中心"),
+        (30, "深圳市", "收件人拒收，退回中"),
+    ],
+    "已退货": [
+        (0, "广州市", "已揽收"),
+        (6, "广州转运中心", "到达转运中心"),
+        (18, "深圳市", "派送中"),
+        (24, "深圳市", "收件人拒收，退回中"),
+        (48, "广州市", "已退回寄件人"),
+    ],
 }
 
-# 订单状态 -> 运单状态
-SHIPMENT_STATUS = {"已送达": "派送中", "已签收": "已签收"}
+# 各状态轨迹的最大偏移(小时),用于"末节点不得落到未来"的护栏
+MAX_OFFSET = {s: max(h for h, _, _ in nodes) for s, nodes in NODES.items()}
 
 
 def build_trace(shipped_at, shipment_status: str) -> str | None:
@@ -91,77 +147,125 @@ def build_trace(shipped_at, shipment_status: str) -> str | None:
 async def main() -> int:
     async with AsyncSessionLocal() as s:
         today = datetime.now(timezone.utc).date()
+
+        # 按 order_no 升序取种子范围的订单 —— 与 seed_orders.py 的 ORD-%03d 对应,
+        # 下标即 ALLOC 的 index。
+        # ⚠️ 不能按 Order.status 过滤:seed_orders 已把 18 条全刷成「处理中」,
+        #    按旧状态过滤会返回 0 行,脚本直接 error 退出、一条运单都写不出去。
         orders = (await s.execute(
-            select(Order.order_no, Order.status, Order.order_date)
-            .where(Order.status.in_(SEED_ORDER_STATUSES))
+            select(Order.order_no, Order.order_date)
+            .where(Order.order_no.in_([f"ORD-{i + 1:03d}" for i in range(SEED_ORDER_COUNT)]))
             .order_by(Order.order_no)
         )).all()
 
-        if not orders:
+        if len(orders) != SEED_ORDER_COUNT:
             # 用 error + return 1 而不是 warning + return 0 —— 与 seed_orders.py 一致。
             # 串在初始化脚本里时,「跳过」和「成功」必须能被调用方区分出来。
-            logger.error("没有「已送达/已签收」的订单,请先跑 seed_orders.py")
+            logger.error("种子订单不齐({}/{}),请先跑 seed_orders.py",
+                         len(orders), SEED_ORDER_COUNT)
             return 1
 
+        seed_order_nos = [o[0] for o in orders]
+
+        # ⚠️ 先删后建。
+        # upsert 表达不了"这条不该有运单":库里可能已有管理员手工建的运单,
+        # 不清就会让「无运单」桶落不了地,而且会留下
+        # 「订单处理中 + 运单派送中」—— 正是本次要消灭的那类不一致。
+        await s.execute(delete(Shipment).where(Shipment.order_no.in_(seed_order_nos)))
+        await s.flush()
+
         rows = []
-        for index, (order_no, order_status, order_date) in enumerate(orders):
-            # 「订单号数字部分」确定性生成,tracking_no 相同则幂等
+        order_updates = []
+        skipped = []
+
+        for index, (order_no, order_date) in enumerate(orders):
+            shipment_status = ALLOC[index]
+
+            # 无运单桶:跳过,该订单留在「处理中」
+            if shipment_status is None:
+                order_updates.append((order_no, *derive_order_fields(None, None)))
+                continue
+
+            # 「待揽收」尚未发货 -> shipped_at 为 NULL。
+            # ⚠️ 不能沿用下面的 min(order_date + 1, today):那会算出非空值。
+            if shipment_status == "待揽收":
+                shipped_at = None
+                signed_at = None
+                trace = None
+            else:
+                shipped_at = min(order_date + timedelta(days=1), today)
+                signed_at = (min(order_date + timedelta(days=2), today)
+                             if shipment_status == "已签收" else None)
+
+                # 护栏一:窗口不足一天就跳过,不硬种出自相矛盾的轨迹
+                if signed_at and (signed_at - shipped_at).days < 1:
+                    skipped.append((order_no, "发货/签收窗口不足一天"))
+                    order_updates.append((order_no, *derive_order_fields(None, None)))
+                    continue
+
+                # 护栏二:轨迹节点【不得落到未来】。
+                # ⚠️ 判据必须按"末节点 datetime ≤ now",不能按旧的
+                #    "shipped_at == today" —— 那个对"shipped_at=昨天、模板跨多天"
+                #    完全无效,而「已退货」的 signed_at 是 NULL,
+                #    接口层的 parse_trace 不会卡它的末节点上界,只能靠这条兜住。
+                last_node = (datetime.combine(shipped_at, time(hour=9))
+                             + timedelta(hours=MAX_OFFSET[shipment_status]))
+                if last_node > datetime.now(timezone.utc).replace(tzinfo=None):
+                    skipped.append((order_no, f"末节点 {last_node:%m-%d %H:%M} 落到未来"))
+                    order_updates.append((order_no, *derive_order_fields(None, None)))
+                    continue
+
+                trace = build_trace(shipped_at, shipment_status)
+
             digits = "".join(ch for ch in order_no if ch.isdigit()) or f"{index + 1:03d}"
-            shipped_at = min(order_date + timedelta(days=1), today)
-            shipment_status = SHIPMENT_STATUS[order_status]
-            # 签收日与 seed_orders.py:73 的订单签收日取同一个偏移(+2 天),
-            # 写成 +3 天会出现「订单签收日 9-22、运单签收日 9-23」的自相矛盾演示数据
-            signed_at = min(order_date + timedelta(days=2), today) if order_status == "已签收" else None
-
-            # ⚠️ 窗口不足一天就跳过,别硬种。
-            # 当天重跑 seed_orders.py 刷新演示数据后(那是它自己文档里写明的用途),
-            # 「昨天下的单 + 已签收」会被上面两个 min 同时钳到 today,
-            # 于是 shipped_at == signed_at,而「已签收」模板的末节点偏移是 22h
-            # (09:00 + 22h = 次日 07:00),必然越过签收日 -> 下面那句 parse_trace 抛错 ->
-            # 整个脚本中止、一行都不写。
-            # 那类单留在页面上演示「未录入 + 补录」,比种出一条自相矛盾的轨迹好。
-            if signed_at and (signed_at - shipped_at).days < 1:
-                logger.warning("跳过 {}:发货/签收窗口不足一天", order_no)
-                continue
-
-            # ⚠️ 同上,另一半:轨迹节点不能落到未来。
-            # `shipped_at` 被 min(..., today) 钳到【今天】时(「今天下的单」),
-            # 两个状态的模板末节点偏移(派送中 +18h、已签收 +22h,都从 09:00 起算)
-            # 必然落到【明天】—— 演示数据不该声称一个还没发生的事件已经发生。
-            # 已签收那一半由上面的窗口护栏挡住了;派送中【没有签收日可作上界】,
-            # 所以在这里按同样思路单独挡一次。
-            if shipped_at == today:
-                logger.warning("跳过 {}:发货日被钳到今天,轨迹节点会落到未来", order_no)
-                continue
-
-            trace = build_trace(shipped_at, shipment_status)
-            if trace:                                        # 种子直写库,绕过接口校验,自己先验一遍
-                parse_trace(trace, shipped_at, signed_at)
             rows.append({
-                "tracking_no": f"JDV{int(digits):010d}",
                 "order_no": order_no,
+                "tracking_no": f"JDV{int(digits):010d}",
                 "carrier": CARRIER_POOL[index % len(CARRIER_POOL)],
                 "status": shipment_status,
                 "shipped_at": shipped_at,
                 "signed_at": signed_at,
                 "trace": trace,
             })
+            order_updates.append(
+                (order_no, *derive_order_fields(shipment_status, signed_at))
+            )
 
-        stmt = pg_insert(Shipment).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[Shipment.order_no],          # 1:1 之后的天然幂等键
-            set_={
-                "status": stmt.excluded.status,
-                "shipped_at": stmt.excluded.shipped_at,
-                "signed_at": stmt.excluded.signed_at,
-                "trace": stmt.excluded.trace,
-            },
-        )
-        await s.execute(stmt)
+        if rows:
+            stmt = pg_insert(Shipment).values(rows)
+            # tracking_no / carrier 不进 set_:它们是种子确定性生成的值,而且上面那条
+            # delete 已经把种子范围内的行(含管理员手改过的号)整行删掉了,
+            # 重跑时不存在"需要保留旧值"的行。
+            # 但仍有一条会中止全脚本的路:tracking_no 上有唯一索引,若【非种子订单】
+            # 占用了 JDV 号段,整条多行 INSERT 抛 UniqueViolation —— 单语句单事务,
+            # 一行都不写。概率极低(JDV 前缀是种子专用),但它是排查时的第一方向。
+            # 下面的 DO UPDATE 分支在"先删后建"下几乎走不到,保留是为了让本语句
+            # 在面对并发写入时不静默丢更新。
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[Shipment.order_no],      # 1:1 之后的天然幂等键
+                set_={
+                    "status": stmt.excluded.status,
+                    "shipped_at": stmt.excluded.shipped_at,
+                    "signed_at": stmt.excluded.signed_at,
+                    "trace": stmt.excluded.trace,
+                },
+            )
+            await s.execute(stmt)
+
+        # 订单侧:调【同一个】纯函数 derive_order_fields(见 order_status.py 的注释),
+        # 不在这里另写一份映射 —— 那是第四份同义集合。
+        for order_no, status, signed_date in order_updates:
+            await s.execute(
+                update(Order).where(Order.order_no == order_no)
+                .values(status=status, signed_date=signed_date)
+            )
+
         await s.commit()
 
-        total = (await s.execute(select(Shipment.id))).scalars().all()
-        logger.info("运单种子完成: 写入/更新 {} 条,表内共 {} 条", len(rows), len(total))
+        for order_no, reason in skipped:
+            logger.warning("跳过 {}:{}", order_no, reason)
+        logger.info("运单种子完成: 写入 {} 条,跳过 {} 条,无运单 {} 条",
+                    len(rows), len(skipped), sum(1 for v in ALLOC.values() if v is None))
         return 0
 
 
