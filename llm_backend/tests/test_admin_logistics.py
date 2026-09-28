@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 # main 必须在【collection 阶段】导入(与 test_admin_orders.py 同因):
 # 从仓库根跑 pytest 时,根目录另有一个无关的 D:\SmartCS-Agent\main.py,
@@ -42,8 +44,15 @@ ITEM_FIELDS = {
 
 
 @asynccontextmanager
-async def _client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+async def _client(raise_app_exceptions: bool = True):
+    """默认与老写法一致(未捕获异常直接抛出)。
+
+    `raise_app_exceptions=False` 供「必须回 404 而不是 500」的用例:那种用例要
+    【看见】 500 这个状态码本身。开着的话异常会从 await c.put 里抛出来,
+    断言写成 `== 404` 抓到的是一句 traceback,而不是"服务端回了 500"。
+    """
+    transport = ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
@@ -1353,3 +1362,144 @@ async def test_signed_without_date_mirrors_to_order(admin_token):
                 select(Order.signed_date).where(Order.order_no == o["order_no"])
             )).scalar_one()
         assert d is None
+
+
+# ==================== 并发防御分支(StaleDataError -> 404) ====================
+
+
+def _arm_stale_flush(mp):
+    """把 `AsyncSession.flush` 换成「第一次调用抛 StaleDataError、之后放行」的替身。
+
+    为什么要 patch 而不是真造并发:这两条要钉的是【except 分支选对了异常类】,
+    不是并发本身 —— "UPDATE 命中 0 行 -> StaleDataError"由 SQLAlchemy 保证
+    (persistence.py:947-953)。真造"SELECT 之后、flush 之前被另一个事务删掉"
+    要两条连接 + 精确时序,成本远高于它多验出来的那一点东西。
+
+    ⚠️ 三层收窄,少一层都会波及用例自身:
+      · 只 patch `AsyncSession.flush` 这个【异步门面】—— 直连库的造数与清理走
+        `AsyncSessionLocal() + commit()`,而 `AsyncSession.commit` 调的是
+        【同步】`Session.commit` -> 内部再调同步 `Session.flush`,不经过被替换的
+        这个方法(实测:包住 execute+commit 后计数为 0)。所以 autouse fixture 与
+        本文件那几个直连库的助手都安全,`get_db` 收尾那次 commit 同理。
+      · 只抛第一次 —— 后续调用原样转发。
+      · 作用域用 `monkeypatch.context()` 收紧到"那一次请求"。**这层不能省**:
+        全局 patch 会打到 `create_shipment` 里自己那次 `await db.flush()` 上,
+        造数助手 `_new_shipment` 先炸,用例根本走不到目标请求。
+
+    返回调用计数器。用例必须断言 `calls["n"] == 1` 自证:少了它,一个在走到
+    flush 之前就返回的请求(比如被前面某条校验提前 400)也能让用例"绿"，
+    而那正是这条用例要防的假覆盖。
+    """
+    real_flush = AsyncSession.flush
+    calls = {"n": 0}
+
+    async def fake_flush(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # 文案对齐真实抛点,失败时一眼能看出是被注入的
+            raise StaleDataError(
+                "UPDATE statement on table expected to update 1 row(s); 0 were matched.")
+        return await real_flush(self, *args, **kwargs)
+
+    mp.setattr(AsyncSession, "flush", fake_flush)
+    return calls
+
+
+async def test_update_shipment_stale_data_returns_404(admin_token, monkeypatch):
+    """并发下运单被别的请求删掉时,PUT 必须回 404,不是 500。
+
+    走 `update_shipment` 的 `except StaleDataError`:那种情况下 `UPDATE shipments`
+    匹配 0 行,抛的是 StaleDataError 而【不是】IntegrityError
+    (实测 MRO: StaleDataError -> SQLAlchemyError,与 IntegrityError 无继承关系)。
+    少这一支,异常一路穿透到 ServerErrorMiddleware -> 500,演示里看着像"服务器炸了"。
+
+    ⚠️ 断言必须 `== 404` 且带文案。只写 `!= 500` 的话,400/422 之类的答复也能通过,
+       而对管理员来说那同样是"操作没做成且看不懂原因"。
+    """
+    async with _client(raise_app_exceptions=False) as c:
+        order = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, order["order_no"], "T-STALE-U-1")
+        with monkeypatch.context() as mp:
+            calls = _arm_stale_flush(mp)
+            r = await c.put(f"/api/admin/logistics/{s['id']}", headers=_bearer(admin_token),
+                            json={"status": "运输中"})
+        assert calls["n"] == 1, "替身没被调用 —— 用例没走到目标分支"
+        assert r.status_code == 404, f"应回 404,实际 {r.status_code}: {r.text}"
+        detail = r.json()["detail"]
+        assert "运单不存在" in detail
+        assert "已被删除" in detail
+        assert str(s["id"]) in detail
+        # 404 不能顺手把数据改坏:回滚之后运单还在,状态也还是原值
+        row = next(x for x in (await _list(c, admin_token))["items"]
+                   if x["order_no"] == order["order_no"])
+        assert row["id"] == s["id"]
+        assert row["status"] == "待揽收"
+
+
+async def test_delete_shipment_stale_data_returns_404(admin_token, monkeypatch):
+    """并发下【订单】被删、运单被 FK CASCADE 带走时,DELETE 必须回 404,不是 500。
+
+    走 `delete_shipment` 的 `except StaleDataError`:本端点写两张表
+    (DELETE shipments + UPDATE orders),订单没了之后那次 `UPDATE orders` 匹配 0 行 ——
+    抛 StaleDataError。端点里那句"ORM DELETE 命中 0 行只发 SAWarning"只在
+    【本端点只有一条 DELETE 语句】时成立,多出来的那条 UPDATE 才是这里抛异常的原因。
+
+    ⚠️ 与 PUT 那条【文案不同】(这条说订单没了、运单被级联带走),两处 except 必须
+       各测各的 —— 合成一条会在另一处仍然零覆盖的同时看起来像测过了。
+    """
+    async with _client(raise_app_exceptions=False) as c:
+        o = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, o["order_no"], "T-STALE-D-1")
+        with monkeypatch.context() as mp:
+            calls = _arm_stale_flush(mp)
+            r = await c.delete(f"/api/admin/logistics/{s['id']}",
+                               headers=_bearer(admin_token))
+        assert calls["n"] == 1, "替身没被调用 —— 用例没走到目标分支"
+        assert r.status_code == 404, f"应回 404,实际 {r.status_code}: {r.text}"
+        detail = r.json()["detail"]
+        assert o["order_no"] in detail
+        assert "级联删除" in detail
+        assert str(s["id"]) in detail
+        # 404 不能顺手把数据改坏:回滚之后那条 DELETE 不该留下半截效果
+        row = next(x for x in (await _list(c, admin_token))["items"]
+                   if x["order_no"] == o["order_no"])
+        assert row["id"] == s["id"]
+
+
+async def test_delete_flush_is_load_bearing(admin_token, monkeypatch):
+    """`delete_shipment` 里那行 `await db.flush()` 是【载荷】,不是装饰。
+
+    端点注释主张:"不 flush 的话,get_db 的隐式 commit 跑在响应发出【之后】,
+    失败会变成静默 200 而库里一行没动"。这个主张此前没有任何测试能证明或证伪 ——
+    换句话说,谁把那行删掉都不会红。这条用例把它钉住。
+
+    做法:注入一个必然失败的写入(把 order.status 设成 None -> NOT NULL 违约),
+    但【不抛异常】—— 失败要留到 flush/commit 那一步,才是真实的现场。
+
+      · 有 flush   -> 失败发生在响应生成之前 -> 500(客户端知道没成功)
+      · 去掉 flush -> 失败滑到 get_db 的 commit -> 200 而数据没动(本项目反复防的
+                     「保存了但没生效」)
+
+    ⚠️ 500 是【期望值】,不是"服务器炸了"—— 这里要的正是"响亮地失败"。
+       所以断言写成 `== 500`,把上面那个 200 静默版明确区分出来。
+    """
+    from app.api.admin import logistics as logistics_mod
+
+    def _bad_sync(order, shipment_status, signed_at):
+        # 只改 ORM 属性,不抛 —— 违约要留给 flush 去发现
+        order.status = None
+
+    async with _client(raise_app_exceptions=False) as c:
+        o = await _new_order(c, admin_token)
+        s = await _new_shipment(c, admin_token, o["order_no"], "T-FLUSH-1")
+        with monkeypatch.context() as mp:
+            mp.setattr(logistics_mod, "sync_order_from_shipment", _bad_sync)
+            r = await c.delete(f"/api/admin/logistics/{s['id']}",
+                               headers=_bearer(admin_token))
+        assert r.status_code == 500, (
+            f"注入了必然失败的写入,有 flush 时应当响亮地 500;实际 {r.status_code}: {r.text}")
+        # 失败之后库里必须原样(那条 DELETE 已经回滚)—— 不能留下半截效果
+        row = next(x for x in (await _list(c, admin_token))["items"]
+                   if x["order_no"] == o["order_no"])
+        assert row["id"] == s["id"], "500 之后运单不该真的被删掉"
+        assert row["order_status"] == "处理中"
