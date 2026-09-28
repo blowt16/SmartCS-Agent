@@ -16,6 +16,7 @@ from app.models.order import Order
 from app.models.product_price_stock import ProductPriceStock
 from app.models.user import User
 from app.schemas.admin import OrderCreate, OrderUpdate
+from app.services.order_status import NO_SHIPMENT_ORDER_STATUS
 
 router = APIRouter()
 
@@ -130,9 +131,9 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
                 buyer_code=payload.buyer_code,
                 user_id=payload.user_id,
                 amount=amount,
-                # 恒为「处理中」:订单状态由运单派生,建单时不可指定。
+                # 恒为「处理中」(NO_SHIPMENT_ORDER_STATUS):订单状态由运单派生,建单时不可指定。
                 # 想让它变「已发货」→ 去建运单再推运单状态(见 app/services/order_status.py)。
-                status="处理中",
+                status=NO_SHIPMENT_ORDER_STATUS,
                 order_date=order_date,
                 signed_date=None,
             )
@@ -154,7 +155,11 @@ async def update_order(
     payload: OrderUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """编辑订单。sku/product_name/category 不可改(schema 里就没有,换商品应删除后重建)。"""
+    """编辑订单。sku/product_name/category/status/signed_date 均不可改(传了 422)。
+
+    sku 换商品应删除后重建;status/signed_date 改不动是本模块当前的全部意义 ——
+    订单状态由运单派生(见 app/services/order_status.py),订单接口已交出该能力。
+    """
     order = (await db.execute(
         select(Order).where(Order.id == order_id)
     )).scalar_one_or_none()

@@ -1,13 +1,18 @@
 """管理端订单接口测试(SPEC_ADMIN_CONSOLE §8.4,端点行为见 §5.6)。
 
-覆盖 4 个端点(列表 / 新增 / 编辑 / 删除),重点钉两处实现细节:
+覆盖 4 个端点(列表 / 新增 / 编辑 / 删除),重点钉三处实现细节:
 - 新增不传 amount → 回填商品表 current_price + product_name/category 快照
 - order_no 用 max(现有序号)+1 而非 COUNT(*)+1 —— 删掉中间一条(留下空档)后
   再新增,count+1 会撞现存唯一键,故必须断言新号不在保留集合里
+- 订单状态锁定:status / signed_date 已移出订单 schema(传了 422),建单恒为
+  「处理中」,改状态只能去建/推运单(见 app/services/order_status.py)
 
 清理策略:本条文件造的订单 buyer_name 一律 '测试买家',由 autouse 的
 cleanup_test_orders 在**用例前后各清一次**(前一次兜住上次跑挂留下的残留)。
 被删除的种子订单(为了造空档)在 finally 里按整行快照原样还原,保证演示数据不减。
+
+⚠️ 写 PUT 用例要改字段时用 buyer_code,**不要改 buyer_name** —— 改买家名会让订单
+   逃出上面的清理 fixture(它按 buyer_name 精确匹配删除),污染演示数据(实测踩过)。
 """
 import sys
 from contextlib import asynccontextmanager
@@ -175,7 +180,7 @@ async def test_create_without_amount_backfills_product_price(admin_token):
     assert body["category"] == product["category"]
     assert body["sku"] == SKU_A
     assert body["buyer_name"] == BUYER
-    assert body["status"] == "处理中"                     # schema 默认值
+    assert body["status"] == "处理中"                     # 建单恒为「处理中」(orders.py 硬编码,非 schema 默认)
     assert body["order_date"], "未传 order_date 应取 UTC 当天"
     assert body["order_no"].startswith("ORD-")
     assert set(body) == ITEM_FIELDS                       # 新增响应与列表元素同结构
@@ -307,6 +312,54 @@ async def test_update_unknown_id_404(admin_token):
     assert r.status_code == 404, r.text
 
 
+async def test_update_persists_changed_fields(admin_token):
+    """PUT 的 200 成功路径 —— 改完必须真的落库。
+
+    ⚠️ 改的是 buyer_code,不要改成 buyer_name —— 改买家名会让订单逃出本文件的
+       清理 fixture(它按 buyer_name=BUYER 删),污染演示数据(实测踩过)。
+    """
+    async with _client() as c:
+        created = await _create(c, admin_token)
+        assert created.status_code == 200, created.text
+        oid, order_no = created.json()["id"], created.json()["order_no"]
+        r = await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
+                        json={"buyer_code": "P999"})
+        assert r.status_code == 200, r.text
+        assert r.json()["buyer_code"] == "P999"
+
+        d = await _list_items(c, admin_token, keyword=order_no)
+        # total==1 是这次复查的前提:若 keyword 过滤失效,total 会是全量,
+        # 而 items[0] 恰好就是刚建的那条(日期/id 最新),断言会假绿。
+        assert d["total"] == 1, f"keyword={order_no} 应只命中 1 条,实际 {d['total']}"
+        assert d["items"][0]["buyer_code"] == "P999"
+
+
+async def test_update_distinguishes_null_from_absent(admin_token):
+    """exclude_unset 的契约:不传 -> 保持原值;显式传 null -> 清空。
+
+    这条钉的是 orders.py 的 `payload.model_dump(exclude_unset=True)`。
+    有人把它改成 exclude_none 的话,「显式传 null」会被当成"没传"、回填旧值,
+    前端那个可清空的输入框就成了摆设 —— 本条会红。
+    """
+    async with _client() as c:
+        oid = (await _create(c, admin_token)).json()["id"]
+
+        await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
+                    json={"buyer_code": "P777"})
+
+        # 不传 buyer_code -> 保持原值
+        r = await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
+                        json={"amount": "123.00"})
+        assert r.status_code == 200, r.text
+        assert r.json()["buyer_code"] == "P777", r.text
+
+        # 显式传 null -> 清空
+        r = await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
+                        json={"buyer_code": None})
+        assert r.status_code == 200, r.text
+        assert r.json()["buyer_code"] is None, r.text
+
+
 # ==================== 删除 ====================
 
 
@@ -332,23 +385,32 @@ async def test_delete_then_delete_again_404(admin_token):
 # ==================== 状态不可由订单接口指定 ====================
 # 订单状态改为由运单状态纯派生(见 app/services/order_status.py):
 # 订单接口交出改状态的能力,status / signed_date 两个字段已从 schema 移除。
-# 下面三条钉住"交出去"这个事实 —— 尤其 extra="forbid",否则调用方还在传 status,
-# 接口会返回 200 但库里没变(本项目反复防的「保存了但没生效」)。
+# 下面两条参数化把两个字段 × 建单/改单都钉住 —— 尤其 extra="forbid",否则调用方
+# 还在传,接口会返回 200 但库里没变(本项目反复防的「保存了但没生效」)。
+# signed_date 比 status 更危险:静默接受会重新造出「未签收却带签收日期」的数据。
 
 
-async def test_create_order_rejects_status_field(admin_token):
-    """extra="forbid":传已移除的 status 必须 422,不能静默忽略。"""
+@pytest.mark.parametrize("field,value", [
+    ("status", "已发货"),
+    ("signed_date", "2026-01-01"),
+])
+async def test_create_order_rejects_removed_fields(admin_token, field, value):
+    """extra="forbid":建单传已移除的字段必须 422,不能静默忽略。"""
     async with _client() as c:
-        r = await _create(c, admin_token, status="已发货")
+        r = await _create(c, admin_token, **{field: value})
         assert r.status_code == 422, r.text
 
 
-async def test_update_order_rejects_status_field(admin_token):
+@pytest.mark.parametrize("field,value", [
+    ("status", "已签收"),
+    ("signed_date", "2026-01-01"),
+])
+async def test_update_order_rejects_removed_fields(admin_token, field, value):
     """改单路径同理 —— 这是「保存了但没生效」的防线。"""
     async with _client() as c:
         oid = (await _create(c, admin_token)).json()["id"]
         r = await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
-                        json={"status": "已签收"})
+                        json={field: value})
         assert r.status_code == 422, r.text
 
 
