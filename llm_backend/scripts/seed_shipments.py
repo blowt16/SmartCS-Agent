@@ -38,6 +38,7 @@ import app.core.database  # noqa: E402 —— Windows Selector 事件循环补�
 from sqlalchemy import delete, select, update  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 
+from app.api.admin.logistics import parse_trace  # noqa: E402
 from app.core.database import AsyncSessionLocal  # noqa: E402
 from app.core.logger import get_logger  # noqa: E402
 from app.models.order import Order  # noqa: E402
@@ -207,7 +208,7 @@ async def main() -> int:
                 # ⚠️ 判据必须按"末节点 datetime ≤ now",不能按旧的
                 #    "shipped_at == today" —— 那个对"shipped_at=昨天、模板跨多天"
                 #    完全无效,而「已退货」的 signed_at 是 NULL,
-                #    接口层的 parse_trace 不会卡它的末节点上界,只能靠这条兜住。
+                #    parse_trace 不会卡它的末节点上界,只能靠这条兜住。
                 last_node = (datetime.combine(shipped_at, time(hour=9))
                              + timedelta(hours=MAX_OFFSET[shipment_status]))
                 if last_node > datetime.now(timezone.utc).replace(tzinfo=None):
@@ -216,6 +217,12 @@ async def main() -> int:
                     continue
 
                 trace = build_trace(shipped_at, shipment_status)
+                # 自检:模板是静态的,但手改坏时没有任何东西会拦住它 ——
+                # 种子绕过接口直接写库,坏数据会静默进库。
+                # 这条覆盖"节点严格递增"与"落在 [shipped_at, signed_at] 内",
+                # 是上面护栏二(只兜"不落到未来")覆盖不到的两个方向。
+                if trace:
+                    parse_trace(trace, shipped_at, signed_at)
 
             digits = "".join(ch for ch in order_no if ch.isdigit()) or f"{index + 1:03d}"
             rows.append({
