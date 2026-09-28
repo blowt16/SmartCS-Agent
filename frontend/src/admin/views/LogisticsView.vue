@@ -109,7 +109,12 @@
                 :text="row.status"
                 :color="STATUS_COLOR[row.status] || 'gray'"
               />
-              <StatusBadge v-else text="未录入" color="gray" />
+              <!-- 「未录入」不是运单状态,是"这里还没有数据"的占位 —— 用虚线轮廓而不是色号,
+                   既语义准确,也把 gray 让给真实状态(否则与「已退货」渲染成一模一样) -->
+              <span
+                v-else
+                class="inline-block text-xs px-2 py-0.5 rounded-full whitespace-nowrap border border-dashed border-gray-300 text-gray-400"
+              >未录入</span>
             </td>
             <td class="px-4 py-3 whitespace-nowrap">{{ row.shipped_at || '—' }}</td>
             <td class="px-4 py-3 whitespace-nowrap">{{ row.signed_at || '—' }}</td>
@@ -271,8 +276,10 @@ const ORDER_STATUSES = ['处理中', '已发货', '已签收', '售后处理中'
 const CARRIERS = ['京东物流', '顺丰速运', '中通快递', '圆通速递',
                   '申通快递', '韵达快递', '邮政EMS', '德邦快递'];
 // 徽章配色在页面里决定(StatusBadge 不做「传 status 自动配色」)
-// ⚠️「待揽收」用 slate 不用 gray —— gray 留给「未录入」徽章(本文件 L107-112)。
-//    两者同列且语义相反(一个等揽收、一个还没建单),新数据下会成排出现。
+// ⚠️「待揽收」用 slate 不用 gray —— gray 已被真实状态「已退货」占用
+//    (「未录入」是虚线轮廓的占位,不占色号),同列必须能分开。
+// 键集必须覆盖 STATUSES 全部 8 值;缺键会静默落到下面渲染处的 'gray' 兜底,
+// 与「已退货」撞色。顺序无关 —— 本对象按状态名取值。
 const STATUS_COLOR = {
   待揽收: 'slate', 已揽收: 'blue', 运输中: 'green', 派送中: 'amber',
   已签收: 'teal', 异常: 'red', 退货中: 'purple', 已退货: 'gray',

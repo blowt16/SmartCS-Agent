@@ -26,8 +26,10 @@ const MAP = {
   teal: 'bg-teal-100 text-teal-600',
   // 运单「退货中」用
   purple: 'bg-purple-100 text-purple-600',
-  // 运单「待揽收」用:与「未录入」的 gray 区分(同列且语义相反)
-  slate: 'bg-slate-100 text-slate-600',
+  // 运单「待揽收」用。
+  // ⚠️ 必须是 slate-200/700 而不是 100/600 —— slate-100 与 gray-100 的 RGB 距离
+  //    只有 4(同色系相邻两档是 22),在 12px 徽章上肉眼分不出。
+  slate: 'bg-slate-200 text-slate-700',
 };
 
 const colorClass = computed(() => MAP[props.color] || MAP.gray);
