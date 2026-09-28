@@ -16,7 +16,8 @@ from typing import Optional
 
 # 订单状态(5 个)。
 # ⚠️ 顺序即控制台环形图的图例顺序,与前端 ConsoleView.vue 的 ORDER_COLORS 按下标绑定 ——
-#    调整顺序必须同步改那个数组,否则颜色与图例错位(而且没有任何测试会红)。
+#    调整顺序会红 test_admin_console.py 的顺序断言,但【前端颜色错位没有任何测试能发现】,
+#    必须人工同步那个数组。
 ORDER_STATUSES = ["处理中", "已发货", "已签收", "售后处理中", "已退款·交易关闭"]
 
 # 运单状态(8 个)。顺序即物流页状态下拉顺序。
@@ -49,7 +50,8 @@ def derive_order_status(shipment_status: str) -> str:
 
     入参必须来自 SHIPMENT_STATUSES(由接口层 schema 的正则保证)。
     用 [] 而不是 .get() —— 映射表缺少某个运单状态时应当立刻抛 KeyError,
-    而不是静默返回 None 把订单状态写成空值(那会绕过 NOT NULL 变成 500)。
+    而不是静默返回 None。写 None 不会"绕过"约束,只会把错误推迟到 flush
+    才以 NOT NULL 违约(500)爆出来,那时的现场信息少得多。
     """
     return SHIPMENT_TO_ORDER[shipment_status]
 
@@ -88,5 +90,8 @@ def sync_order_from_shipment(
     ⚠️ 入参用【值】而不是 Shipment 对象。调用方 rollback 会让 session 里所有
     ORM 对象过期,之后读属性触发惰性刷新、异步下抛 MissingGreenlet
     (项目踩过的坑,orders.py:115 有同款注释)。传值就没有这个风险。
+
+    ⚠️ order 不标注类型:标注需要 import app.models.order,会破坏本模块
+       "只 import 标准库"的约束(models 侧已有注释反向指向本模块,更容易成环)。
     """
     order.status, order.signed_date = derive_order_fields(shipment_status, signed_at)
