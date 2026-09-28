@@ -132,7 +132,8 @@ async def test_order_status_returns_all_five_values(admin_token):
 
     ⚠️ 顺序敏感:后端按 ORDER_STATUSES(app/services/order_status.py)的顺序生成,
        前端 ConsoleView 的 ORDER_COLORS 按下标绑定 —— 重排这个列表会让环形图
-       颜色整体错位,而且【没有任何测试会红】(这条只断言名字,不看颜色)。
+       颜色整体错位。这里红了只说明顺序变了,不代表颜色对上了:
+       本用例只断言名字,【前端颜色错位没有任何测试能发现】,必须人工同步那个数组。
     """
     async with _client() as c:
         d = (await c.get(CHARTS_URL, headers={"Authorization": f"Bearer {admin_token}"})).json()
