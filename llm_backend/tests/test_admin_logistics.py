@@ -1364,7 +1364,7 @@ async def test_signed_without_date_mirrors_to_order(admin_token):
         assert d is None
 
 
-# ==================== 并发防御分支(StaleDataError -> 404) ====================
+# ============ 并发防御 / 事务边界(StaleDataError -> 404、flush 载荷) ============
 
 
 def _arm_stale_flush(mp):
@@ -1382,9 +1382,10 @@ def _arm_stale_flush(mp):
         这个方法(实测:包住 execute+commit 后计数为 0)。所以 autouse fixture 与
         本文件那几个直连库的助手都安全,`get_db` 收尾那次 commit 同理。
       · 只抛第一次 —— 后续调用原样转发。
-      · 作用域用 `monkeypatch.context()` 收紧到"那一次请求"。**这层不能省**:
-        全局 patch 会打到 `create_shipment` 里自己那次 `await db.flush()` 上,
-        造数助手 `_new_shipment` 先炸,用例根本走不到目标请求。
+      · 作用域用 `monkeypatch.context()` 收紧到"那一次请求" —— 收紧作用域、断言前
+        保证还原,避免后续调用被卷入。全局 patch 会打到 `create_shipment` 里自己那次
+        `await db.flush()` 上,造数助手 `_new_order` / `_new_shipment` 先炸,用例
+        根本走不到目标请求(实测先炸的是 `_new_order`,它在 `_new_shipment` 之前)。
 
     返回调用计数器。用例必须断言 `calls["n"] == 1` 自证:少了它,一个在走到
     flush 之前就返回的请求(比如被前面某条校验提前 400)也能让用例"绿"，
@@ -1476,12 +1477,21 @@ async def test_delete_flush_is_load_bearing(admin_token, monkeypatch):
     做法:注入一个必然失败的写入(把 order.status 设成 None -> NOT NULL 违约),
     但【不抛异常】—— 失败要留到 flush/commit 那一步,才是真实的现场。
 
-      · 有 flush   -> 失败发生在响应生成之前 -> 500(客户端知道没成功)
+      · 有 flush   -> 失败发生在响应生成之前 -> 非 2xx(客户端知道自己没成功)
       · 去掉 flush -> 失败滑到 get_db 的 commit -> 200 而数据没动(本项目反复防的
                      「保存了但没生效」)
 
-    ⚠️ 500 是【期望值】,不是"服务器炸了"—— 这里要的正是"响亮地失败"。
-       所以断言写成 `== 500`,把上面那个 200 静默版明确区分出来。
+    ⚠️ 不断言具体是 500,只要求"响亮"(>= 400):本用例要守的性质是「失败必须响亮、
+       客户端拿不到成功状态」,500 只是当且实现的一个载体 —— 将来若给本端点补一条
+       `IntegrityError -> 409`(与 PUT 端点对齐),那是行为变好,不该让这条测试
+       无辜变红。
+
+    ⚠️ 两条断言各守各的,【别把"库里数据未变"当成能拦住本回归的主判据】——
+       实测(变异 B:删掉那段 flush,同时把状态码断言临时换成 print):
+       它**照样通过**。原因是 `get_db` 的 `except Exception` 会回滚,
+       库里确实一行没动 —— 「数据未变」成立,露馅的只有「客户端拿到 200」。
+       所以拦住"flush 被删"的恰恰是上面那条状态码断言,它不能省。
+       下面两条守的是另一件事:失败答复发出后数据是否真的原样(有没有留下半截效果)。
     """
     from app.api.admin import logistics as logistics_mod
 
@@ -1496,10 +1506,15 @@ async def test_delete_flush_is_load_bearing(admin_token, monkeypatch):
             mp.setattr(logistics_mod, "sync_order_from_shipment", _bad_sync)
             r = await c.delete(f"/api/admin/logistics/{s['id']}",
                                headers=_bearer(admin_token))
-        assert r.status_code == 500, (
-            f"注入了必然失败的写入,有 flush 时应当响亮地 500;实际 {r.status_code}: {r.text}")
-        # 失败之后库里必须原样(那条 DELETE 已经回滚)—— 不能留下半截效果
+        # ⚠️ 这里不断言具体是 500 —— 本用例要守的性质是「失败必须响亮、
+        #    客户端拿不到成功状态」。将来若给本端点补 IntegrityError -> 409 之类的
+        #    映射(与 PUT 端点对齐),那是行为变好,不该让这条测试无辜变红。
+        assert r.status_code >= 400, (
+            f"注入了必然失败的写入,失败必须响亮(客户端不能拿到成功状态);"
+            f"实际 {r.status_code}: {r.text}")
+        # 失败之后库里必须原样(那条 DELETE 已经回滚)—— 不能留下半截效果。
+        # (注意:这一条拦不住"flush 被删",见 docstring 的实测记录)
         row = next(x for x in (await _list(c, admin_token))["items"]
                    if x["order_no"] == o["order_no"])
-        assert row["id"] == s["id"], "500 之后运单不该真的被删掉"
+        assert row["id"] == s["id"], "失败之后运单不该真的被删掉"
         assert row["order_status"] == "处理中"
