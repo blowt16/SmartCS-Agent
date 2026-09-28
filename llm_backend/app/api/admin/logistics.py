@@ -11,17 +11,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.database import get_db
 from app.models.order import Order
 from app.models.shipment import Shipment
 from app.schemas.admin import (
-    SHIPPABLE_ORDER_STATUSES,
     TRACE_MAX,
     UNRECORDED,
     ShipmentCreate,
     ShipmentUpdate,
 )
+from app.services.order_status import NO_SHIPMENT_ORDER_STATUS, sync_order_from_shipment
 
 router = APIRouter()
 
@@ -152,16 +153,22 @@ async def list_logistics(
     order_status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """物流列表:列出【所有已发货及之后的订单】∪【任何已有运单的订单】。
+    """物流列表:列出【已有运单的订单】∪【还没建运单的订单】= 全部订单。
 
     驱动表是 orders 不是 shipments —— 未录物流的订单也要出现在列表里
-    (标「未录入」)。第二个 OR 分支保证订单状态被改回「处理中」时,
-    它的运单不会从页面上隐身。
+    (标「未录入」),否则永远没有入口为它补录第一条运单。
     """
-    # 第一个条件保证"没隐身":已发货及之后的订单(含未录入) ∪ 已有运单的订单
+    # 有运单的 ∪ 还没建运单的(需要补录)。
+    # 第二个分支是「补录」入口的唯一来源 —— 少了它,没建运单的订单不会出现在
+    # 物流页,也就永远无法为它创建第一条运单。
+    #
+    # ⚠️ 这条护栏现在是"由派生逻辑天然满足",不是一段显式校验代码。
+    #    旧结构里它防的是"订单状态被改回处理中导致运单隐身";新模型下那种脏数据
+    #    既不能经 API 构造(订单 PUT 已不接受 status),也不会由正常流程产生。
+    #    【不要去找一段不存在的校验代码。】
     conds = [or_(
-        Order.status.in_(SHIPPABLE_ORDER_STATUSES),
         Shipment.id.isnot(None),
+        Order.status == NO_SHIPMENT_ORDER_STATUS,
     )]
 
     kw = (keyword or "").strip()
@@ -301,10 +308,15 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
     if exists_id is not None:
         raise HTTPException(status_code=409, detail=f"订单 {payload.order_no} 已有运单，请勿重复创建")
 
-    if order.status not in SHIPPABLE_ORDER_STATUSES:
+    # 门槛反转(旧规则是"只有已发货及之后才能建运单")。
+    # 纯派生下「非处理中」等价于「已有运单」,所以这条主要是给【脏数据】兜底:
+    # 万一哪条订单状态不是「处理中」却没有运单,上面那个 409 放行、这里拦住,
+    # 给一个能指导修改的文案。(正常数据下上面的 409 会先命中。)
+    if order.status != NO_SHIPMENT_ORDER_STATUS:
         raise HTTPException(
             status_code=400,
-            detail=f"订单 {payload.order_no} 当前状态为「{order.status}」，只有已发货及之后的订单才能建运单",
+            detail=f"订单 {payload.order_no} 当前状态为「{order.status}」，"
+                   f"只有「{NO_SHIPMENT_ORDER_STATUS}」的订单才能建运单",
         )
 
     # explicit_clear 也要接上,别让建单路径与编辑路径行为不一致:
@@ -335,6 +347,14 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
         signed_at=signed_at,
         trace=trace,
     )
+    # ⚠️ 必须在 db.add 之前 —— sync 会发出一条 orders 的 UPDATE。
+    #    若放在下面 try 里那次 flush 之后,订单 UPDATE 就脱出 try,
+    #    挂在后续重取查询的 autoflush 上,失败时直接在 try 外抛 -> 500。
+    #
+    # ⚠️ 不要以为"待揽收→处理中是恒等映射所以这里不会失败":
+    #    ShipmentCreate.status 接受全部 8 个值,管理员直接选「已签收」时
+    #    订单会被真的推到「已签收」并发出真实 UPDATE。
+    sync_order_from_shipment(order, shipment.status, shipment.signed_at)
     try:
         db.add(shipment)
         # flush 必须显式写:add() 本身不抛异常,冲突要到 flush/autoflush/commit 才暴露。
@@ -414,14 +434,35 @@ async def update_shipment(
     order_no = shipment.order_no
     tracking_no = data.get("tracking_no", shipment.tracking_no)
 
+    # ⚠️ Order 查询必须在 setattr 循环之前。
+    #    放在 setattr 之后会触发 autoflush,把未提交的运单改动
+    #    (可能撞 tracking_no 唯一键)刷进库,IntegrityError 从这次 SELECT 抛出
+    #    -> 在下面 try 之外 -> 500 而不是 409。
+    order = (await db.execute(
+        select(Order).where(Order.order_no == order_no)
+    )).scalar_one_or_none()
+    if order is None:
+        # FK 保证订单必在;走到这里说明数据被外力破坏,给可读的 400 而不是
+        # NoResultFound -> 500
+        raise HTTPException(status_code=400, detail=f"订单不存在: {order_no}")
+
     for field, value in data.items():
         setattr(shipment, field, value)
 
+    # 同步必须在 setattr 之后取运单的 effective 值(此时各字段已是新值)
+    sync_order_from_shipment(order, shipment.status, shipment.signed_at)
+
+    # ⚠️ StaleDataError 单独处理:并发下运单被别的请求删掉时,UPDATE 匹配 0 行,
+    #    SQLAlchemy 抛的是 StaleDataError 而【不是】IntegrityError
+    #    (实测 MRO: StaleDataError -> SQLAlchemyError)。少这一支就是 500。
     try:
         await db.flush()
     except IntegrityError as e:
         await db.rollback()
         raise _conflict_409(e, order_no, tracking_no)
+    except StaleDataError:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail=f"运单已被删除: {shipment_id}")
 
     row = (await db.execute(
         select(Order, Shipment)
@@ -433,17 +474,9 @@ async def update_shipment(
 
 @router.delete("/{shipment_id}")
 async def delete_shipment(shipment_id: int, db: AsyncSession = Depends(get_db)):
-    """删除运单。订单不会被删,删除后它回到列表里的「未录入」行。
+    """删除运单。订单回「处理中」,签收日期清空。
 
-    与建单/编辑端点【刻意不同】的两处,理由都写在这里而不是让人去猜:
-      · **不显式 flush** —— 那两处 flush 是为了把唯一键冲突收敛成 409、
-        并回读 join 后的行;这里两者都不需要(返回体是常量)。
-      · **不加 `_conflict_409` 那种按约束名分支的兜底** —— 连库查过,
-        全库【没有任何外键指向 shipments】,DELETE 也不可能违反 UNIQUE,
-        所以删除路径上 IntegrityError 不可达。
-    真正的删除失败(如并发下别人已删)在 SQLAlchemy 里只发 SAWarning
-    (非版本化 mapper 的 DELETE rowcount 不匹配),不会 500 —— 而且语义上没错:
-    目标状态(行没了)已达成。
+    删完该订单在物流页回到「未录入」行,可以重新补录 —— 演示流程可循环。
     """
     shipment = (await db.execute(
         select(Shipment).where(Shipment.id == shipment_id)
@@ -451,5 +484,31 @@ async def delete_shipment(shipment_id: int, db: AsyncSession = Depends(get_db)):
     if shipment is None:
         raise HTTPException(status_code=404, detail=f"运单不存在: {shipment_id}")
 
+    order = (await db.execute(
+        select(Order).where(Order.order_no == shipment.order_no)
+    )).scalar_one_or_none()
+    if order is None:
+        raise HTTPException(status_code=400, detail=f"订单不存在: {shipment.order_no}")
+
     await db.delete(shipment)
+    # 没有运单就没有派生来源,订单回到起点
+    sync_order_from_shipment(order, None, None)
+
+    # ⚠️ 本端点必须显式 flush —— 与 2026-09-27 spec 的结论相反。
+    # 原结论"不 flush 是安全的"建立在「失败会 500」上,而那个前提【不成立】:
+    # get_db 的 commit 跑在响应发出【之后】(fastapi/routing.py:140-151),
+    # 而 starlette 的兜底不会再补一个 500(middleware/errors.py:180-181)。
+    # 于是隐式 commit 失败时客户端拿到的是 200 {"deleted": true}、库里一行没动 ——
+    # 正是本项目在 logistics.py:379-380 明令禁止的「保存了但没生效」。
+    #
+    # ⚠️ StaleDataError 必须单独接:本端点现在写两张表(DELETE shipments +
+    #    UPDATE orders)。并发场景(别人先删掉了订单 -> FK CASCADE 一并删掉运单)
+    #    下,UPDATE 匹配 0 行抛的是 StaleDataError,它【不是】IntegrityError。
+    #    既有注释"只发 SAWarning"只在仅有一条 DELETE 语句时成立。
+    try:
+        await db.flush()
+    except StaleDataError:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail=f"运单已被删除: {shipment_id}")
+
     return {"id": shipment_id, "deleted": True}

@@ -72,9 +72,7 @@ class TicketUpdate(BaseModel):
 # 状态集定义在 app/services/order_status.py(唯一事实来源),此处只做引用 ——
 # 不要再在这里写一份同义集合,两份必然漂移。
 # CARRIERS 是物流模块独有的,仍留在这里。
-# 注意:SHIPPABLE_ORDER_STATUSES 暂时保留,它到 Task 8 才删(还有两处使用没清)。
 
-SHIPPABLE_ORDER_STATUSES = ["已发货", "已送达", "已签收"]      # TODO(Task 8): 删
 CARRIERS = ["京东物流", "顺丰速运", "中通快递", "圆通速递",
             "申通快递", "韵达快递", "邮政EMS", "德邦快递"]
 UNRECORDED = "未录入"          # 列表筛选用展示态,不是 shipments.status 的取值

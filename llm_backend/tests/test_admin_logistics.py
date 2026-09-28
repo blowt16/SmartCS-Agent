@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 # main 必须在【collection 阶段】导入(与 test_admin_orders.py 同因):
 # 从仓库根跑 pytest 时,根目录另有一个无关的 D:\SmartCS-Agent\main.py,
@@ -1148,3 +1148,186 @@ async def test_shipments_tracking_no_unique_index():
         ))
         defs = [row[0] for row in r]
     assert any("UNIQUE" in d for d in defs), defs
+
+
+# ==================== 订单状态由运单派生(新模型核心) ====================
+
+
+async def test_create_shipment_for_processing_order_succeeds(admin_token):
+    """门槛反转:处理中订单现在【可以】建运单。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": o["order_no"], "tracking_no": "T-DRV-PROC-1",
+            "carrier": "京东物流", "status": "待揽收",
+        })
+        assert r.status_code == 200, r.text
+        # 待揽收 → 处理中,订单状态不变
+        assert r.json()["order_status"] == "处理中"
+        assert r.json()["status"] == "待揽收"
+
+
+async def test_create_shipment_can_jump_straight_to_signed(admin_token):
+    """建单时可直接选终态,订单被真的推过去。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": o["order_no"], "tracking_no": "T-DRV-SIGN-1",
+            "carrier": "京东物流", "status": "已签收",
+            "shipped_at": "2026-09-01", "signed_at": "2026-09-05",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["order_status"] == "已签收"
+
+
+async def test_create_shipment_on_dirty_signed_order_400(admin_token):
+    """脏数据兜底:订单是「已签收」却没有运单 → 400 并给出可读文案。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        await _force_order_status(o["order_no"], "已签收")
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": o["order_no"], "tracking_no": "T-DRV-DIRTY-1",
+            "carrier": "京东物流",
+        })
+        assert r.status_code == 400, r.text
+        assert "处理中" in r.json()["detail"]
+
+
+async def test_edit_shipment_drives_order_status(admin_token):
+    """运单状态一变,订单跟着变;签收日期直接跟随运单。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        sid = (await _new_shipment(c, admin_token, o["order_no"],
+                                   "T-DRV-EDIT-1", status="待揽收"))["id"]
+
+        r = await c.put(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token),
+                        json={"status": "已揽收"})
+        assert r.status_code == 200, r.text
+        assert r.json()["order_status"] == "已发货"
+
+        r = await c.put(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token),
+                        json={"status": "已签收", "shipped_at": "2026-09-01",
+                              "signed_at": "2026-09-05"})
+        assert r.status_code == 200, r.text
+        assert r.json()["order_status"] == "已签收"
+        assert r.json()["signed_at"] == "2026-09-05"
+
+
+async def test_order_signed_date_mirrors_shipment(admin_token):
+    """订单的签收日期 = 运单的签收日期,不各算各的。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        sid = (await _new_shipment(c, admin_token, o["order_no"], "T-DRV-MIR-1"))["id"]
+        await c.put(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token),
+                    json={"status": "已签收", "shipped_at": "2026-09-01",
+                          "signed_at": "2026-09-05"})
+        async with AsyncSessionLocal() as s:
+            d = (await s.execute(
+                select(Order.signed_date).where(Order.order_no == o["order_no"])
+            )).scalar_one()
+        assert d.isoformat() == "2026-09-05"
+
+
+async def test_tracking_no_conflict_returns_409_not_500(admin_token):
+    """钉住 Order 查询的落点:放在 setattr 之后会变成 500。"""
+    async with _client() as c:
+        a = await _new_order(c, admin_token)
+        b = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, a["order_no"], "T-DRV-DUP-A")
+        rb = await _new_shipment(c, admin_token, b["order_no"], "T-DRV-DUP-B")
+        # 把 b 的运单号改成 a 的 -> 撞唯一键
+        r = await c.put(f"/api/admin/logistics/{rb['id']}",
+                        headers=_bearer(admin_token), json={"tracking_no": "T-DRV-DUP-A"})
+        assert r.status_code == 409, f"期望 409 实际 {r.status_code}: {r.text}"
+
+
+async def test_delete_shipment_resets_order(admin_token):
+    """删运单 -> 订单回「处理中」,签收日期清空。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": o["order_no"], "tracking_no": "T-DRV-DEL-1",
+            "carrier": "京东物流", "status": "已签收",
+            "shipped_at": "2026-09-01", "signed_at": "2026-09-05",
+        })
+        sid = r.json()["id"]
+        assert r.json()["order_status"] == "已签收"
+
+        r = await c.delete(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token))
+        assert r.status_code == 200, r.text
+
+        async with AsyncSessionLocal() as s:
+            row = (await s.execute(
+                select(Order.status, Order.signed_date)
+                .where(Order.order_no == o["order_no"])
+            )).one()
+        assert row[0] == "处理中"
+        assert row[1] is None
+
+
+async def test_shipment_drives_order_through_full_flow(admin_token):
+    """建单(处理中) → 建运单(待揽收) → 逐级推进 → 订单一路跟随。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        assert o["status"] == "处理中"
+
+        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
+            "order_no": o["order_no"], "tracking_no": "T-DRV-FLOW-1",
+            "carrier": "京东物流", "status": "待揽收",
+        })
+        sid = r.json()["id"]
+        assert r.json()["order_status"] == "处理中"
+
+        for ship_status, want_order in [("已揽收", "已发货"),
+                                        ("运输中", "已发货"),
+                                        ("派送中", "已发货")]:
+            r = await c.put(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token),
+                            json={"status": ship_status})
+            assert r.status_code == 200, r.text
+            assert r.json()["order_status"] == want_order, ship_status
+
+        # ⚠️ shipped_at 必须在这条 PUT 里补上 —— 规则 B 要求「已签收的运单必须有发货时间」,
+        #    而这条流程前四步只推了状态、一次都没设过发货日期。少了它这里是 400
+        #    (旧写法漏了,实测红)。
+        r = await c.put(f"/api/admin/logistics/{sid}", headers=_bearer(admin_token),
+                        json={"status": "已签收", "shipped_at": "2026-09-20",
+                              "signed_at": "2026-09-26"})
+        assert r.status_code == 200, r.text
+        assert r.json()["order_status"] == "已签收"
+        assert r.json()["signed_at"] == "2026-09-26"
+
+
+@pytest.mark.parametrize("ship_status,want_order", [
+    ("异常", "售后处理中"),
+    ("退货中", "售后处理中"),
+    ("已退货", "已退款·交易关闭"),
+])
+async def test_aftersale_shipment_states_drive_order(admin_token, ship_status, want_order):
+    """售后三态:异常/退货中 → 售后处理中;已退货 → 已退款·交易关闭。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        r = await _new_shipment(c, admin_token, o["order_no"],
+                                f"T-DRV-AF-{ship_status}", status=ship_status,
+                                shipped_at="2026-09-01")
+        assert r["order_status"] == want_order
+
+
+async def test_signed_without_date_mirrors_to_order(admin_token):
+    """运单「已签收、日期不详」时,订单也跟着是 NULL —— 两边一致。
+
+    ⚠️ 要造出「日期不详」必须【显式传 signed_at: null】。建单路径的 fill_today=True
+       会把"没传日期"补成当天(规则 A,由 test_create_signed_fills_today 钉住,
+       那是有意行为),所以只靠"不传"造不出这个状态 —— 实测会拿到今天的日期。
+    """
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        r = await _new_shipment(c, admin_token, o["order_no"], "T-DRV-NODATE-1",
+                                status="已签收", shipped_at="2026-09-01",
+                                signed_at=None)
+        assert r["order_status"] == "已签收"
+        assert r["signed_at"] is None
+        async with AsyncSessionLocal() as s:
+            d = (await s.execute(
+                select(Order.signed_date).where(Order.order_no == o["order_no"])
+            )).scalar_one()
+        assert d is None
