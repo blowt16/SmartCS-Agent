@@ -20,9 +20,10 @@ class Shipment(Base):
         unique=True,
     )
     carrier = Column(String(50), nullable=False)                  # 8 选 1
-    status = Column(String(20), nullable=False, default="待揽收")   # 6 选 1
+    status = Column(String(20), nullable=False, default="待揽收")   # 8 选 1,见 app/services/order_status.py
     shipped_at = Column(Date, nullable=True)                      # 发货时间
-    # 签收时间:仅 status='已签收' 时有值;其余状态由接口强制置 NULL(与 orders.signed_date 同款规则)
+    # 签收时间:仅 status='已签收' 时有值;其余状态由接口强制置 NULL
+    # (orders.signed_date 是本值投影过去的,不独立计算)
     signed_at = Column(Date, nullable=True)
     # 轨迹:一行一个节点,格式强制为「YYYY-MM-DD HH:MM | 地点 | 描述」(表内不做约束,由接口校验)
     trace = Column(Text, nullable=True)

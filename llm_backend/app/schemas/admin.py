@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.services.order_status import SHIPMENT_STATUSES
+
 
 class ProductCreate(BaseModel):
     sku: str = Field(..., pattern=r"^JD-[A-Z]{3}-\d{3}$")
@@ -65,10 +67,12 @@ class TicketUpdate(BaseModel):
 
 
 # ==================== 物流:枚举常量与入参 ====================
-# 常量只在这里定义一次,logistics.py 反向 import(方向:api → schemas,无循环导入)
+# 状态集定义在 app/services/order_status.py(唯一事实来源),此处只做引用 ——
+# 不要再在这里写一份同义集合,两份必然漂移。
+# CARRIERS 是物流模块独有的,仍留在这里。
+# 注意:SHIPPABLE_ORDER_STATUSES 暂时保留,它到 Task 8 才删(还有两处使用没清)。
 
-SHIPPABLE_ORDER_STATUSES = ["已发货", "已送达", "已签收"]
-SHIPMENT_STATUSES = ["待揽收", "已揽收", "运输中", "派送中", "已签收", "异常"]
+SHIPPABLE_ORDER_STATUSES = ["已发货", "已送达", "已签收"]      # TODO(Task 8): 删
 CARRIERS = ["京东物流", "顺丰速运", "中通快递", "圆通速递",
             "申通快递", "韵达快递", "邮政EMS", "德邦快递"]
 UNRECORDED = "未录入"          # 列表筛选用展示态,不是 shipments.status 的取值
