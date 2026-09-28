@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 
 # main 必须在【collection 阶段】导入(与 test_admin_orders.py 同因):
 # 从仓库根跑 pytest 时,根目录另有一个无关的 D:\SmartCS-Agent\main.py,
@@ -26,6 +27,8 @@ sys.path.insert(0, _BACKEND)
 
 from main import app  # noqa: E402
 from app.api.admin.logistics import TraceFormatError, parse_trace  # noqa: E402
+from app.core.database import AsyncSessionLocal  # noqa: E402
+from app.models.order import Order  # noqa: E402
 
 BUYER = "测试买家"
 SKU = "JD-BED-001"          # 种子商品,current_price 9957.50
@@ -201,11 +204,21 @@ def test_parse_trace_does_not_split_on_unicode_separators():
 
 # ==================== 造数助手 ====================
 
-async def _new_order(c, token, *, status="已发货", order_date="2026-09-20"):
+async def _new_order(c, token, *, order_date="2026-09-20"):
     """建一个测试订单。订单号由后端生成 ORD-xxx —— 不要自己造前缀,否则会跑挂
-    test_admin_orders.py::test_create_after_deleting_middle_order_no_collision。"""
+    test_admin_orders.py::test_create_after_deleting_middle_order_no_collision。
+
+    ⚠️ 订单状态恒为「处理中」(由运单派生,建单不可指定),所以 status 参数被删掉。
+       要造特定状态的订单:建单 → 建运单 → 推运单状态(见 _order_with_shipment_status)。
+
+    ⚠️ order_date 默认值【必须保留】。本文件大量轨迹校验用例依赖这个固定日期
+       (节点必须落在 [shipped_at, signed_at] 窗口内),删掉会连带炸一片。
+
+    ⚠️ 返回结构与改造前保持一致(dict),不要改成 tuple ——
+       本文件 59 处调用点写的是 order["order_no"] / order["id"]。
+    """
     r = await c.post("/api/admin/orders", headers=_bearer(token), json={
-        "product_sku": SKU, "buyer_name": BUYER, "status": status, "order_date": order_date,
+        "product_sku": SKU, "buyer_name": BUYER, "order_date": order_date,
     })
     assert r.status_code == 200, r.text
     return r.json()
@@ -231,6 +244,33 @@ async def _list(c, token, **params):
     return r.json()
 
 
+async def _order_with_shipment_status(c, token, shipment_status, **kw):
+    """建订单 + 建运单 + 推到指定运单状态,返回 (order, shipment)。
+
+    新模型下要造"订单处于某个状态"只能走这条路 —— 建单接口不再接受 status。
+    """
+    order = await _new_order(c, token)
+    sh = await _new_shipment(c, token, order["order_no"],
+                             f"T-{shipment_status}-{order['order_no']}",
+                             status=shipment_status, **kw)
+    return order, sh
+
+
+# ==================== 直连库造脏数据 ====================
+
+async def _force_order_status(order_no: str, status: str) -> None:
+    """直连库改订单状态,用于构造 API 已无法产生的脏数据。
+
+    ⚠️ 订单状态现在由运单派生、PUT 接口已不接受 status,所以"订单与运单对不上"
+       这种脏数据只能这样造。不要试图用 API 构造。
+    """
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            update(Order).where(Order.order_no == order_no).values(status=status)
+        )
+        await s.commit()
+
+
 # ==================== 列表 ====================
 
 async def test_list_item_fields(admin_token):
@@ -250,16 +290,20 @@ async def test_list_shape(admin_token):
 
 
 async def test_unrecorded_order_appears(admin_token):
-    """已发货但没录物流的订单必须出现在列表里,运单相关字段全为 null。"""
+    """没录物流的订单必须出现在列表里,运单相关字段全为 null。
+
+    ⚠️ 新模型下"还没建运单"的订单恒为「处理中」(旧模型里这里是「已发货」)——
+       没有运单就没有派生来源,订单停在 NO_SHIPMENT_ORDER_STATUS。
+    """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已发货")
+        order = await _new_order(c, admin_token)
         d = await _list(c, admin_token)
         row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
         assert row["id"] is None
         assert row["tracking_no"] is None
         assert row["status"] is None
         assert row["trace"] is None
-        assert row["order_status"] == "已发货"
+        assert row["order_status"] == "处理中"
 
 
 async def test_recorded_order_shows_shipment(admin_token):
@@ -277,14 +321,21 @@ async def test_recorded_order_shows_shipment(admin_token):
 
 
 async def test_orphan_shipment_not_hidden(admin_token):
-    """订单建过运单后被改回「处理中」,该行仍要出现 —— 否则运单隐身,编辑删除都做不到。"""
+    """有运单却被压回「处理中」的订单(脏数据),该行仍要出现 —— 否则运单隐身,编辑删除都做不到。
+
+    ⚠️ 造数必须直连库:新模型下订单状态由运单派生,订单 PUT 也已不接受 status,
+       经 API 构造不出"运单说运输中、订单却说处理中"这种对不上的数据。
+       运单推「运输中」(本应派生「已发货」)后把订单压回「处理中」。
+    """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已发货")
-        await _new_shipment(c, admin_token, order["order_no"], "TEST-0002")
-        await c.put(f"/api/admin/orders/{order['id']}", headers=_bearer(admin_token),
-                    json={"status": "处理中"})
+        order = await _new_order(c, admin_token)
+        await _new_shipment(c, admin_token, order["order_no"], "TEST-0002",
+                            status="运输中")
+        await _force_order_status(order["order_no"], "处理中")
         d = await _list(c, admin_token)
         row = next(x for x in d["items"] if x["order_no"] == order["order_no"])
+        # 自证脏数据真的对不上(否则这条用例会退化成"普通有运单的行")
+        assert row["status"] == "运输中"
         assert row["order_status"] == "处理中"
         assert row["id"] is not None
 
@@ -350,12 +401,19 @@ async def test_filter_unrecorded(admin_token):
 
 
 async def test_filter_by_order_status(admin_token):
+    """order_status 精确筛选。
+
+    ⚠️ 旧模型靠建单时传 status 造两种订单状态;新模型下订单状态只能由运单派生,
+       所以"订单处于某个状态"要走 建单 → 建运单(status=…)。「已送达」已从
+       订单状态集里删掉,这里用 5 值中的「已签收」。
+    """
     async with _client() as c:
-        await _new_order(c, admin_token, status="已送达")
-        await _new_order(c, admin_token, status="已发货")
-        d = await _list(c, admin_token, order_status="已送达")
-        assert len(d["items"]) == 1
-        assert d["items"][0]["order_status"] == "已送达"
+        a, _ = await _order_with_shipment_status(
+            c, admin_token, "已签收", shipped_at="2026-09-20", signed_at="2026-09-22")
+        await _order_with_shipment_status(c, admin_token, "待揽收")   # 仍是「处理中」
+        d = await _list(c, admin_token, order_status="已签收")
+        assert [x["order_no"] for x in d["items"]] == [a["order_no"]]
+        assert d["items"][0]["order_status"] == "已签收"
 
 
 async def test_sort_shipped_at_desc_nulls_last(admin_token):
@@ -422,13 +480,23 @@ async def test_filters_narrow_the_base_set(admin_token):
     """基础条件是不变量:任何筛选组合都是它的【严格收窄】,不存在"加了筛选反而多出行"。
 
     钉住 status 与 order_status 同时给时是"与"关系 —— 这条例外很容易被写反。
+
+    ⚠️ 旧写法用「已发货 + 未录入」的订单撑出这个差异(未录入 ⟹ 非处理中,交集为 0)。
+       新模型下订单状态由运单派生:【没有运单就恒为「处理中」】,那个组合再也造不出来
+       (造出来只能是脏数据)。改成两个「处理中」的订单 —— 都有运单/只有一单有运单,
+       同样能让"与"和"或"给出不同的行数,守卫的语义(收窄)不变。
     """
     async with _client() as c:
-        # 一个已发货未录入的订单:它能被 status=未录入 捞到,但订单状态不是处理中
-        await _new_order(c, admin_token, status="已发货")
+        # 两单都是「处理中」,但只有一单有运单 —— 于是两个筛选各自捞到的集合不同,
+        # "与"和"或"才会给出不同的行数(旧写法已经构造不出这个差异,见 docstring)。
+        a = await _new_order(c, admin_token)                        # 处理中 + 未录入
+        b = await _new_order(c, admin_token)                        # 处理中 + 有运单
+        await _new_shipment(c, admin_token, b["order_no"], "TEST-NARROW-1")
+        assert len((await _list(c, admin_token, order_status="处理中"))["items"]) == 2
         assert len((await _list(c, admin_token, status="未录入"))["items"]) == 1
-        assert len((await _list(c, admin_token,
-                               status="未录入", order_status="处理中"))["items"]) == 0
+        # 两个筛选同时给:"与" -> 1 行(只剩 a);若被写成"或" -> 2 行
+        d = await _list(c, admin_token, status="未录入", order_status="处理中")
+        assert [x["order_no"] for x in d["items"]] == [a["order_no"]]
 
 
 # ==================== 建单 ====================
@@ -441,7 +509,8 @@ async def test_create_ok(admin_token):
         assert d["order_no"] == order["order_no"]
         assert d["tracking_no"] == "TEST-C-1"
         assert d["status"] == "待揽收"
-        assert d["order_status"] == "已发货"
+        # 待揽收 → 订单仍是「处理中」(旧的"已发货"是建单时手工指定的,已删)
+        assert d["order_status"] == "处理中"
         assert d["product_name"] == order["product_name"]     # join 出来的字段也要有
         assert set(d) == ITEM_FIELDS
 
@@ -465,16 +534,6 @@ async def test_create_order_not_found(admin_token):
         assert "订单不存在" in r.json()["detail"]
 
 
-async def test_create_rejects_processing_order(admin_token):
-    """处理中且无运单的订单不能建运单。"""
-    async with _client() as c:
-        order = await _new_order(c, admin_token, status="处理中")
-        r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
-            "order_no": order["order_no"], "tracking_no": "TEST-C-4", "carrier": "京东物流"})
-        assert r.status_code == 400
-        assert "只有已发货及之后的订单才能建运单" in r.json()["detail"]
-
-
 async def test_create_rejects_duplicate_order(admin_token):
     """一单只能一个运单 —— 文案必须是「已有运单」,不能错报成运单号冲突。"""
     async with _client() as c:
@@ -489,30 +548,35 @@ async def test_create_rejects_duplicate_order(admin_token):
 async def test_create_duplicate_beats_processing_status(admin_token):
     """②「已有运单」必须判在 ③「状态合法」【之前】。
 
-    这条顺序是业务要求(端点里的注释写了理由):订单建过运单后被改回处理中时,
+    这条顺序是业务要求(端点里的注释写了理由):订单建过运单、状态却与运单对不上时,
     真实原因是"已有运单",报"状态不对"会误导管理员 —— 他改回状态就好了,
     但改了也没用,运单早就在了。
 
-    ⚠️ 少了这条用例,把两个校验块对调后【其余 21 条全绿】(实测确认),
+    ⚠️ 造数必须直连库,且脏数据要【同时】踩中两个校验:
+       有运单(触发 ②)+ 订单状态不是「处理中」(触发 ③)。
+       新模型下订单状态由运单派生、订单 PUT 也不再接受 status,
+       "有运单却不是处理中"经 API 已经构造不出来。
+
+    ⚠️ 少了这条用例,把两个校验块对调后【其余用例全绿】(实测确认),
     一个在单测里完全看不出来的改动就会让这条规则静默失效。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已发货")
+        order = await _new_order(c, admin_token)
         await _new_shipment(c, admin_token, order["order_no"], "TEST-C-21")
-        # 把订单改回处理中 —— 此时它既有运单、状态又不合法
-        r_put = await c.put(f"/api/admin/orders/{order['id']}", headers=_bearer(admin_token),
-                            json={"status": "处理中"})
-        # ⚠️ 这次 PUT 必须断言:它若 404/失败,订单状态仍是「已发货」,
-        # ③ 就【不会】触发 —— 只剩 ② 能触发,下面三条断言照样全绿,
-        # 这条用例会悄悄退化成一条普通的"重复运单"用例,顺序规则再次失去保护,
-        # 而它看起来是绿的。自查一次"状态真的改了吗",才排除这种退化。
-        assert r_put.status_code == 200, r_put.text
-        assert r_put.json()["status"] == "处理中"
+        await _force_order_status(order["order_no"], "已签收")   # 与运单对不上的脏数据
+        # ⚠️ 这里的自证不能省(旧版对应的是对那次 PUT 的断言):
+        # 若脏数据没生效、订单还是「处理中」,③ 就【不会】触发 —— 只剩 ② 能触发,
+        # 下面三条断言照样全绿,这条用例会悄悄退化成一条普通的"重复运单"用例,
+        # 顺序规则再次失去保护,而它看起来是绿的。
+        row = next(x for x in (await _list(c, admin_token))["items"]
+                   if x["order_no"] == order["order_no"])
+        assert row["id"] is not None                 # ② 的触发条件:已有运单
+        assert row["order_status"] == "已签收"        # ③ 的触发条件:状态不是「处理中」
         r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
             "order_no": order["order_no"], "tracking_no": "TEST-C-22", "carrier": "京东物流"})
         assert r.status_code == 409
         assert "已有运单" in r.json()["detail"]
-        assert "只有已发货及之后" not in r.json()["detail"]   # 不能报成状态问题
+        assert "只有「处理中」" not in r.json()["detail"]   # 不能报成状态问题
 
 
 async def test_create_rejects_duplicate_tracking_no(admin_token):
@@ -538,7 +602,7 @@ async def test_create_signed_fills_today(admin_token):
     (概率极低,但这类 flake 在 CI 上长期跑必然碰到,而且极难复现。)
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         before = datetime.now(timezone.utc).date().isoformat()
         d = await _new_shipment(c, admin_token, order["order_no"], "TEST-C-8",
                                 status="已签收", shipped_at="2026-09-20")
@@ -557,7 +621,7 @@ async def test_create_signed_with_explicit_null_keeps_null(admin_token):
     ⚠️ 这里不能用 `_new_shipment` 助手(它不便于表达"显式传 null"),直接发请求。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
             "order_no": order["order_no"], "tracking_no": "TEST-C-19",
             "carrier": "京东物流", "status": "已签收",
@@ -578,7 +642,7 @@ async def test_create_signed_at_cleared_when_not_signed(admin_token):
 
 async def test_create_rejects_signed_before_shipped(admin_token):
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
             "order_no": order["order_no"], "tracking_no": "TEST-C-10", "carrier": "京东物流",
             "status": "已签收", "shipped_at": "2026-09-20", "signed_at": "2026-09-18"})
@@ -589,7 +653,7 @@ async def test_create_rejects_signed_before_shipped(admin_token):
 async def test_create_rejects_signed_without_shipped(admin_token):
     """已签收但没发货时间 -> 400(规则 B 的第二条)。"""
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         r = await c.post("/api/admin/logistics", headers=_bearer(admin_token), json={
             "order_no": order["order_no"], "tracking_no": "TEST-C-11", "carrier": "京东物流",
             "status": "已签收"})
@@ -714,7 +778,7 @@ async def test_update_to_signed_fills_today(admin_token):
 
 async def test_update_from_signed_clears_signed_at(admin_token):
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-2",
                                 status="已签收", shipped_at="2026-09-20")
         assert s["signed_at"] is not None
@@ -779,7 +843,7 @@ async def test_update_trace_window_uses_effective_values(admin_token):
     漏了 effective 取值这条路径上窗口校验会静默失效 —— 这条用例专门钉它。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-7",
                                 status="已签收", shipped_at="2026-09-20", signed_at="2026-09-22")
         # 末节点晚于库里的 signed_at(2026-09-22) -> 应 400
@@ -807,7 +871,7 @@ async def test_update_can_clear_signed_at(admin_token):
     (spec §4.5 规则 A 下方的说明:本模块有意支持「已签收、日期不详」)。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-9",
                                 status="已签收", shipped_at="2026-09-20",
                                 signed_at="2026-09-22")
@@ -831,7 +895,7 @@ async def test_update_unrelated_field_keeps_null_signed_at(admin_token):
     管理员只改了承运商,签收日期自己冒出来,凭空造了一条没人录入的数据。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-11",
                                 status="已签收", shipped_at="2026-09-20", signed_at=None)
         assert s["signed_at"] is None       # 先自证 fixture 真的造出了"日期不详"
@@ -853,7 +917,7 @@ async def test_update_explicit_dates_are_applied(admin_token):
     「输入框变摆设」缺陷的镜像:那边是清不掉,这边是改不动。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-12",
                                 status="已签收", shipped_at="2026-09-20",
                                 signed_at="2026-09-22")
@@ -882,7 +946,7 @@ async def test_update_shipped_at_is_validated_against_new_value(admin_token):
     即直调接口能造出 `signed < shipped` 的数据,而规则 B 是 spec 说的"服务端兜底"。
     """
     async with _client() as c:
-        order = await _new_order(c, admin_token, status="已送达")
+        order = await _new_order(c, admin_token)
         s = await _new_shipment(c, admin_token, order["order_no"], "TEST-U-14",
                                 status="已签收", shipped_at="2026-09-20",
                                 signed_at="2026-09-22")
