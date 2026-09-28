@@ -5130,7 +5130,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1188 652" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+      <svg viewBox="0 0 1221 652" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
         <title id="archify-diagram-title">管理端端到端运行流程</title>
         <desc id="archify-diagram-description">由 Archify 生成的工作流图。</desc>
         <!-- Definitions -->
@@ -5156,16 +5156,16 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Swimlanes -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1120" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1153" height="104" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / 入口与鉴权链</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="176" width="1120" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="176" width="1153" height="104" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / 登录页与 API 入口</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="1120" height="104" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / 管理端五大模块</text>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="300" width="1153" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / 管理端六大模块</text>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="424" width="1120" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="424" width="1153" height="104" rx="10" class="c-lane" stroke-width="1"/>
         <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / 数据</text>
 
         <!-- Phase headers -->
@@ -5177,22 +5177,24 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <!-- Edge paths -->
         <path data-edge-from="admin_html" data-edge-to="login" data-edge-label="anonymous / denied" data-edge-key="0" data-edge-id="e_anon" data-composition-points="440,119;456,119;456,166;333,166;333,217" d="M 440 119 L 456 119 L 456 166 L 333 166 L 333 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <path data-edge-from="api_admin" data-edge-to="console" data-edge-label="×2" data-edge-key="1" data-edge-id="e_console" data-composition-points="981.6,269;981.6,290;192,290;192,367;176,367" d="M 981.6 269 L 981.6 290 L 192 290 L 192 367 L 176 367" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="console" data-edge-to="db" data-edge-label="读写" data-edge-key="2" data-edge-id="e_db_console" data-composition-points="112,393;112,481;920.6,481" d="M 112 393 L 112 481 L 920.6 481" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="knowledge" data-edge-to="db" data-edge-label="读写" data-edge-key="3" data-edge-id="e_db_knowledge" data-composition-points="619.2,393;619.2,414;981.6,414;981.6,465" d="M 619.2 393 L 619.2 414 L 981.6 414 L 981.6 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="orders" data-edge-to="db" data-edge-label="读写" data-edge-key="4" data-edge-id="e_db_orders" data-composition-points="1046.6,367;1172,367;1172,491;1042.6,491" d="M 1046.6 367 L 1172 367 L 1172 491 L 1042.6 491" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="products" data-edge-to="db" data-edge-label="读写" data-edge-key="5" data-edge-id="e_db_products" data-composition-points="333,393;333,544;981.6,544;981.6,517" d="M 333 393 L 333 544 L 981.6 544 L 981.6 517" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="tickets" data-edge-to="db" data-edge-label="读写" data-edge-key="6" data-edge-id="e_db_tickets" data-composition-points="843.6,341;843.6,325;912.6,325;912.6,449;981.6,449;981.6,465" d="M 843.6 341 L 843.6 325 L 912.6 325 L 912.6 449 L 981.6 449 L 981.6 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="admin_html" data-edge-to="token" data-edge-label="调 getMe() 校验四态" data-edge-key="7" data-edge-id="e_getme" data-composition-points="333,93;333,77;619.2,77;619.2,93" d="M 333 93 L 333 77 L 619.2 77 L 619.2 93" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="require_admin" data-edge-to="api_admin" data-edge-label="组级依赖保护" data-edge-key="8" data-edge-id="e_guard" data-composition-points="843.6,145;843.6,233;919.6,233" d="M 843.6 145 L 843.6 233 L 919.6 233" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="token" data-edge-to="require_admin" data-edge-label="JWT 通过" data-edge-key="9" data-edge-id="e_jwt" data-composition-points="689.2,119;745.6,119" d="M 689.2 119 L 745.6 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="api_admin" data-edge-to="login" data-edge-label="auth:unauthorized → 全局踢回登录态" data-edge-key="10" data-edge-id="e_kick" data-composition-points="981.6,217;981.6,201;333,201;333,217" d="M 981.6 217 L 981.6 201 L 333 201 L 333 217" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="api_admin" data-edge-to="knowledge" data-edge-label="×6" data-edge-key="11" data-edge-id="e_knowledge" data-composition-points="919.6,246.33333333333334;619.2,246.33333333333334;619.2,341" d="M 919.6 246.33333333333334 L 619.2 246.33333333333334 L 619.2 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="admin_html" data-edge-to="api_admin" data-edge-label="ok（role=admin）" data-edge-key="12" data-edge-id="e_ok" data-composition-points="333,93;333,36;981.6,36;981.6,217" d="M 333 93 L 333 36 L 981.6 36 L 981.6 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="person" data-edge-to="admin_html" data-edge-label="打开管理端" data-edge-key="13" data-edge-id="e_open" data-composition-points="160,119;226,119" d="M 160 119 L 226 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="api_admin" data-edge-to="orders" data-edge-label="×4" data-edge-key="14" data-edge-id="e_orders" data-composition-points="1043.6,243;1172,243;1172,367;1046.6,367" d="M 1043.6 243 L 1172 243 L 1172 367 L 1046.6 367" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="api_admin" data-edge-to="products" data-edge-label="×5" data-edge-key="15" data-edge-id="e_products" data-composition-points="981.6,269;981.6,285;657.3,285;657.3,325;333,325;333,341" d="M 981.6 269 L 981.6 285 L 657.3 285 L 657.3 325 L 333 325 L 333 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="login" data-edge-to="token" data-edge-label="提交邮箱 + 密码" data-edge-key="16" data-edge-id="e_submit" data-composition-points="431,236;525.1,236;525.1,161;619.2,161;619.2,145" d="M 431 236 L 525.1 236 L 525.1 161 L 619.2 161 L 619.2 145" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="api_admin" data-edge-to="tickets" data-edge-label="×2" data-edge-key="17" data-edge-id="e_tickets" data-composition-points="981.6,217;981.6,201;1172,201;1172,325;843.6,325;843.6,341" d="M 981.6 217 L 981.6 201 L 1172 201 L 1172 325 L 843.6 325 L 843.6 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="console" data-edge-to="db" data-edge-label="读写" data-edge-key="2" data-edge-id="e_db_console" data-composition-points="112,393;112,481;782.6,481" d="M 112 393 L 112 481 L 782.6 481" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="knowledge" data-edge-to="db" data-edge-label="读写" data-edge-key="3" data-edge-id="e_db_knowledge" data-composition-points="712.2,367;747.4000000000001,367;747.4000000000001,491;782.6,491" d="M 712.2 367 L 747.4000000000001 367 L 747.4000000000001 491 L 782.6 491" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="logistics" data-edge-to="db" data-edge-label="读写" data-edge-key="4" data-edge-id="e_db_logistics" data-composition-points="1119.6,393;1119.6,484;904.6,484" d="M 1119.6 393 L 1119.6 484 L 904.6 484" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="orders" data-edge-to="db" data-edge-label="读写" data-edge-key="5" data-edge-id="e_db_orders" data-composition-points="981.6,393;981.6,414;843.6,414;843.6,465" d="M 981.6 393 L 981.6 414 L 843.6 414 L 843.6 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="products" data-edge-to="db" data-edge-label="读写" data-edge-key="6" data-edge-id="e_db_products" data-composition-points="333,393;333,414;843.6,414;843.6,465" d="M 333 393 L 333 414 L 843.6 414 L 843.6 465" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="tickets" data-edge-to="db" data-edge-label="读写" data-edge-key="7" data-edge-id="e_db_tickets" data-composition-points="778.6,367;762.6,367;762.6,544;843.6,544;843.6,517" d="M 778.6 367 L 762.6 367 L 762.6 544 L 843.6 544 L 843.6 517" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="admin_html" data-edge-to="token" data-edge-label="调 getMe() 校验四态" data-edge-key="8" data-edge-id="e_getme" data-composition-points="333,93;333,77;619.2,77;619.2,93" d="M 333 93 L 333 77 L 619.2 77 L 619.2 93" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="require_admin" data-edge-to="api_admin" data-edge-label="组级依赖保护" data-edge-key="9" data-edge-id="e_guard" data-composition-points="843.6,145;843.6,233;919.6,233" d="M 843.6 145 L 843.6 233 L 919.6 233" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="token" data-edge-to="require_admin" data-edge-label="JWT 通过" data-edge-key="10" data-edge-id="e_jwt" data-composition-points="689.2,119;745.6,119" d="M 689.2 119 L 745.6 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="api_admin" data-edge-to="login" data-edge-label="auth:unauthorized → 全局踢回登录态" data-edge-key="11" data-edge-id="e_kick" data-composition-points="981.6,217;981.6,201;333,201;333,217" d="M 981.6 217 L 981.6 201 L 333 201 L 333 217" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="api_admin" data-edge-to="knowledge" data-edge-label="×6" data-edge-key="12" data-edge-id="e_knowledge" data-composition-points="919.6,246.33333333333334;619.2,246.33333333333334;619.2,341" d="M 919.6 246.33333333333334 L 619.2 246.33333333333334 L 619.2 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="api_admin" data-edge-to="logistics" data-edge-label="×4" data-edge-key="13" data-edge-id="e_logistics" data-composition-points="1043.6,243;1119.6,243;1119.6,341" d="M 1043.6 243 L 1119.6 243 L 1119.6 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="admin_html" data-edge-to="api_admin" data-edge-label="ok（role=admin）" data-edge-key="14" data-edge-id="e_ok" data-composition-points="333,93;333,36;981.6,36;981.6,217" d="M 333 93 L 333 36 L 981.6 36 L 981.6 217" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="person" data-edge-to="admin_html" data-edge-label="打开管理端" data-edge-key="15" data-edge-id="e_open" data-composition-points="160,119;226,119" d="M 160 119 L 226 119" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="api_admin" data-edge-to="orders" data-edge-label="×4" data-edge-key="16" data-edge-id="e_orders" data-composition-points="1043.6,243;1059.6,243;1059.6,290;981.6,290;981.6,341" d="M 1043.6 243 L 1059.6 243 L 1059.6 290 L 981.6 290 L 981.6 341" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="api_admin" data-edge-to="products" data-edge-label="×5" data-edge-key="17" data-edge-id="e_products" data-composition-points="981.6,269;981.6,285;657.3,285;657.3,325;333,325;333,341" d="M 981.6 269 L 981.6 285 L 657.3 285 L 657.3 325 L 333 325 L 333 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="login" data-edge-to="token" data-edge-label="提交邮箱 + 密码" data-edge-key="18" data-edge-id="e_submit" data-composition-points="431,236;525.1,236;525.1,161;619.2,161;619.2,145" d="M 431 236 L 525.1 236 L 525.1 161 L 619.2 161 L 619.2 145" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="api_admin" data-edge-to="tickets" data-edge-label="×2" data-edge-key="19" data-edge-id="e_tickets" data-composition-points="981.6,217;981.6,201;1205,201;1205,325;843.6,325;843.6,341" d="M 981.6 217 L 981.6 201 L 1205 201 L 1205 325 L 843.6 325 L 843.6 341" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
 
         <!-- Nodes -->
         <g id="node-person" data-node-id="person" data-node-label="管理员" tabindex="0" role="button" aria-label="聚焦管理员，入口与鉴权链" aria-pressed="false" data-node-kind="external" data-node-context="入口与鉴权链">
@@ -5258,19 +5260,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="333" y="255" class="t-muted" font-size="8" text-anchor="middle">只记邮箱（remembered-admin-email）</text>
         </g>
 
-        <g id="node-api_admin" data-node-id="api_admin" data-node-label="/api/admin/*" tabindex="0" role="button" aria-label="聚焦/api/admin/*，19 个端点, 登录页与 API 入口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="19 个端点" data-node-context="登录页与 API 入口">
-          <title>/api/admin/* · 19 个端点 · 登录页与 API 入口</title>
+        <g id="node-api_admin" data-node-id="api_admin" data-node-label="/api/admin/*" tabindex="0" role="button" aria-label="聚焦/api/admin/*，23 个端点, 登录页与 API 入口" aria-pressed="false" data-node-kind="backend" data-node-sublabel="23 个端点" data-node-context="登录页与 API 入口">
+          <title>/api/admin/* · 23 个端点 · 登录页与 API 入口</title>
           <rect x="919.6" y="217" width="124" height="52" rx="6" class="c-mask"/>
           <rect x="919.6" y="217" width="124" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(925.6 223) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="981.6" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">/api/admin/*</text>
-          <text data-detail="context" x="981.6" y="255" class="t-muted" font-size="8" text-anchor="middle">19 个端点</text>
+          <text data-detail="context" x="981.6" y="255" class="t-muted" font-size="8" text-anchor="middle">23 个端点</text>
         </g>
 
-        <g id="node-console" data-node-id="console" data-node-label="控制台" tabindex="0" role="button" aria-label="聚焦控制台，×2 · console.py, 管理端五大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×2 · console.py" data-node-context="管理端五大模块">
-          <title>控制台 · ×2 · console.py · 管理端五大模块</title>
+        <g id="node-console" data-node-id="console" data-node-label="控制台" tabindex="0" role="button" aria-label="聚焦控制台，×2 · console.py, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×2 · console.py" data-node-context="管理端六大模块">
+          <title>控制台 · ×2 · console.py · 管理端六大模块</title>
           <rect x="48" y="341" width="128" height="52" rx="6" class="c-mask"/>
           <rect x="48" y="341" width="128" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(54 347) scale(0.6875)">
@@ -5280,8 +5282,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="112" y="379" class="t-muted" font-size="8" text-anchor="middle">×2 · console.py</text>
         </g>
 
-        <g id="node-products" data-node-id="products" data-node-label="商品" tabindex="0" role="button" aria-label="聚焦商品，×5 · products.py, 管理端五大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×5 · products.py" data-node-context="管理端五大模块">
-          <title>商品 · ×5 · products.py · 管理端五大模块</title>
+        <g id="node-products" data-node-id="products" data-node-label="商品" tabindex="0" role="button" aria-label="聚焦商品，×5 · products.py, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×5 · products.py" data-node-context="管理端六大模块">
+          <title>商品 · ×5 · products.py · 管理端六大模块</title>
           <rect x="265" y="341" width="136" height="52" rx="6" class="c-mask"/>
           <rect x="265" y="341" width="136" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(271 347) scale(0.6875)">
@@ -5291,8 +5293,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="333" y="379" class="t-muted" font-size="8" text-anchor="middle">×5 · products.py</text>
         </g>
 
-        <g id="node-knowledge" data-node-id="knowledge" data-node-label="知识库" tabindex="0" role="button" aria-label="聚焦知识库，×6 · knowledge.py → 图 50, 管理端五大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×6 · knowledge.py → 图 50" data-node-context="管理端五大模块">
-          <title>知识库 · ×6 · knowledge.py → 图 50 · 管理端五大模块</title>
+        <g id="node-knowledge" data-node-id="knowledge" data-node-label="知识库" tabindex="0" role="button" aria-label="聚焦知识库，×6 · knowledge.py → 图 50, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×6 · knowledge.py → 图 50" data-node-context="管理端六大模块">
+          <title>知识库 · ×6 · knowledge.py → 图 50 · 管理端六大模块</title>
           <rect x="526.2" y="341" width="186" height="52" rx="6" class="c-mask"/>
           <rect x="526.2" y="341" width="186" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(532.2 347) scale(0.6875)">
@@ -5302,8 +5304,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="619.2" y="379" class="t-muted" font-size="8" text-anchor="middle">×6 · knowledge.py → 图 50</text>
         </g>
 
-        <g id="node-tickets" data-node-id="tickets" data-node-label="工单" tabindex="0" role="button" aria-label="聚焦工单，×2 · tickets.py, 管理端五大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×2 · tickets.py" data-node-context="管理端五大模块">
-          <title>工单 · ×2 · tickets.py · 管理端五大模块</title>
+        <g id="node-tickets" data-node-id="tickets" data-node-label="工单" tabindex="0" role="button" aria-label="聚焦工单，×2 · tickets.py, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×2 · tickets.py" data-node-context="管理端六大模块">
+          <title>工单 · ×2 · tickets.py · 管理端六大模块</title>
           <rect x="778.6" y="341" width="130" height="52" rx="6" class="c-mask"/>
           <rect x="778.6" y="341" width="130" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(784.6 347) scale(0.6875)">
@@ -5313,8 +5315,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="843.6" y="379" class="t-muted" font-size="8" text-anchor="middle">×2 · tickets.py</text>
         </g>
 
-        <g id="node-orders" data-node-id="orders" data-node-label="订单" tabindex="0" role="button" aria-label="聚焦订单，×4 · orders.py, 管理端五大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×4 · orders.py" data-node-context="管理端五大模块">
-          <title>订单 · ×4 · orders.py · 管理端五大模块</title>
+        <g id="node-orders" data-node-id="orders" data-node-label="订单" tabindex="0" role="button" aria-label="聚焦订单，×4 · orders.py, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×4 · orders.py" data-node-context="管理端六大模块">
+          <title>订单 · ×4 · orders.py · 管理端六大模块</title>
           <rect x="916.6" y="341" width="130" height="52" rx="6" class="c-mask"/>
           <rect x="916.6" y="341" width="130" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(922.6 347) scale(0.6875)">
@@ -5324,16 +5326,27 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="981.6" y="379" class="t-muted" font-size="8" text-anchor="middle">×4 · orders.py</text>
         </g>
 
+        <g id="node-logistics" data-node-id="logistics" data-node-label="物流" tabindex="0" role="button" aria-label="聚焦物流，×4 · logistics.py, 管理端六大模块" aria-pressed="false" data-node-kind="backend" data-node-sublabel="×4 · logistics.py" data-node-context="管理端六大模块">
+          <title>物流 · ×4 · logistics.py · 管理端六大模块</title>
+          <rect x="1054.6" y="341" width="130" height="52" rx="6" class="c-mask"/>
+          <rect x="1054.6" y="341" width="130" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1060.6 347) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1119.6" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">物流</text>
+          <text data-detail="context" x="1119.6" y="379" class="t-muted" font-size="8" text-anchor="middle">×4 · logistics.py</text>
+        </g>
+
         <g id="node-db" data-node-id="db" data-node-label="PostgreSQL" tabindex="0" role="button" aria-label="聚焦PostgreSQL，8 张表, 数据" aria-pressed="false" data-node-kind="database" data-node-sublabel="8 张表" data-node-context="数据">
           <title>PostgreSQL · 8 张表 · 数据</title>
-          <rect x="920.6" y="465" width="122" height="52" rx="6" class="c-mask"/>
-          <rect x="920.6" y="465" width="122" height="52" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(926.6 471) scale(0.6875)">
+          <rect x="782.6" y="465" width="122" height="52" rx="6" class="c-mask"/>
+          <rect x="782.6" y="465" width="122" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(788.6 471) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="981.6" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PostgreSQL</text>
-          <text data-detail="context" x="981.6" y="503" class="t-muted" font-size="8" text-anchor="middle">8 张表</text>
+          <text data-node-label="" data-detail-anchor="" x="843.6" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PostgreSQL</text>
+          <text data-detail="context" x="843.6" y="503" class="t-muted" font-size="8" text-anchor="middle">8 张表</text>
         </g>
 
         <!-- Edge labels -->
@@ -5346,68 +5359,76 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text x="586.8" y="280" class="t-muted" font-size="8" text-anchor="middle">×2</text>
         </g>
         <g data-detail="context" data-edge-from="console" data-edge-to="db" data-edge-label="读写" data-edge-key="2" data-edge-id="e_db_console">
-          <rect x="501.29999999999995" y="461" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="516.3" y="471" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+          <rect x="432.3" y="461" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="447.3" y="471" class="t-muted" font-size="8" text-anchor="middle">读写</text>
         </g>
         <g data-detail="context" data-edge-from="knowledge" data-edge-to="db" data-edge-label="读写" data-edge-key="3" data-edge-id="e_db_knowledge">
-          <rect x="785.4000000000001" y="394" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="800.4000000000001" y="404" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+          <rect x="714.8000000000001" y="347" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="729.8000000000001" y="357" class="t-muted" font-size="8" text-anchor="middle">读写</text>
         </g>
-        <g data-detail="context" data-edge-from="orders" data-edge-to="db" data-edge-label="读写" data-edge-key="4" data-edge-id="e_db_orders">
-          <rect x="1092.3" y="471" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1107.3" y="481" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+        <g data-detail="context" data-edge-from="logistics" data-edge-to="db" data-edge-label="读写" data-edge-key="4" data-edge-id="e_db_logistics">
+          <rect x="997.0999999999999" y="464" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1012.0999999999999" y="474" class="t-muted" font-size="8" text-anchor="middle">读写</text>
         </g>
-        <g data-detail="context" data-edge-from="products" data-edge-to="db" data-edge-label="读写" data-edge-key="5" data-edge-id="e_db_products">
-          <rect x="642.3" y="524" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="657.3" y="534" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+        <g data-detail="context" data-edge-from="orders" data-edge-to="db" data-edge-label="读写" data-edge-key="5" data-edge-id="e_db_orders">
+          <rect x="897.6" y="394" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="912.6" y="404" class="t-muted" font-size="8" text-anchor="middle">读写</text>
         </g>
-        <g data-detail="context" data-edge-from="tickets" data-edge-to="db" data-edge-label="读写" data-edge-key="6" data-edge-id="e_db_tickets">
-          <rect x="863.1" y="305" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="878.1" y="315" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+        <g data-detail="context" data-edge-from="products" data-edge-to="db" data-edge-label="读写" data-edge-key="6" data-edge-id="e_db_products">
+          <rect x="573.3" y="394" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="588.3" y="404" class="t-muted" font-size="8" text-anchor="middle">读写</text>
         </g>
-        <g data-detail="context" data-edge-from="admin_html" data-edge-to="token" data-edge-label="调 getMe() 校验四态" data-edge-key="7" data-edge-id="e_getme">
+        <g data-detail="context" data-edge-from="tickets" data-edge-to="db" data-edge-label="读写" data-edge-key="7" data-edge-id="e_db_tickets">
+          <rect x="788.1" y="524" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="803.1" y="534" class="t-muted" font-size="8" text-anchor="middle">读写</text>
+        </g>
+        <g data-detail="context" data-edge-from="admin_html" data-edge-to="token" data-edge-label="调 getMe() 校验四态" data-edge-key="8" data-edge-id="e_getme">
           <rect x="425.5" y="57" width="101.2" height="14" rx="3" class="c-mask"/>
           <text x="476.1" y="67" class="t-backend" font-size="8" text-anchor="middle">调 getMe() 校验四态</text>
         </g>
-        <g data-detail="context" data-edge-from="require_admin" data-edge-to="api_admin" data-edge-label="组级依赖保护" data-edge-key="8" data-edge-id="e_guard">
+        <g data-detail="context" data-edge-from="require_admin" data-edge-to="api_admin" data-edge-label="组级依赖保护" data-edge-key="9" data-edge-id="e_guard">
           <rect x="847.8000000000001" y="213" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="881.6" y="223" class="t-backend" font-size="8" text-anchor="middle">组级依赖保护</text>
         </g>
-        <g data-detail="context" data-edge-from="token" data-edge-to="require_admin" data-edge-label="JWT 通过" data-edge-key="9" data-edge-id="e_jwt">
+        <g data-detail="context" data-edge-from="token" data-edge-to="require_admin" data-edge-label="JWT 通过" data-edge-key="10" data-edge-id="e_jwt">
           <rect x="693.2" y="99" width="48.4" height="14" rx="3" class="c-mask"/>
           <text x="717.4000000000001" y="109" class="t-backend" font-size="8" text-anchor="middle">JWT 通过</text>
         </g>
-        <g data-detail="context" data-edge-from="api_admin" data-edge-to="login" data-edge-label="auth:unauthorized → 全局踢回登录态" data-edge-key="10" data-edge-id="e_kick">
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="login" data-edge-label="auth:unauthorized → 全局踢回登录态" data-edge-key="11" data-edge-id="e_kick">
           <rect x="570.6999999999999" y="181" width="173.2" height="14" rx="3" class="c-mask"/>
           <text x="657.3" y="191" class="t-database" font-size="8" text-anchor="middle">auth:unauthorized → 全局踢回登录态</text>
         </g>
-        <g data-detail="context" data-edge-from="api_admin" data-edge-to="knowledge" data-edge-label="×6" data-edge-key="11" data-edge-id="e_knowledge">
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="knowledge" data-edge-label="×6" data-edge-key="12" data-edge-id="e_knowledge">
           <rect x="754.4000000000001" y="226.33333333333334" width="30" height="14" rx="3" class="c-mask"/>
           <text x="769.4000000000001" y="236.33333333333334" class="t-muted" font-size="8" text-anchor="middle">×6</text>
         </g>
-        <g data-detail="context" data-edge-from="admin_html" data-edge-to="api_admin" data-edge-label="ok（role=admin）" data-edge-key="12" data-edge-id="e_ok">
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="logistics" data-edge-label="×4" data-edge-key="13" data-edge-id="e_logistics">
+          <rect x="1066.6" y="223" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1081.6" y="233" class="t-muted" font-size="8" text-anchor="middle">×4</text>
+        </g>
+        <g data-detail="context" data-edge-from="admin_html" data-edge-to="api_admin" data-edge-label="ok（role=admin）" data-edge-key="14" data-edge-id="e_ok">
           <rect x="613.9" y="16" width="86.8" height="14" rx="3" class="c-mask"/>
           <text x="657.3" y="26" class="t-muted" font-size="8" text-anchor="middle">ok（role=admin）</text>
         </g>
-        <g data-detail="context" data-edge-from="person" data-edge-to="admin_html" data-edge-label="打开管理端" data-edge-key="13" data-edge-id="e_open">
+        <g data-detail="context" data-edge-from="person" data-edge-to="admin_html" data-edge-label="打开管理端" data-edge-key="15" data-edge-id="e_open">
           <rect x="164" y="99" width="58" height="14" rx="3" class="c-mask"/>
           <text x="193" y="109" class="t-backend" font-size="8" text-anchor="middle">打开管理端</text>
         </g>
-        <g data-detail="context" data-edge-from="api_admin" data-edge-to="orders" data-edge-label="×4" data-edge-key="14" data-edge-id="e_orders">
-          <rect x="1092.8" y="223" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1107.8" y="233" class="t-backend" font-size="8" text-anchor="middle">×4</text>
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="orders" data-edge-label="×4" data-edge-key="16" data-edge-id="e_orders">
+          <rect x="1005.5999999999999" y="270" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1020.5999999999999" y="280" class="t-backend" font-size="8" text-anchor="middle">×4</text>
         </g>
-        <g data-detail="context" data-edge-from="api_admin" data-edge-to="products" data-edge-label="×5" data-edge-key="15" data-edge-id="e_products">
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="products" data-edge-label="×5" data-edge-key="17" data-edge-id="e_products">
           <rect x="804.45" y="265" width="30" height="14" rx="3" class="c-mask"/>
           <text x="819.45" y="275" class="t-muted" font-size="8" text-anchor="middle">×5</text>
         </g>
-        <g data-detail="context" data-edge-from="login" data-edge-to="token" data-edge-label="提交邮箱 + 密码" data-edge-key="16" data-edge-id="e_submit">
+        <g data-detail="context" data-edge-from="login" data-edge-to="token" data-edge-label="提交邮箱 + 密码" data-edge-key="18" data-edge-id="e_submit">
           <rect x="437.05" y="216" width="82" height="14" rx="3" class="c-mask"/>
           <text x="478.05" y="226" class="t-muted" font-size="8" text-anchor="middle">提交邮箱 + 密码</text>
         </g>
-        <g data-detail="context" data-edge-from="api_admin" data-edge-to="tickets" data-edge-label="×2" data-edge-key="17" data-edge-id="e_tickets">
-          <rect x="992.8" y="305" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1007.8" y="315" class="t-muted" font-size="8" text-anchor="middle">×2</text>
+        <g data-detail="context" data-edge-from="api_admin" data-edge-to="tickets" data-edge-label="×2" data-edge-key="19" data-edge-id="e_tickets">
+          <rect x="1009.3" y="305" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1024.3" y="315" class="t-muted" font-size="8" text-anchor="middle">×2</text>
         </g>
 
         <!-- Legend -->
@@ -5627,7 +5648,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>&bull; admin_router = APIRouter(dependencies=[Depends(require_admin)])</li>
-          <li>&bull; 19 个管理端端点全部由这一个组级依赖覆盖</li>
+          <li>&bull; 23 个管理端端点全部由这一个组级依赖覆盖</li>
           <li>&bull; role ≠ admin → 403</li>
         </ul>
       </div>
