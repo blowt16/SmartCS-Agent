@@ -3,11 +3,11 @@
 用法:
   python scripts/seed_shipments.py
 
-本脚本是订单状态的【驱动方】:seed_orders.py 把 18 条订单全建成「处理中」,
+本脚本是订单状态的【驱动方】:seed_orders.py 把 ORDER_COUNT 条订单全建成「处理中」,
 本脚本按 ALLOC 给它们建运单(或无运单),再用 order_status.derive_order_fields
 把派生出来的订单状态写回 orders —— 控制台环形图的五色、物流页的八状态都由这里决定。
 
-覆盖范围(18 条 = 三个桶):
+覆盖范围(订单数 = seed_orders.ORDER_COUNT,分三个桶):
   · 无运单 3 条 —— 页面上演示「未录入 + 补录按钮」
   · 待揽收 4 条 —— 有运单但未发货(shipped_at 为 NULL)
   · 其余 11 条铺满另外 7 个运单状态(已揽收/运输中/派送中/已签收 各 2 条,
@@ -46,12 +46,18 @@ from app.models.shipment import Shipment  # noqa: E402
 from app.schemas.admin import CARRIERS  # noqa: E402
 from app.services.order_status import derive_order_fields  # noqa: E402
 
+# 订单数【只此一处】:直接取 seed_orders.py 的常量,不在这里再写一份 18。
+# ⚠️ 复制一份的代价不是"多余",而是静默错误:ORDER_COUNT 上调到 20 时,
+#    本脚本仍只查 ORD-001..018 -> len(orders) == 18 照样通过 ->
+#    新增的两条订单永远没有运单、停在「处理中」,没有任何东西会报错。
+#    (只 import 常量,不 import 它的 main;seed_orders 是纯定义 + __main__ 守卫,
+#     已在真实调用上下文实测:不建库连接、无副作用)
+from seed_orders import ORDER_COUNT  # noqa: E402
+
 logger = get_logger(service="seed_shipments")
 
-# 种子覆盖的订单数,与 seed_orders.py 的 ORDER_COUNT 一致
-SEED_ORDER_COUNT = 18
-
 # ── 运单状态分配 ─────────────────────────────────────────────────────────
+# 键是【0-based 下标】,键 0 = ORD-001(订单号在下面按 f"ORD-{i + 1:03d}" 生成)。
 # ⚠️ 必须按 index 显式指定,不能按"数量顺序填充"。
 # 原因:seed_orders.py 的 order_date = today - (index % 14),所以
 # index ∈ {0,1,14,15} 的 4 条 order_date 恒为 today 或 today-1,其 shipped_at
@@ -74,7 +80,9 @@ ALLOC = {
     12: "退货中",
     13: "已退货",
 }
-assert len(ALLOC) == SEED_ORDER_COUNT, "ALLOC 必须覆盖全部种子订单"
+# ORDER_COUNT 来自 seed_orders.py:一旦它上调而 ALLOC 没补齐,这条断言会【当场炸】,
+# 不会退化成"多出来的订单静默没有运单"
+assert len(ALLOC) == ORDER_COUNT, "ALLOC 必须覆盖全部种子订单"
 
 # 加权抽样池:京东自营为主,所以京东物流占两席。
 # ⚠️ 这是【抽样分布】不是【合法值枚举】—— 与 schemas.admin.CARRIERS(8 个合法承运商)
@@ -155,25 +163,21 @@ async def main() -> int:
         #    按旧状态过滤会返回 0 行,脚本直接 error 退出、一条运单都写不出去。
         orders = (await s.execute(
             select(Order.order_no, Order.order_date)
-            .where(Order.order_no.in_([f"ORD-{i + 1:03d}" for i in range(SEED_ORDER_COUNT)]))
+            .where(Order.order_no.in_([f"ORD-{i + 1:03d}" for i in range(ORDER_COUNT)]))
             .order_by(Order.order_no)
         )).all()
 
-        if len(orders) != SEED_ORDER_COUNT:
+        if len(orders) != ORDER_COUNT:
             # 用 error + return 1 而不是 warning + return 0 —— 与 seed_orders.py 一致。
             # 串在初始化脚本里时,「跳过」和「成功」必须能被调用方区分出来。
             logger.error("种子订单不齐({}/{}),请先跑 seed_orders.py",
-                         len(orders), SEED_ORDER_COUNT)
+                         len(orders), ORDER_COUNT)
             return 1
 
         seed_order_nos = [o[0] for o in orders]
 
-        # ⚠️ 先删后建。
-        # upsert 表达不了"这条不该有运单":库里可能已有管理员手工建的运单,
-        # 不清就会让「无运单」桶落不了地,而且会留下
-        # 「订单处理中 + 运单派送中」—— 正是本次要消灭的那类不一致。
+        # 先删后建(为什么 upsert 不够:见模块 docstring)
         await s.execute(delete(Shipment).where(Shipment.order_no.in_(seed_order_nos)))
-        await s.flush()
 
         rows = []
         order_updates = []
@@ -246,8 +250,8 @@ async def main() -> int:
             # 但仍有一条会中止全脚本的路:tracking_no 上有唯一索引,若【非种子订单】
             # 占用了 JDV 号段,整条多行 INSERT 抛 UniqueViolation —— 单语句单事务,
             # 一行都不写。概率极低(JDV 前缀是种子专用),但它是排查时的第一方向。
-            # 下面的 DO UPDATE 分支在"先删后建"下几乎走不到,保留是为了让本语句
-            # 在面对并发写入时不静默丢更新。
+            # 下面的 DO UPDATE 在"先删后建"下是走不到的死分支(order_no 上的冲突行
+            # 刚被上面的 delete 删掉),留着只是防御性写法。
             stmt = stmt.on_conflict_do_update(
                 index_elements=[Shipment.order_no],      # 1:1 之后的天然幂等键
                 set_={
@@ -272,7 +276,8 @@ async def main() -> int:
         for order_no, reason in skipped:
             logger.warning("跳过 {}:{}", order_no, reason)
         logger.info("运单种子完成: 写入 {} 条,跳过 {} 条,无运单 {} 条",
-                    len(rows), len(skipped), sum(1 for v in ALLOC.values() if v is None))
+                    len(rows), len(skipped),
+                    sum(1 for v in ALLOC.values() if v is None) + len(skipped))
         return 0
 
 
