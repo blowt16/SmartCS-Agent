@@ -306,6 +306,27 @@ async def test_unrecorded_order_appears(admin_token):
         assert row["order_status"] == "处理中"
 
 
+async def test_processing_order_without_shipment_is_listed(admin_token):
+    """还没建运单的处理中订单要出现在物流页(补录入口)。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        d = await _list(c, admin_token, keyword=o["order_no"])
+        assert d["total"] == 1
+        assert d["items"][0]["id"] is None          # 未录入
+        assert d["items"][0]["order_status"] == "处理中"
+
+
+async def test_processing_order_with_pending_shipment_is_listed(admin_token):
+    """待揽收运单 -> 订单仍是处理中,但该行必须带着运单出现。"""
+    async with _client() as c:
+        o = await _new_order(c, admin_token)
+        sh = await _new_shipment(c, admin_token, o["order_no"], "T-DRV-LST-1")
+        d = await _list(c, admin_token, keyword=o["order_no"])
+        assert d["total"] == 1
+        assert d["items"][0]["id"] == sh["id"]
+        assert d["items"][0]["order_status"] == "处理中"
+
+
 async def test_recorded_order_shows_shipment(admin_token):
     async with _client() as c:
         order = await _new_order(c, admin_token)
@@ -1190,6 +1211,7 @@ async def test_create_shipment_on_dirty_signed_order_400(admin_token):
             "carrier": "京东物流",
         })
         assert r.status_code == 400, r.text
+        assert "已签收" in r.json()["detail"]      # 实际状态被报出来了
         assert "处理中" in r.json()["detail"]
 
 

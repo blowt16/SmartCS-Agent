@@ -153,19 +153,18 @@ async def list_logistics(
     order_status: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """物流列表:列出【已有运单的订单】∪【还没建运单的订单】= 全部订单。
+    """物流列表:列出【已有运单的订单】∪【还没建运单的订单】。
 
-    驱动表是 orders 不是 shipments —— 未录物流的订单也要出现在列表里
-    (标「未录入」),否则永远没有入口为它补录第一条运单。
+    ⚠️ 两者之并【不等于】全部订单:库里若有「非「处理中」却查不到运单」的遗留脏数据
+       (重跑种子前有 5 条),会被两个分支同时排除,不出现在本页。
+       派生不变量成立时(订单状态恒等于运单派生的值)两者之并才等于全部订单。
     """
     # 有运单的 ∪ 还没建运单的(需要补录)。
     # 第二个分支是「补录」入口的唯一来源 —— 少了它,没建运单的订单不会出现在
     # 物流页,也就永远无法为它创建第一条运单。
     #
-    # ⚠️ 这条护栏现在是"由派生逻辑天然满足",不是一段显式校验代码。
-    #    旧结构里它防的是"订单状态被改回处理中导致运单隐身";新模型下那种脏数据
-    #    既不能经 API 构造(订单 PUT 已不接受 status),也不会由正常流程产生。
-    #    【不要去找一段不存在的校验代码。】
+    # 这条入选条件的"运单不隐身"由派生逻辑天然满足(状态非「处理中」⟺有运单),
+    # 不是一段显式校验代码 —— 别去找。
     conds = [or_(
         Shipment.id.isnot(None),
         Order.status == NO_SHIPMENT_ORDER_STATUS,
@@ -347,7 +346,7 @@ async def create_shipment(payload: ShipmentCreate, db: AsyncSession = Depends(ge
         signed_at=signed_at,
         trace=trace,
     )
-    # ⚠️ 必须在 db.add 之前 —— sync 会发出一条 orders 的 UPDATE。
+    # ⚠️ 必须在 db.add 之前 —— sync 可能发出一条 orders 的 UPDATE。
     #    若放在下面 try 里那次 flush 之后,订单 UPDATE 就脱出 try,
     #    挂在后续重取查询的 autoflush 上,失败时直接在 try 外抛 -> 500。
     #
@@ -462,7 +461,10 @@ async def update_shipment(
         raise _conflict_409(e, order_no, tracking_no)
     except StaleDataError:
         await db.rollback()
-        raise HTTPException(status_code=404, detail=f"运单已被删除: {shipment_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"运单不存在（可能已被删除，或其所属订单已被删除）: {shipment_id}",
+        )
 
     row = (await db.execute(
         select(Order, Shipment)
@@ -496,19 +498,26 @@ async def delete_shipment(shipment_id: int, db: AsyncSession = Depends(get_db)):
 
     # ⚠️ 本端点必须显式 flush —— 与 2026-09-27 spec 的结论相反。
     # 原结论"不 flush 是安全的"建立在「失败会 500」上,而那个前提【不成立】:
-    # get_db 的 commit 跑在响应发出【之后】(fastapi/routing.py:140-151),
-    # 而 starlette 的兜底不会再补一个 500(middleware/errors.py:180-181)。
-    # 于是隐式 commit 失败时客户端拿到的是 200 {"deleted": true}、库里一行没动 ——
-    # 正是本项目在 logistics.py:379-380 明令禁止的「保存了但没生效」。
+    # get_db 的 commit 跑在响应发出【之后】(FastAPI 的 request_stack),
+    # Starlette 的 ServerErrorMiddleware 见响应已开跑便不再补 500 —— 隐式 commit
+    # 失败时客户端拿到 200、库里一行没动,即本项目明确的「保存了但没生效」同款。
     #
-    # ⚠️ StaleDataError 必须单独接:本端点现在写两张表(DELETE shipments +
+    # ⚠️ StaleDataError 必须单独接:本端点可能写两张表(DELETE shipments +
     #    UPDATE orders)。并发场景(别人先删掉了订单 -> FK CASCADE 一并删掉运单)
     #    下,UPDATE 匹配 0 行抛的是 StaleDataError,它【不是】IntegrityError。
     #    既有注释"只发 SAWarning"只在仅有一条 DELETE 语句时成立。
+
+    # ⚠️ rollback 会让 session 里所有 ORM 对象过期,异常分支再读它们的属性会触发
+    #    惰性刷新 -> 异步下 MissingGreenlet -> 500。所以异常分支要用的值必须在
+    #    try 之前取成局部变量(与 update_shipment 里 order_no 的做法一致)。
+    order_no = shipment.order_no
     try:
         await db.flush()
     except StaleDataError:
         await db.rollback()
-        raise HTTPException(status_code=404, detail=f"运单已被删除: {shipment_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"订单 {order_no} 已被删除，其运单随之级联删除: {shipment_id}",
+        )
 
     return {"id": shipment_id, "deleted": True}
