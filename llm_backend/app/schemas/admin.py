@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.order_status import SHIPMENT_STATUSES
 
@@ -25,25 +25,27 @@ class ProductUpdate(BaseModel):
 
 
 class OrderCreate(BaseModel):
+    # extra="forbid":status / signed_date 已移出本模型,若前端或调用方仍传,
+    # pydantic 默认会【静默忽略】—— 返回 200、列表里却没变,正是本项目反复防的
+    # 「保存了但没生效」。宁可 422 报错。
+    model_config = ConfigDict(extra="forbid")
+
     product_sku: str
     buyer_name: str = Field(..., min_length=1, max_length=50)
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: str = Field("处理中", pattern=r"^(处理中|已发货|已送达|已签收)$")
     order_date: Optional[date] = None
-    # 留空且 status='已签收' 时由接口补当天;status 不是已签收则一律存 NULL
-    signed_date: Optional[date] = None
 
 
 class OrderUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     buyer_name: Optional[str] = Field(None, min_length=1, max_length=50)
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: Optional[str] = Field(None, pattern=r"^(处理中|已发货|已送达|已签收)$")
     order_date: Optional[date] = None
-    signed_date: Optional[date] = None
 
 
 class KnowledgeCommit(BaseModel):

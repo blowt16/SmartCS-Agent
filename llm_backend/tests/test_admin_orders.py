@@ -11,7 +11,6 @@ cleanup_test_orders 在**用例前后各清一次**(前一次兜住上次跑挂�
 """
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -140,15 +139,6 @@ async def _list_items(c, token, page_size=MAX_PAGE_SIZE, **params):
     return body
 
 
-async def _get_by_order_no(c, token, order_no):
-    """按 order_no 重查(列表 keyword 匹配 order_no),用于验证落库而非仅响应体。"""
-    body = await _list_items(c, token, keyword=order_no)
-    for item in body["items"]:
-        if item["order_no"] == order_no:
-            return item
-    raise AssertionError(f"列表中查不到订单 {order_no}")
-
-
 # ==================== 列表 ====================
 
 
@@ -195,13 +185,12 @@ async def test_create_with_amount_uses_given_value(admin_token):
     """传了 amount → 用传入值,不覆盖成商品价。"""
     async with _client() as c:
         product = await _product_row(SKU_A)
-        r = await _create(c, admin_token, SKU_A, amount=1234.56, status="已发货")
+        r = await _create(c, admin_token, SKU_A, amount=1234.56)
         assert r.status_code == 200, r.text
         body = r.json()
 
     assert body["amount"] == pytest.approx(1234.56)
     assert body["amount"] != pytest.approx(product["price"]), "传入的 amount 不应被商品价覆盖"
-    assert body["status"] == "已发货"
 
 
 async def test_create_unknown_sku_400(admin_token):
@@ -273,46 +262,24 @@ async def test_create_after_deleting_middle_order_no_collision(admin_token):
 # ==================== 编辑 ====================
 
 
-async def test_update_status_persists(admin_token):
-    """PUT 改状态 → 重查(GET)值已变。"""
-    async with _client() as c:
-        created = await _create(c, admin_token, SKU_A, status="处理中")
-        assert created.status_code == 200, created.text
-        order = created.json()
+async def test_update_rejects_unknown_field(admin_token):
+    """body 里塞 sku → 422(OrderUpdate schema 无该字段,且 extra="forbid")。
 
-        r = await c.put(
-            f"/api/admin/orders/{order['id']}",
-            json={"status": "已发货"},
-            headers=_bearer(admin_token),
-        )
-        assert r.status_code == 200, r.text
-        assert r.json()["status"] == "已发货"
-
-        fetched = await _get_by_order_no(c, admin_token, order["order_no"])
-        assert fetched["status"] == "已发货", "PUT 响应变了但库里没落"
-
-
-async def test_update_ignores_sku_field(admin_token):
-    """body 里塞 sku → 被忽略(OrderUpdate schema 无该字段,pydantic 默认忽略)。"""
+    原用例断言"额外字段被静默忽略",那正是本项目要防的「保存了但没生效」:
+    调用方以为自己改成功了,实际被丢掉。语义现在反转 —— 宁可 422 报错。
+    """
     async with _client() as c:
         created = await _create(c, admin_token, SKU_A)
         assert created.status_code == 200, created.text
         order = created.json()
 
-        # 同一请求里带一个合法字段,证明请求确实被处理了(只是 sku 那部分没生效)
         r = await c.put(
             f"/api/admin/orders/{order['id']}",
             json={"sku": SKU_B, "buyer_code": "P999"},
             headers=_bearer(admin_token),
         )
-        assert r.status_code == 200, r.text
-        body = r.json()
 
-        assert body["sku"] == SKU_A, "sku 不应被修改(换商品应删除后重建)"
-        assert body["buyer_code"] == "P999", "合法字段应已生效"
-
-        fetched = await _get_by_order_no(c, admin_token, order["order_no"])
-        assert fetched["sku"] == SKU_A
+    assert r.status_code == 422, r.text
 
 
 async def test_update_unknown_user_id_400(admin_token):
@@ -330,91 +297,14 @@ async def test_update_unknown_user_id_400(admin_token):
 
 
 async def test_update_unknown_id_404(admin_token):
+    # body 用合法字段:传已移除的 status 会被 extra="forbid" 拦成 422,测不到 404
     async with _client() as c:
         r = await c.put(
             "/api/admin/orders/999999",
-            json={"status": "已发货"},
+            json={"buyer_name": "x"},
             headers=_bearer(admin_token),
         )
     assert r.status_code == 404, r.text
-
-
-# ==================== 签收日期 ====================
-
-
-def _today_utc() -> str:
-    """与接口同一基准(UTC)——不用本地日期,否则在 UTC+8 的 00:00~08:00 窗口内会差一天。"""
-    return datetime.now(timezone.utc).date().isoformat()
-
-
-async def _put(c, token, order_id, **body):
-    return await c.put(f"/api/admin/orders/{order_id}", json=body, headers=_bearer(token))
-
-
-async def test_create_signed_order_defaults_signed_date_to_today(admin_token):
-    """新增即「已签收」且不传 signed_date → 后端补 UTC 当天。"""
-    async with _client() as c:
-        r = await _create(c, admin_token, SKU_A, status="已签收")
-        assert r.status_code == 200, r.text
-        body = r.json()
-    assert body["status"] == "已签收"
-    assert body["signed_date"] == _today_utc()
-
-
-async def test_create_non_signed_order_ignores_signed_date(admin_token):
-    """非「已签收」时即使显式传了日期也必须落 NULL——不许造出「未签收却带签收日期」的数据。"""
-    async with _client() as c:
-        r = await _create(c, admin_token, SKU_A, status="已发货", signed_date="2026-01-01")
-        assert r.status_code == 200, r.text
-        body = r.json()
-    assert body["status"] == "已发货"
-    assert body["signed_date"] is None
-
-
-async def test_update_to_signed_sets_signed_date(admin_token):
-    """状态改成「已签收」但没传日期 → 补当天。"""
-    async with _client() as c:
-        created = await _create(c, admin_token, SKU_A, status="已发货")
-        assert created.json()["signed_date"] is None
-        r = await _put(c, admin_token, created.json()["id"], status="已签收")
-    assert r.status_code == 200, r.text
-    assert r.json()["signed_date"] == _today_utc()
-
-
-async def test_update_away_from_signed_clears_signed_date(admin_token):
-    """从「已签收」改回其它状态 → 签收日期清空(状态与日期强绑定的核心断言)。"""
-    async with _client() as c:
-        created = await _create(c, admin_token, SKU_A, status="已签收", signed_date="2026-03-05")
-        assert created.json()["signed_date"] == "2026-03-05"
-        r = await _put(c, admin_token, created.json()["id"], status="已发货")
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "已发货"
-    assert r.json()["signed_date"] is None
-
-
-async def test_update_keeps_explicit_signed_date(admin_token):
-    """已签收时显式传的日期要保留(用于补录历史订单),不被「补当天」覆盖。"""
-    async with _client() as c:
-        created = await _create(c, admin_token, SKU_A, status="已签收")
-        r = await _put(c, admin_token, created.json()["id"], signed_date="2026-03-05")
-    assert r.status_code == 200, r.text
-    assert r.json()["signed_date"] == "2026-03-05"
-
-
-async def test_update_other_field_keeps_existing_signed_date(admin_token):
-    """已签收订单只改无关字段(请求里没有 status / signed_date)→ 原签收日期不被重置成今天。
-
-    这条盯的是 exclude_unset 与"补当天"的交互:实现里取 data.get('signed_date', order.signed_date),
-    若误写成 data.get('signed_date') or today,改个无关字段就会把签收日期冲成今天。
-
-    ⚠️ 改的是 buyer_code 而非 buyer_name:本文件约定"造的订单 buyer_name 一律 BUYER",
-    清理 fixture 按 buyer_name 精确匹配删除;改买家名会让订单逃出清理、污染演示数据(实测踩过)。
-    """
-    async with _client() as c:
-        created = await _create(c, admin_token, SKU_A, status="已签收", signed_date="2026-03-05")
-        r = await _put(c, admin_token, created.json()["id"], buyer_code="P999")
-    assert r.status_code == 200, r.text
-    assert r.json()["signed_date"] == "2026-03-05", "改无关字段不应重置签收日期"
 
 
 # ==================== 删除 ====================
@@ -437,3 +327,35 @@ async def test_delete_then_delete_again_404(admin_token):
         # 确认真的没了,而不是只返回了个成功
         body = await _list_items(c, admin_token, keyword=order["order_no"])
         assert all(i["order_no"] != order["order_no"] for i in body["items"])
+
+
+# ==================== 状态不可由订单接口指定 ====================
+# 订单状态改为由运单状态纯派生(见 app/services/order_status.py):
+# 订单接口交出改状态的能力,status / signed_date 两个字段已从 schema 移除。
+# 下面三条钉住"交出去"这个事实 —— 尤其 extra="forbid",否则调用方还在传 status,
+# 接口会返回 200 但库里没变(本项目反复防的「保存了但没生效」)。
+
+
+async def test_create_order_rejects_status_field(admin_token):
+    """extra="forbid":传已移除的 status 必须 422,不能静默忽略。"""
+    async with _client() as c:
+        r = await _create(c, admin_token, status="已发货")
+        assert r.status_code == 422, r.text
+
+
+async def test_update_order_rejects_status_field(admin_token):
+    """改单路径同理 —— 这是「保存了但没生效」的防线。"""
+    async with _client() as c:
+        oid = (await _create(c, admin_token)).json()["id"]
+        r = await c.put(f"/api/admin/orders/{oid}", headers=_bearer(admin_token),
+                        json={"status": "已签收"})
+        assert r.status_code == 422, r.text
+
+
+async def test_new_order_is_always_processing(admin_token):
+    """新建订单恒为「处理中」,不接受指定。"""
+    async with _client() as c:
+        r = await _create(c, admin_token)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "处理中"
+        assert r.json()["signed_date"] is None
