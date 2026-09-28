@@ -18,7 +18,7 @@
     },
     {
       "id": "mod",
-      "label": "管理端五大模块"
+      "label": "管理端六大模块"
     },
     {
       "id": "data",
@@ -81,7 +81,7 @@
     {
       "type": "backend",
       "label": "/api/admin/*",
-      "sublabel": "19 个端点",
+      "sublabel": "23 个端点",
       "width": 124,
       "id": "api_admin",
       "lane": "edge",
@@ -131,6 +131,15 @@
       "id": "orders",
       "lane": "mod",
       "col": 4
+    },
+    {
+      "type": "backend",
+      "label": "物流",
+      "sublabel": "×4 · logistics.py",
+      "width": 130,
+      "id": "logistics",
+      "lane": "mod",
+      "col": 5
     },
     {
       "type": "database",
@@ -221,6 +230,12 @@
       "label": "×2"
     },
     {
+      "id": "e_logistics",
+      "from": "api_admin",
+      "to": "logistics",
+      "label": "×4"
+    },
+    {
       "id": "e_db_console",
       "from": "console",
       "to": "db",
@@ -251,6 +266,12 @@
       "label": "读写"
     },
     {
+      "id": "e_db_logistics",
+      "from": "logistics",
+      "to": "db",
+      "label": "读写"
+    },
+    {
       "id": "e_kick",
       "from": "api_admin",
       "to": "login",
@@ -265,7 +286,7 @@
       "title": "组级鉴权",
       "items": [
         "admin_router = APIRouter(dependencies=[Depends(require_admin)])",
-        "19 个管理端端点全部由这一个组级依赖覆盖",
+        "23 个管理端端点全部由这一个组级依赖覆盖",
         "role ≠ admin → 403"
       ]
     },

@@ -23,6 +23,7 @@
 > - **`AdminLogin.vue` 新增「记住账号」**——§6.3.1 原列为「不做」。原理由针对的是客户端把**密码明文**写进 `localStorage`（`docs/项目问题.md` #15 附带发现②），而本实现**只存邮箱、不存密码**（键 `remembered-admin-email`，与客户端 `remembered-credentials` 相互独立），不触及该风险面。管理员密码至今不入任何浏览器存储。
 > - **`LoginView.vue` 登录按钮下新增「进入管理端」链接**（`href="/admin.html"`，同标签跳转）——D15 原写「客户端一行不改」。用户 2026-09-22 明确要求提供该入口，正向发现路径不再只靠 README 与书签；管理端登录页的「返回客服端」仍是对应退路。
 > - **上文「本机环境备注」中的 `bsk` 问题已解决**：CLI 与扩展升级至 **0.3.0**，端口改为 **35000**（默认 52800 仍落在保留段内）。注意 0.3.0 的 `--port` 是**隐藏选项**（`bsk daemon start --help` 不显示），且守护进程空闲 10 分钟即退出——**每次使用前需显式 `bsk daemon start --port 35000`**，任何命令自动拉起守护进程时用的仍是 52800，必然失败。本轮管理端端到端复测即用 `bsk` 驱动真实 Edge 完成，6 个模块全部通过。
+> - **2026-09-27 补充**：管理端已增至 **6 个模块 / 23 个端点**（新增「物流管理」4 个端点：`GET/POST /api/admin/logistics`、`PUT/DELETE /api/admin/logistics/{shipment_id}`）。本文档正文中所有「5 个模块」「19 个端点」的表述为历史记录，不再更新；物流模块的完整设计见 `docs/superpowers/specs/2026-09-27-管理端物流模块-design.md`。
 
 > **用途**: 为 SmartCS-Agent 增加一个独立的管理员端，含控制台、商品管理、订单管理、知识库管理、工单管理五个模块。管理员登录后进入，风格与客户端一致（同套 Tailwind + 品牌绿 `#16a34a`）。
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
