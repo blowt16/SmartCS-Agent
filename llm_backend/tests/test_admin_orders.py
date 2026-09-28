@@ -9,7 +9,7 @@
 
 清理策略:本条文件造的订单 buyer_name 一律 '测试买家',由 autouse 的
 cleanup_test_orders 在**用例前后各清一次**(前一次兜住上次跑挂留下的残留)。
-被删除的种子订单(为了造空档)在 finally 里按整行快照原样还原,保证演示数据不减。
+需要"空档"的用例自造订单,不删种子订单(种子带运单,删订单会级联删运单且还原不回来)。
 
 ⚠️ 写 PUT 用例要改字段时用 buyer_code,**不要改 buyer_name** —— 改买家名会让订单
    逃出上面的清理 fixture(它按 buyer_name 精确匹配删除),污染演示数据(实测踩过)。
@@ -97,28 +97,6 @@ async def _product_row(sku: str):
             select(ProductPriceStock).where(ProductPriceStock.sku == sku)
         )).scalar_one()
         return {"name": p.product_name, "category": p.category, "price": float(p.current_price)}
-
-
-async def _snapshot_order(order_id: int) -> dict:
-    """取整行(含列表 API 不返回的 user_id),用于删除后原样还原。"""
-    from sqlalchemy import select
-
-    from app.core.database import AsyncSessionLocal
-    from app.models.order import Order
-
-    async with AsyncSessionLocal() as s:
-        o = (await s.execute(select(Order).where(Order.id == order_id))).scalar_one()
-        return {c.name: getattr(o, c.name) for c in Order.__table__.columns}
-
-
-async def _restore_order(snap: dict) -> None:
-    """按原 id 插回。主键 id 由 PostgreSQL 序列分配,此处显式给值不影响序列状态。"""
-    from app.core.database import AsyncSessionLocal
-    from app.models.order import Order
-
-    async with AsyncSessionLocal() as s:
-        s.add(Order(**snap))
-        await s.commit()
 
 
 # ==================== 请求小工具 ====================
@@ -232,36 +210,42 @@ async def test_create_after_deleting_middle_order_no_collision(admin_token):
     - max+1  → 生成 max+1,不与现存重复 ✓
     - count+1 → 生成一个已存在的号 → 撞唯一键 → 409/500 ✗
     故断言必须落在"新号不在保留集合里",不能只断言"两次新增不同"。
+
+    ⚠️ 本用例【自造订单】制造空档,不删种子订单。
+       种子订单带运单;删它会级联删掉运单,而还原助手只还原订单行 ——
+       运单永久丢失(实测踩过:曾把 ORD-010 的运单删掉,留下
+       「订单已发货却没有运单」的不变量违反)。
     """
     async with _client() as c:
-        before = (await _list_items(c, admin_token))["items"]
-        assert len(before) >= 2, "至少两条订单才能造出中间空档"
+        # ⚠️ 本用例【自造 3 条订单】来制造"中间空档",不从全部订单里挑 ——
+        #    种子订单带运单,删它会级联删掉运单,而还原助手只还原订单行,
+        #    运单永久丢失(实测踩过:曾把 ORD-010 的运单删掉,留下
+        #    「订单已发货却没有运单」的不变量违反,且在管理端无从修复)。
+        created = []
+        for _ in range(3):
+            r = await _create(c, admin_token)
+            assert r.status_code == 200, r.text
+            created.append(r.json())
 
-        # 按 order_no 排序取正中一条 —— 必须是中间那条。删 max 那条的话
-        # count+1 与 max+1 结果相同,区分不出两种实现。
+        before = (await _list_items(c, admin_token))["items"]
         ordered = sorted(before, key=lambda i: i["order_no"])
-        victim = ordered[len(ordered) // 2]
+        # 自造的三条编号必然排在最后,倒数第二条就是它们的中间那条
+        victim = ordered[-2]
+        assert victim["order_no"] in {o["order_no"] for o in created}, (
+            f"挑中的 {victim['order_no']} 不是本用例自造的订单 —— "
+            f"说明有别的订单排在它后面,本用例会误删真实数据")
         assert victim["order_no"] != ordered[-1]["order_no"], "选中的是最大号,无法区分 max/count"
 
         kept = {i["order_no"] for i in before if i["order_no"] != victim["order_no"]}
-        snap = await _snapshot_order(victim["id"])
-        try:
-            d = await c.delete(f"/api/admin/orders/{victim['id']}", headers=_bearer(admin_token))
-            assert d.status_code == 200, d.text
+        d = await c.delete(f"/api/admin/orders/{victim['id']}", headers=_bearer(admin_token))
+        assert d.status_code == 200, d.text
 
-            r = await _create(c, admin_token, SKU_A)
-            assert r.status_code == 200, f"删除中间订单后新增失败({r.status_code}): {r.text}"
-            new_no = r.json()["order_no"]
+        r = await _create(c, admin_token, SKU_A)
+        assert r.status_code == 200, f"删除中间订单后新增失败({r.status_code}): {r.text}"
+        new_no = r.json()["order_no"]
 
-            assert new_no not in kept, f"新订单号 {new_no} 与现存订单重复,疑似 count+1 实现"
-            # 再钉死生成规则:现存最大号 + 1
-            assert new_no == f"ORD-{int(max(kept)[len('ORD-'):]) + 1:03d}"
-        finally:
-            # 还原被删的种子订单,别让测试把演示数据越跑越少
-            await _restore_order(snap)
-
-        after = (await _list_items(c, admin_token))["total"]
-        assert after == len(before) + 1, "被删的种子订单未还原到位(应为 原条数 + 本次新增的 1 条)"
+        assert new_no not in kept, f"新订单号 {new_no} 与现存订单重复,疑似 count+1 实现"
+        assert new_no == f"ORD-{int(max(kept)[len('ORD-'):]) + 1:03d}"
 
 
 # ==================== 编辑 ====================
