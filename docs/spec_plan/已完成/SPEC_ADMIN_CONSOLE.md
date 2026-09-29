@@ -1,6 +1,7 @@
 # 管理端（Admin Console）实施规格
 
 > **归档状态**: ✅ 已完成（2026-09-22）
+> **后续修订（2026-09-27）**: 本文档 **§4.4 正文（第 314 行）与 §12 风险第 5 条（第 2743 行）的「停用不影响检索」限制已被推翻** —— 见 `docs/spec_plan/已完成/SPEC_DOCUMENT_STATUS_FILTER.md`。两处原文按历史记录保留不改写；另 §13 第 13 行定的状态列 tooltip 文案已从 `KnowledgeView.vue` 删除（修完即错误信息）。同批还改了：`PATCH /{md5}` 由"只改 id 最小的一行"改为按 md5 全量更新，`stage` 不再接收 `user_id` 表单参数。
 > **实施提交**: `b44d475`(数据层与鉴权) → `df9d3f3`(19 个后端端点) → `a50fd51`(4 个种子脚本) → `b325f30`(5 个测试文件) → `da22767`(前端 20 个文件) → `fce4b0f`(文档)；分支 `feat/admin-console`
 > **落地证据**：
 > - 代码：`llm_backend/app/api/admin/`(5 模块 19 端点)、`llm_backend/app/models/{order,ticket}.py`、`schemas/admin.py`、`llm_backend/scripts/seed_{admin_account,orders,tickets}.py`、`scripts/build_product_placeholders.py`、`frontend/admin.html` + `frontend/src/admin/`(20 文件)

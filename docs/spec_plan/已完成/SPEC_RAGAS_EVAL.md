@@ -1,6 +1,7 @@
 # RAGAS 评测模块实施规格（方案A · MVP）
 > **归档状态**: ✅ 已完成（2026-09-02 审计，依据 main 代码与 git 历史）
 > 评测模块落地：3f07e17 + 7e4104d（llm_backend/evaluation/ 六文件，四指标），evaluation/results/ 已有实测产物；46 条 golden（eval_intent_golden.py）46/46。
+> **后续修订（2026-09-27）**: `--user` 参数语义已变更，见 `docs/spec_plan/已完成/SPEC_DOCUMENT_STATUS_FILTER.md` D11 —— **由「必填的语料来源」降级为「可选收窄」，不传即读全库（排除 `test_%` 测试账号）**。理由：① 原默认值 `"1"` 早已失效（生产数据迁到 owner 6，历史报告记的是 `"5"`）；② "为评测把同一内容再挂一份到第二个 user_id"实测会让检索 top-K 出现完全重复条目（RRF 按 `chunk_id` 去重，而该键含 user_id），白占名额、压低 `context_precision` —— 恰恰违背本文档 §51「语料复用生产分块」的立身之本。第 236 行的 `python -m evaluation --testset-size 20 --user 1  # 全流程（MVP 默认）` 原文按历史记录保留不改写。
 
 > **用途**: 引入业界标准 RAG 评测工具 ragas，为 graphrag-query 检索模块产出四指标（faithfulness / answer relevancy / context precision / context recall），解决"检索链路多轮调优（BM25 AND→OR、全文递归分块、RRF 融合、Reranker 精排）无客观可复现评测手段"的问题，指标用于后续调优前后对比决策
 > **技术栈**: ragas 0.4.3（dev 依赖，2026-08-23 已装并核实 API）+ langchain-openai 0.3.35（DashScope OpenAI 兼容接口，judge LLM）+ LangGraph 0.3.25 子图 + PostgreSQL（document_chunks 生产分块）+ uv

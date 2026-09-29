@@ -11,6 +11,9 @@ BM25 数据库检索器（pg_jieba + ts_rank_cd）
        → OR 连接构建 tsquery（部分命中即入选，"宁可多召回"）
     2. content_tsv @@ query 走 GIN 索引筛候选
     3. ts_rank_cd 排名（整词命中排前、高频单字 IDF 衰减），LIMIT top_k
+
+停用文档过滤（SPEC_DOCUMENT_STATUS_FILTER §4.2）：
+    JOIN documents 并只取 status='enabled' 的文档块 —— 管理端「停用」即时生效。
 """
 
 from typing import Any, Dict, List
@@ -30,11 +33,14 @@ class BM25SQLRetriever:
     # 恒 0 命中，见 spec_plan/SPEC_BM25_QUERY_SEMANTICS_FIX.md）：
     #   jiebacfg（精确模式）保护整词命中；jiebamp（MP 单字模式）兜底文档侧
     #   被拆散的未登录词/品牌词（如 "品牌：芝华仕" 在生成列中被拆为 芝/华/仕）。
+    #
+    # ⚠️ SELECT 必须显式写 document_chunks.*：JOIN documents 后两表都有
+    #    id/md5/user_id/file_type/created_at，写成 * 会列歧义。
     _OR_QUERY_SQL_TEXT = text(
         """
         SELECT document_chunks.*,
                ts_rank_cd(document_chunks.content_tsv, tsq.q) AS bm25_score
-        FROM document_chunks,
+        FROM document_chunks, documents,
              (SELECT to_tsquery('jiebacfg',
                       string_agg(quote_literal(tok), '|' ORDER BY tok)) AS q
               FROM (
@@ -43,7 +49,10 @@ class BM25SQLRetriever:
                   SELECT unnest(tsvector_to_array(to_tsvector('jiebamp', :query))) AS tok
               ) t
               WHERE tok ~ '\\S') tsq
-        WHERE document_chunks.content_tsv @@ tsq.q
+        WHERE document_chunks.user_id = documents.user_id
+          AND document_chunks.md5 = documents.md5
+          AND documents.status = 'enabled'
+          AND document_chunks.content_tsv @@ tsq.q
         ORDER BY bm25_score DESC, document_chunks.id
         LIMIT :top_k
         """
@@ -56,6 +65,8 @@ class BM25SQLRetriever:
         查询词条由 jiebacfg（精确模式，整词）与 jiebamp（MP 模式，单字兜底）并集，
         过滤空白 junk 后 OR 连接：文档只要命中部分查询词即可进入排名，
         由 ts_rank_cd 打分排序（整词命中排前、高频单字 IDF 衰减）。
+
+        仅检索「启用中」文档的块（SPEC_DOCUMENT_STATUS_FILTER §4.2）。
 
         Args:
             query: 用户查询文本

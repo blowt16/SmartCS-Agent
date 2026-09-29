@@ -34,8 +34,8 @@ def parse_args():
     p = argparse.ArgumentParser(prog="evaluation", description="RAGAS 四指标评测（graphrag-query RAG 模块）")
     p.add_argument("--testset-size", type=int, default=settings.RAGAS_DEFAULT_TESTSET_SIZE,
                    help="合成题数（默认 %(default)s）")
-    p.add_argument("--user", type=str, default="1",
-                   help="知识归属 user_id（document_chunks 过滤，默认 %(default)s）")
+    p.add_argument("--user", type=str, default=None,
+                   help="可选:按知识归属 user_id 收窄评测语料（不传 = 读全库，排除 test_% 测试账号）")
     p.add_argument("--testset-file", type=str, default=None,
                    help="评测集缓存文件路径（--skip-synthesize 时必填）")
     p.add_argument("--max-docs", type=int, default=settings.RAGAS_MAX_CORPUS_DOCS,
@@ -126,7 +126,7 @@ async def main(args) -> int:
     report = report_mod.summarize(
         raw_result, results, metric_names,
         meta={
-            "user_id": args.user,
+            "user_id": args.user or "all",
             "testset_size": len(questions),
             "evaluated_samples": len(done),
             "concurrency": args.concurrency,

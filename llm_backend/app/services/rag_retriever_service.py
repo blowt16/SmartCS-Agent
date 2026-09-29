@@ -5,11 +5,15 @@ RAG 检索核心服务（唯一检索入口）
 
     RAGRetrieverService.search(query)
         ├─ asyncio.gather 并行：
-        │   ├─ pgvector HNSW 余弦检索（DB 内近似最近邻）  → top-N
-        │   └─ pg_jieba BM25 全文检索（GIN 倒排索引）    → top-N
+        │   ├─ pgvector HNSW 余弦检索（DB 内近似最近邻）  → top-N（已过滤 documents.status='enabled'）
+        │   └─ pg_jieba BM25 全文检索（GIN 倒排索引）    → top-N（同上）
         ├─ rrf_fuse 排名融合 → 候选 top-RERANKER_INPUT_TOP_K
         ├─ RerankerService 精排 → top-RERANKER_TOP_K（RERANKER_ENABLED=false 或失败时跳过）
         └─ 返回 docs（id/text/source/rrf_score[/rerank_score]）
+
+停用文档过滤（SPEC_DOCUMENT_STATUS_FILTER）：
+    两路 SQL 均 JOIN documents 并只取 status='enabled' 的文档块 —— 管理端「停用」
+    即时生效。白名单语义：找不到对应启用文档的块（孤儿块 / md5 为空）一律排除。
 
 调用方：
     - LangGraph 节点 vector_search_query（records.hybrid_docs / records.result）
@@ -24,11 +28,12 @@ import asyncio
 import threading
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
+from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.services.embedding_provider import get_embedding_provider
 from app.services.reranker_service import get_reranker_service
@@ -73,7 +78,12 @@ class RAGRetrieverService:
         return doc
 
     async def _vector_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
-        """pgvector HNSW 余弦检索（ORDER BY 距离 + LIMIT 触发 ANN 索引）"""
+        """pgvector HNSW 余弦检索（ORDER BY 距离 + LIMIT 触发 ANN 索引）。
+
+        仅检索「启用中」文档的块（SPEC_DOCUMENT_STATUS_FILTER §4.1）：JOIN documents
+        取 status='enabled'。join 键用 (user_id, md5) —— 有 UNIQUE 约束保证不产生重复行，
+        且迁移前后都正确。
+        """
         query_vec = (await get_embedding_provider().embed([query]))[0]
         if not any(query_vec):
             logger.warning("查询向量全零（Embedding API 失败），跳过向量检索")
@@ -83,6 +93,14 @@ class RAGRetrieverService:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(DocumentChunk, distance.label("distance"))
+                .join(
+                    Document,
+                    and_(
+                        Document.user_id == DocumentChunk.user_id,
+                        Document.md5 == DocumentChunk.md5,
+                    ),
+                )
+                .where(Document.status == "enabled")
                 .order_by(distance)
                 .limit(top_k)
             )

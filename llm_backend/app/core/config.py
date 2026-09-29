@@ -61,7 +61,13 @@ class Settings(BaseSettings):
     REDIS_CACHE_PREFIX: str = "cache"                       # 缓存键前缀
     REDIS_CACHE_MAX_SIZE: int = 1000                        # 最大缓存条目数
     REDIS_CACHE_CLEANUP_INTERVAL: int = 3600                # 缓存清理间隔（秒）
-    SEMANTIC_CACHE_ENABLED: bool = True                     # 语义缓存总开关，false 时不查不写（调试用一键关闭）
+    # 语义缓存总开关，false 时不查不写。
+    # ⚠️ 默认 False 是【安全默认】而非调试开关：缓存命中会短路整个图（含检索，见
+    # main.py 的 lookup/update 两点），新加的 documents.status 过滤器够不着缓存里的
+    # 旧回答（缓存的是 graphrag 全链路的完整回答），停用文档的内容最长可泄漏
+    # REDIS_CACHE_EXPIRE（默认 1h）。需要缓存时在 .env 显式打开。
+    # 见 SPEC_DOCUMENT_STATUS_FILTER R6/D12。
+    SEMANTIC_CACHE_ENABLED: bool = False
 
     # Semantic cache resolve settings（语义缓存分级指代消解）
     RESOLVE_ENABLED: bool = True                            # 总开关，false 时完全退化为现有行为（一键回滚）

@@ -143,11 +143,12 @@ class IndexingService:
             md5_hex = hashlib.md5(f.read()).hexdigest()
 
         # 3. 查重(快速路径;并发由唯一约束兜底)
+        # 按 md5 全平台查重(SPEC_DOCUMENT_STATUS_FILTER D5):否则第二个管理员上传
+        # 已被收录的文件时这里查不到 → 白跑一遍 MinerU 解析 + 全部 embedding 调用
+        # → 到最后 flush 才撞唯一约束返回 duplicate。PDF 的 MinerU 是付费外部服务。
         async with AsyncSessionLocal() as s:
             dup = await s.execute(
-                select(Document.id).where(
-                    Document.user_id == user_id, Document.md5 == md5_hex
-                )
+                select(Document.id).where(Document.md5 == md5_hex)
             )
             if dup.scalar() is not None:
                 return {"status": "duplicate", "md5": md5_hex,

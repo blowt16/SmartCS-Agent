@@ -118,7 +118,6 @@ import AdminModal from './AdminModal.vue';
 const props = defineProps({
   mode: { type: String, default: 'create' },      // create | edit
   record: { type: Object, default: null },        // edit 模式的列表行
-  userId: { type: [String, Number], default: '' }, // stage 的 user_id(取自 getMe().id)
 });
 const emit = defineEmits(['close', 'saved']);
 
@@ -212,7 +211,6 @@ async function onFileChange(e) {
   try {
     const res = await stageFile({
       file,
-      userId: props.userId,
       // stageFile 无条件调用 onProgress,必须传函数;本表单不用上传百分比(按钮文案固定「上传中…」)
       onProgress: () => {},
     });

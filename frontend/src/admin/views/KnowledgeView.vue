@@ -80,10 +80,7 @@
             <th class="text-left font-medium px-4 py-3 whitespace-nowrap w-[24%]">文件名</th>
             <th class="text-left font-medium px-4 py-3 whitespace-nowrap">文件描述</th>
             <th class="text-left font-medium px-4 py-3 whitespace-nowrap w-20">片段数</th>
-            <th
-              class="text-left font-medium px-4 py-3 whitespace-nowrap w-20"
-              title="停用仅影响管理端展示，智能客服仍会检索到该文档（已知限制）"
-            >状态</th>
+            <th class="text-left font-medium px-4 py-3 whitespace-nowrap w-20">状态</th>
             <th class="text-left font-medium px-4 py-3 whitespace-nowrap w-40">创建时间</th>
             <th class="text-left font-medium px-4 py-3 whitespace-nowrap w-28">操作</th>
           </tr>
@@ -124,7 +121,6 @@
       v-if="modalOpen"
       :mode="modalMode"
       :record="modalRecord"
-      :user-id="meId"
       @saved="load"
       @close="modalOpen = false"
     />
@@ -134,7 +130,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { deleteKnowledge, listKnowledge } from '../api.js';
-import { getMe } from '../../api/auth.js';
 import { dismissJob, knowledgeJob } from '../knowledgeJob.js';
 import Pagination from '../components/Pagination.vue';
 import StatusBadge from '../components/StatusBadge.vue';
@@ -152,7 +147,6 @@ const error = ref(false);
 const modalOpen = ref(false);
 const modalMode = ref('create');
 const modalRecord = ref(null);
-const meId = ref('');           // stage 的 user_id
 
 // 日期一律字符串切片,不经过 new Date()(§6.4.8)
 function fmtTime(v) {
@@ -261,7 +255,5 @@ watch(() => knowledgeJob.done, (v) => {
 
 onMounted(() => {
   load();
-  // 弹窗 stage 时要用 me.id 作 user_id。拉不到就留空:不影响列表,失败会由后端 400 呈现
-  getMe().then((me) => { meId.value = String(me.id); }).catch(() => {});
 });
 </script>

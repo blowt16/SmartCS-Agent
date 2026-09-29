@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -126,12 +126,14 @@ async def list_knowledge(
 @router.post("/stage")
 async def stage_knowledge(
     file: UploadFile = File(...),
-    user_id: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
     """只把文件落到磁盘并取出基本信息,不解析内容、不清洗、不分块、不嵌入、不写任何 DB 行。
 
     这是「取消能真撤销」的全部依据:撤销时数据库里从来就没有过痕迹。
+
+    不接收 user_id:归属身份由 commit 从令牌取(knowledge.py `commit_knowledge`),
+    stage 的用途仅是"这个文件平台里有没有"(见下方查重)。
     """
     _cleanup_stale_staging()
 
@@ -153,8 +155,11 @@ async def stage_knowledge(
     staged_path = STAGING_DIR / f"{md5_hex}{_ext_of(filename)}"
     staged_path.write_bytes(content)
 
+    # 按 md5 全平台查重(SPEC_DOCUMENT_STATUS_FILTER D8):问的是"平台里有这个文件吗",
+    # 不是"这个上传者传过吗"。旧写法在多管理员场景会让 stage 说"新文件"、commit 又说
+    # "重复",且拿不到 existing 描述回填。
     dup = (await db.execute(
-        select(Document).where(Document.user_id == user_id, Document.md5 == md5_hex)
+        select(Document).where(Document.md5 == md5_hex)
         .order_by(Document.id)
     )).scalars().first()
 
@@ -213,7 +218,7 @@ async def commit_knowledge(
                      "user_id": user_id},
                     on_progress=on_progress,
                 )
-                event = await _finalize(result, payload, user_id, staged_path)
+                event = await _finalize(result, payload, staged_path)
             except Exception as e:  # noqa: BLE001 —— 流已开始,任何异常都只能转 error 事件
                 logger.exception("commit 失败: {}", e)
                 event = {"type": "error", "error": "internal", "detail": str(e)}
@@ -236,7 +241,7 @@ async def commit_knowledge(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-async def _finalize(result: dict, payload: KnowledgeCommit, user_id: str, staged_path: Path) -> dict:
+async def _finalize(result: dict, payload: KnowledgeCommit, staged_path: Path) -> dict:
     """commit 的表外后处理:写描述 / 查回完整行 / 清理暂存文件。
 
     失败时【保留】暂存文件(便于重试);成功与重复则删除。
@@ -248,15 +253,23 @@ async def _finalize(result: dict, payload: KnowledgeCommit, user_id: str, staged
 
     # 不用 Depends(get_db):本协程在路由函数返回之后才执行,走显式会话不依赖依赖退栈时机
     async with AsyncSessionLocal() as s:
+        # 按 md5 查(SPEC_DOCUMENT_STATUS_FILTER §4.4):唯一约束已改为 uq_documents_md5,
+        # 文档全局唯一。仍按 (user_id, md5) 查的话,管理员 B 上传已被 A 收录的文件时
+        # process_file 会因约束抛 IntegrityError → 返回 duplicate,但这里查不到行 →
+        # 报"索引已执行但查不到对应文档记录"的假错误。
         doc = (await s.execute(
             select(Document)
-            .where(Document.user_id == user_id, Document.md5 == payload.md5)
+            .where(Document.md5 == payload.md5)
             .order_by(Document.id)
         )).scalars().first()
         if doc is None:
             return {"type": "error", "error": "internal",
                     "detail": "索引已执行但查不到对应文档记录"}
-        if payload.description is not None:
+        # 真值判断而非 `is not None`(SPEC_DOCUMENT_STATUS_FILTER R3):前端新建路径
+        # 未填描述时提交的是空串(KnowledgeFormModal `description || ''`),而重复上传
+        # 现在命中的是先上传者那一行 —— 用 `is not None` 会把对方已有的描述抹成空串。
+        # 幂等判断:覆盖成空串,不是"用户想清空描述"。清空走 PATCH 的显式 null。
+        if payload.description:
             doc.description = payload.description
         await s.commit()
         await s.refresh(doc)
@@ -300,21 +313,25 @@ async def update_knowledge(
     db: AsyncSession = Depends(get_db),
 ):
     """写描述/状态。只有这两个可写字段 —— 文件名/类型/大小/片段数/创建时间都是客观事实。"""
-    # 同 md5 可能挂多个 user_id:只更新 id 最小的那一行,不能因 scalar_one_or_none 抛 500
     rows = (await db.execute(
         select(Document).where(Document.md5 == md5).order_by(Document.id)
     )).scalars().all()
     if not rows:
         raise HTTPException(404, f"文档不存在: {md5}")
 
-    doc = rows[0]
     # 必须用 exclude_unset 区分"没传"和"传了 null":写成 `if payload.x is not None`
     # 会让 description 永远回不到 NULL(存量行正是 NULL 状态,改一次就再也恢复不了)
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(doc, field, value)
+    fields = payload.model_dump(exclude_unset=True)
+    # 按 md5 全量更新(与 DELETE 同粒度):停用必须对同一文件的所有副本生效。
+    # 唯一约束已改为 uq_documents_md5,正常情况下 rows 恒为 1 行;保留循环是为了接口
+    # 语义与"文件级身份"一致 —— 命中多行时全部更新,而不是只改 id 最小的那行
+    # (旧写法只改 rows[0],正是"停用后仍能检索到"这个 bug 的直接来源)。
+    for doc in rows:
+        for field, value in fields.items():
+            setattr(doc, field, value)
     await db.flush()
-    await db.refresh(doc)
-    return _doc_row(doc)
+    await db.refresh(rows[0])
+    return _doc_row(rows[0])
 
 
 @router.delete("/{md5}")
