@@ -13,7 +13,7 @@ import { computed } from 'vue';
 // 各处颜色映射在页面里决定。
 const props = defineProps({
   text: String,
-  color: { type: String, default: 'gray' },   // gray|green|blue|amber|red|teal
+  color: { type: String, default: 'gray' },   // gray|green|blue|amber|red|teal|purple|slate
 });
 
 const MAP = {
@@ -22,8 +22,14 @@ const MAP = {
   blue: 'bg-blue-100 text-blue-600',
   amber: 'bg-amber-100 text-amber-600',
   red: 'bg-red-100 text-red-600',
-  // 订单「已签收」用,与「已送达」的 green 区分
+  // 订单「已签收」用
   teal: 'bg-teal-100 text-teal-600',
+  // 运单「退货中」用
+  purple: 'bg-purple-100 text-purple-600',
+  // 运单「待揽收」用。
+  // ⚠️ 必须是 slate-200/700 而不是 100/600 —— slate-100 与 gray-100 的 RGB 距离
+  //    只有 4(同色系相邻两档是 22),在 12px 徽章上肉眼分不出。
+  slate: 'bg-slate-200 text-slate-700',
 };
 
 const colorClass = computed(() => MAP[props.color] || MAP.gray);

@@ -16,6 +16,7 @@ from app.models.order import Order
 from app.models.product_price_stock import ProductPriceStock
 from app.models.user import User
 from app.schemas.admin import OrderCreate, OrderUpdate
+from app.services.order_status import NO_SHIPMENT_ORDER_STATUS
 
 router = APIRouter()
 
@@ -118,10 +119,6 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
     amount = payload.amount if payload.amount is not None else product.current_price
     # UTC 日期,与 §5.4(a) 图表日期轴同基准;不用 date.today()——本地日期在早 8 小时窗口内错位一天
     order_date = payload.order_date or datetime.now(timezone.utc).date()
-    # 签收日期与状态绑定:非「已签收」一律 NULL;「已签收」未填则补当天
-    signed_date = None
-    if payload.status == "已签收":
-        signed_date = payload.signed_date or datetime.now(timezone.utc).date()
 
     for attempt in range(3):  # 并发撞号:重算 max 再试,最多 3 次
         try:
@@ -134,9 +131,11 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
                 buyer_code=payload.buyer_code,
                 user_id=payload.user_id,
                 amount=amount,
-                status=payload.status,
+                # 恒为「处理中」(NO_SHIPMENT_ORDER_STATUS):订单状态由运单派生,建单时不可指定。
+                # 想让它变「已发货」→ 去建运单再推运单状态(见 app/services/order_status.py)。
+                status=NO_SHIPMENT_ORDER_STATUS,
                 order_date=order_date,
-                signed_date=signed_date,
+                signed_date=None,
             )
             db.add(order)
             await db.flush()
@@ -156,7 +155,11 @@ async def update_order(
     payload: OrderUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """编辑订单。sku/product_name/category 不可改(schema 里就没有,换商品应删除后重建)。"""
+    """编辑订单。sku/product_name/category/status/signed_date 均不可改(传了 422)。
+
+    sku 换商品应删除后重建;status/signed_date 改不动是本模块当前的全部意义 ——
+    订单状态由运单派生(见 app/services/order_status.py),订单接口已交出该能力。
+    """
     order = (await db.execute(
         select(Order).where(Order.id == order_id)
     )).scalar_one_or_none()
@@ -172,15 +175,6 @@ async def update_order(
         )).scalar_one_or_none()
         if exists is None:
             raise HTTPException(status_code=400, detail=f"用户不存在: {data['user_id']}")
-
-    # 签收日期与状态强绑定,在服务端兜底(直调接口也不能造出「未签收却带签收日期」的数据):
-    #   - 非「已签收」→ 一律置 NULL(状态改回其它即为清空)
-    #   - 「已签收」→ 必须有值:显式传了用传的,没传沿用原值,原值也没有则补当天
-    effective_status = data.get("status", order.status)
-    if effective_status != "已签收":
-        data["signed_date"] = None
-    else:
-        data["signed_date"] = data.get("signed_date", order.signed_date) or datetime.now(timezone.utc).date()
 
     for field, value in data.items():
         setattr(order, field, value)

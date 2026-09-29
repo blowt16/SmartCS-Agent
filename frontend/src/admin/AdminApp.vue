@@ -74,6 +74,7 @@
       <ConsoleView v-if="currentPage === 'console'" />
       <ProductView v-else-if="currentPage === 'products'" />
       <OrderView v-else-if="currentPage === 'orders'" />
+      <LogisticsView v-else-if="currentPage === 'logistics'" />
       <KnowledgeView v-else-if="currentPage === 'knowledge'" />
       <TicketView v-else-if="currentPage === 'tickets'" />
     </main>
@@ -89,11 +90,13 @@ import ProductView from './views/ProductView.vue';
 import OrderView from './views/OrderView.vue';
 import KnowledgeView from './views/KnowledgeView.vue';
 import TicketView from './views/TicketView.vue';
+import LogisticsView from './views/LogisticsView.vue';
 
 const NAV = [
   { key: 'console', label: '控制台', icon: 'fa-gauge-high' },
   { key: 'products', label: '商品管理', icon: 'fa-box' },
   { key: 'orders', label: '订单管理', icon: 'fa-clipboard-list' },
+  { key: 'logistics', label: '物流管理', icon: 'fa-truck' },
   { key: 'knowledge', label: '知识库', icon: 'fa-book' },
   { key: 'tickets', label: '工单', icon: 'fa-ticket' },
 ];

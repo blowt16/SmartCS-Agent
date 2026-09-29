@@ -12,10 +12,10 @@ from app.models.order import Order
 from app.models.product_price_stock import ProductPriceStock
 from app.models.ticket import Ticket
 from app.models.user import User
+from app.services.order_status import ORDER_STATUSES
 
 router = APIRouter()
 
-ORDER_STATUSES = ["处理中", "已发货", "已送达", "已签收"]
 TICKET_STATUSES = ["待处理", "已解决"]
 
 

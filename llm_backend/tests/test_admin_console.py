@@ -127,11 +127,19 @@ async def test_trend_last_day_is_utc_today(admin_token):
     assert d["trend"]["days"][-1] == datetime.now(timezone.utc).strftime("%m-%d")
 
 
-async def test_order_status_returns_all_four_values(admin_token):
-    """即使某状态 0 条也返回该项,否则图例会随数据消失。"""
+async def test_order_status_returns_all_five_values(admin_token):
+    """即使某状态 0 条也返回该项,否则图例会随数据消失。
+
+    ⚠️ 顺序敏感:后端按 ORDER_STATUSES(app/services/order_status.py)的顺序生成,
+       前端 ConsoleView 的 ORDER_COLORS 按下标绑定 —— 重排这个列表会让环形图
+       颜色整体错位。这里红了只说明顺序变了,不代表颜色对上了:
+       本用例只断言名字,【前端颜色错位没有任何测试能发现】,必须人工同步那个数组。
+    """
     async with _client() as c:
         d = (await c.get(CHARTS_URL, headers={"Authorization": f"Bearer {admin_token}"})).json()
-    assert [x["name"] for x in d["order_status"]] == ["处理中", "已发货", "已送达", "已签收"]
+    assert [x["name"] for x in d["order_status"]] == [
+        "处理中", "已发货", "已签收", "售后处理中", "已退款·交易关闭"
+    ]
 
 
 async def test_ticket_status_returns_all_two_values(admin_token):

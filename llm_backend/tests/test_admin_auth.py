@@ -24,13 +24,14 @@ sys.path.insert(0, _BACKEND)
 
 from main import app  # noqa: E402
 
-# 5 个管理端模块各取 1 个端点(组级依赖一条声明覆盖全组,故 5 个抽查点应行为一致)
+# 6 个管理端模块各取 1 个端点(组级依赖一条声明覆盖全组,故 6 个抽查点应行为一致)
 ADMIN_ENDPOINTS = [
     "/api/admin/console/stats",
     "/api/admin/products",
     "/api/admin/orders",
     "/api/admin/knowledge",
     "/api/admin/tickets",
+    "/api/admin/logistics",
 ]
 
 
@@ -59,7 +60,7 @@ async def test_admin_endpoint_forged_token_401():
 
 @pytest.mark.parametrize("endpoint", ADMIN_ENDPOINTS)
 async def test_normal_user_forbidden_403(endpoint, normal_token):
-    """普通用户令牌访问管理端 5 个模块 → 403(不是 401,也不是 500)。"""
+    """普通用户令牌访问管理端 6 个模块 → 403(不是 401,也不是 500)。"""
     async with _client() as c:
         r = await c.get(endpoint, headers=_bearer(normal_token))
     assert r.status_code == 403, f"{endpoint} 期望 403,实际 {r.status_code}: {r.text}"

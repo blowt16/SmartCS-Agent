@@ -14,15 +14,7 @@
   "lanes": [
     {
       "id": "main",
-      "label": "订单状态"
-    },
-    {
-      "id": "date_rule",
-      "label": "签收日期约束"
-    },
-    {
-      "id": "terminal",
-      "label": "终态"
+      "label": "上排：订单状态（5 个，纯派生）　下排：驱动它的运单状态 / 无运单"
     }
   ],
   "states": [
@@ -30,7 +22,7 @@
       "id": "processing",
       "type": "start",
       "label": "处理中",
-      "sublabel": "默认值",
+      "sublabel": "新建订单恒为它",
       "lane": "main",
       "col": 0,
       "step": "01"
@@ -44,112 +36,135 @@
       "step": "02"
     },
     {
-      "id": "delivered",
+      "id": "signed",
       "type": "active",
-      "label": "已送达",
+      "label": "已签收",
       "lane": "main",
       "col": 2,
       "step": "03"
     },
     {
-      "id": "signed",
-      "type": "success",
-      "label": "已签收",
+      "id": "aftersale",
+      "type": "failure",
+      "label": "售后处理中",
       "lane": "main",
       "col": 3,
       "step": "04"
     },
     {
-      "id": "clear",
-      "type": "decision",
-      "label": "非已签收 ⇒ 强制置 NULL",
-      "sublabel": "signed_date",
-      "lane": "date_rule",
-      "col": 0,
-      "width": 142
+      "id": "closed",
+      "type": "neutral",
+      "label": "已退款·交易关闭",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
     },
     {
-      "id": "autofill",
-      "type": "decision",
-      "label": "已签收 ⇒ 取值优先级",
-      "sublabel": "传入值 → 保留原值 → 取当天",
-      "lane": "date_rule",
+      "id": "s0",
+      "type": "external",
+      "label": "无运单 / 待揽收",
+      "sublabel": "新建订单、删除运单",
+      "lane": "main",
+      "col": 0,
+      "yOffset": 100
+    },
+    {
+      "id": "s1",
+      "type": "external",
+      "label": "已揽收/运输中/派送中",
+      "width": 130,
+      "lane": "main",
       "col": 1,
-      "width": 142
+      "yOffset": 100
+    },
+    {
+      "id": "s2",
+      "type": "external",
+      "label": "已签收",
+      "lane": "main",
+      "col": 2,
+      "yOffset": 100
+    },
+    {
+      "id": "s3",
+      "type": "external",
+      "label": "异常 / 退货中",
+      "lane": "main",
+      "col": 3,
+      "yOffset": 100
+    },
+    {
+      "id": "s4",
+      "type": "external",
+      "label": "已退货",
+      "lane": "main",
+      "col": 4,
+      "yOffset": 100
     }
   ],
   "transitions": [
     {
-      "id": "t-ship",
-      "from": "processing",
-      "to": "shipped",
-      "label": "发货",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "t-deliver",
-      "from": "shipped",
-      "to": "delivered",
-      "label": "送达",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "t-sign",
-      "from": "delivered",
-      "to": "signed",
-      "label": "签收",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "t-admin",
-      "from": "processing",
-      "to": "signed",
-      "variant": "dashed",
-      "label": "管理员可直接改（无状态机约束）",
+      "id": "t0",
+      "from": "s0",
+      "to": "processing",
       "fromSide": "top",
-      "toSide": "top",
-      "route": "top-channel",
-      "channelY": 105
+      "toSide": "bottom"
     },
     {
-      "id": "t-fill",
-      "from": "signed",
-      "to": "autofill",
-      "label": "填签收日期",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 24
+      "id": "t1",
+      "from": "s1",
+      "to": "shipped",
+      "fromSide": "top",
+      "toSide": "bottom"
     },
     {
-      "id": "t-clear",
-      "from": "delivered",
-      "to": "clear",
-      "label": "非已签收 → 强制清空",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 24
+      "id": "t2",
+      "from": "s2",
+      "to": "signed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "t3",
+      "from": "s3",
+      "to": "aftersale",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "t4",
+      "from": "s4",
+      "to": "closed",
+      "fromSide": "top",
+      "toSide": "bottom"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "状态值三处同源",
+      "title": "派生：唯一事实来源",
       "items": [
-        "console.py:18 ORDER_STATUSES = [处理中, 已发货, 已送达, 已签收]",
-        "schemas/admin.py:30,41 正则 ^(处理中|已发货|已送达|已签收)$",
-        "models/order.py:20 默认 处理中"
+        "app/services/order_status.py —— 5 个订单状态 + 8 个运单状态都在这里",
+        "SHIPMENT_TO_ORDER 是 8 → 5 的唯一映射表，多对一",
+        "derive_order_fields 是唯一判断处：接口走 ORM、种子走 Core UPDATE，共用它"
       ]
     },
     {
       "dot": "amber",
-      "title": "signed_date 绑定规则",
+      "title": "订单状态不可手改",
       "items": [
-        "创建：status ≠ 已签收 ⇒ 置 NULL；= 已签收 ⇒ 传入值，否则取当天",
-        "更新：改回非已签收 ⇒ 强制清空；= 已签收 ⇒ 传入值 → 保留原值 → 取当天",
-        "依据 orders.py:121 / :177"
+        "POST / PUT /api/admin/orders 不再接受 status / signed_date（传了 422，extra=forbid）",
+        "新建订单恒为「处理中」；想推进订单 → 去改运单",
+        "订单页的状态编辑入口已移除（工具条筛选项保留）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "无运单的落点",
+      "items": [
+        "新建订单 / 删除运单 ⇒ 订单回「处理中」，签收日期清空",
+        "NO_SHIPMENT_ORDER_STATUS 是这几处共用的常量",
+        "signed_date 直接跟随运单（仅「已签收」取值），不各算各的"
       ]
     }
   ]

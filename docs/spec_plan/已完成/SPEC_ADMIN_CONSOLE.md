@@ -24,6 +24,8 @@
 > - **`AdminLogin.vue` 新增「记住账号」**——§6.3.1 原列为「不做」。原理由针对的是客户端把**密码明文**写进 `localStorage`（`docs/项目问题.md` #15 附带发现②），而本实现**只存邮箱、不存密码**（键 `remembered-admin-email`，与客户端 `remembered-credentials` 相互独立），不触及该风险面。管理员密码至今不入任何浏览器存储。
 > - **`LoginView.vue` 登录按钮下新增「进入管理端」链接**（`href="/admin.html"`，同标签跳转）——D15 原写「客户端一行不改」。用户 2026-09-22 明确要求提供该入口，正向发现路径不再只靠 README 与书签；管理端登录页的「返回客服端」仍是对应退路。
 > - **上文「本机环境备注」中的 `bsk` 问题已解决**：CLI 与扩展升级至 **0.3.0**，端口改为 **35000**（默认 52800 仍落在保留段内）。注意 0.3.0 的 `--port` 是**隐藏选项**（`bsk daemon start --help` 不显示），且守护进程空闲 10 分钟即退出——**每次使用前需显式 `bsk daemon start --port 35000`**，任何命令自动拉起守护进程时用的仍是 52800，必然失败。本轮管理端端到端复测即用 `bsk` 驱动真实 Edge 完成，6 个模块全部通过。
+> - **2026-09-27 补充**：管理端已增至 **6 个模块 / 23 个端点**（新增「物流管理」4 个端点：`GET/POST /api/admin/logistics`、`PUT/DELETE /api/admin/logistics/{shipment_id}`）。本文档正文中所有「5 个模块」「19 个端点」的表述为历史记录，不再更新；物流模块的完整设计见 `docs/superpowers/specs/2026-09-27-管理端物流模块-design.md`。
+> - **2026-09-28 订正：订单状态集 3 值 → 5 值，且订单状态不再可手改**。订单状态原为 `处理中`／`已发货`／`已送达`（见上文 D14），现为 **`处理中`／`已发货`／`已签收`／`售后处理中`／`已退款·交易关闭`**（「已送达」已删除）。**订单接口不再接受 `status` / `signed_date`**（传了 422，`extra="forbid"`），订单状态改为**由运单状态纯派生**（8 个运单状态 → 5 个订单状态，单一事实来源 `llm_backend/app/services/order_status.py`）；因此订单页的状态编辑入口（表格筛选项保留、弹窗 select 与签收日期输入移除）与「订单状态可任意跳转」的旧表述均已不适用。色卡从 3 色扩到 5 色（`#f59e0b` / `#3b82f6` / `#14b8a6` / `#ef4444` / `#6b7280`），种子分布改为 处理中 7 / 已发货 6 / 已签收 2 / 售后处理中 2 / 已退款·交易关闭 1。上述各点已在正文逐处订正并保留原文的历史性质；完整设计见 `docs/spec_plan/已完成/2026-09-28-订单状态随运单联动-design.md`。
 
 > **用途**: 为 SmartCS-Agent 增加一个独立的管理员端，含控制台、商品管理、订单管理、知识库管理、工单管理五个模块。管理员登录后进入，风格与客户端一致（同套 Tailwind + 品牌绿 `#16a34a`）。
 > **依赖前置**: 无阻塞依赖。可复用的既有件：`users` 表 + JWT 登录链路（`app/api/auth.py`）、`product_price_stock` 表（47 行真实数据）、`POST /api/upload` 索引链路（`app/services/indexing_service.py`）、`documents`/`document_chunks` 表。
@@ -163,7 +165,7 @@ product_price_stock: 47 行
 | **D11** | 导航范围 | 5 项 + 「体验客服」按钮 | 不做用户管理（§1.2） |
 | **D12** | 后端代码组织 | 路由按模块拆 `app/api/admin/` 5 个文件，**不建 service 层** | 遵循 `main.py` 既有做法（`/api/documents` 等端点直接 `select`），CRUD 逻辑薄，建 service 层是纯样板 |
 | **D13** | 工单状态取值 | `待处理` / `已解决`（两值） | 对齐参考图（列表徽章 + 环形图图例均只此两值），不擅自加"处理中" |
-| **D14** | 订单状态取值 | `处理中` / `已发货` / `已送达`（三值） | 对齐参考图（徽章 + 环形图图例；本实现用表格行内徽章，取值与配色不变） |
+| **D14** | 订单状态取值 | `处理中` / `已发货` / `已签收` / `售后处理中` / `已退款·交易关闭`（**五值**；2026-09-28 订正，原为三值 `处理中`/`已发货`/`已送达`） | 对齐参考图（徽章 + 环形图图例；本实现用表格行内徽章，取值与配色不变）。**2026-09-28 起「已送达」已删除，订单状态改为由运单状态纯派生、接口不再接受 `status`**（见 `docs/spec_plan/已完成/2026-09-28-订单状态随运单联动-design.md`） |
 | **D15** | 管理端入口的**发现路径** | 写进 README + 控制台不重复提供入口；**客户端一行不改**（登录成功不按 role 跳转） | 备选"客户端登录后 `if (role==='admin') location.href='/admin.html'`"：要改 `LoginView.vue`，与 §6.1 的"客户端零改动"直接冲突（§6.1 冻结了 `App.vue`/`main.js`/`components/*`，改了就没有文件能承载这个跳转）。管理端登录页已有「返回客服端」链接，反向路径是通的；正向路径靠 README 与书签 |
 | **D16** | 文档标识 | **不给 `documents` 加 `title` 列**，列表直接用 `original_filename`，列头叫「文件名」 | 备选"加 title 列"：存量 2 行无标题要靠 `title \|\| original_filename` 回退；上传表单里"标题"与"文件名"语义重叠；列表两列显示同一内容浪费宽度（详见 §4.4） |
 | **D17** | 新增文档的**交互形态** | **暂存制（两阶段）**：点「上传文件」→ **只存文件 + 取基本信息（文件名/类型/大小/MD5），不解析内容、不清洗、不分块、不嵌入、不落库** → 基本信息回填只读区 → 补描述 → 点「保存」才走完整索引链路 → 成功后才建 `documents` 行 | **用户方案（2026-09-22）**，取代初稿的"上传即入库"。核心收益：**「取消」能真正撤销**（删掉暂存文件即可，什么都没留下）。备选"上传即索引 + 取消时反向删除"：要在取消路径上调索引删除接口，一旦删除失败就留下半成品，且索引已经跑完（PDF 走 MinerU 云端，白花钱和时间） |
@@ -204,7 +206,7 @@ class Order(Base):
     buyer_code = Column(String(20), nullable=True)               # P001 形式
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     amount = Column(Numeric(10, 2), nullable=False)              # 下单金额
-    status = Column(String(20), nullable=False, default="处理中")  # 处理中/已发货/已送达
+    status = Column(String(20), nullable=False, default="处理中")  # 处理中/已发货/已签收/售后处理中/已退款·交易关闭（由运单状态派生）
     order_date = Column(Date, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -505,9 +507,11 @@ api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
     "orders":        [2, 2, 2, 2, 1, 1, 1],
     "conversations": [0, 1, 4, 0, 2, 3, 3]
   },
-  "order_status":     [ { "name": "处理中", "value": 6 },
+  "order_status":     [ { "name": "处理中", "value": 7 },
                         { "name": "已发货", "value": 6 },
-                        { "name": "已送达", "value": 6 } ],
+                        { "name": "已签收", "value": 2 },
+                        { "name": "售后处理中", "value": 2 },
+                        { "name": "已退款·交易关闭", "value": 1 } ],
   "product_category": [ { "name": "智能门锁", "value": 12 },
                         { "name": "电动智能沙发", "value": 7 } /* ... */ ],
   "ticket_status":    [ { "name": "待处理", "value": 5 },
@@ -538,7 +542,7 @@ labels = [d.strftime("%m-%d") for d in days_list]  # 升序,最后一项=今天
 
 **(c) 其余三张图**：
 
-- `order_status` / `ticket_status`：`GROUP BY status`，`ORDER BY` 固定顺序（订单按 `处理中→已发货→已送达`，工单按 `待处理→已解决`），与前端图例颜色顺序绑定（§6.6）
+- `order_status` / `ticket_status`：`GROUP BY status`，`ORDER BY` 固定顺序（订单按 `处理中→已发货→已签收→售后处理中→已退款·交易关闭`，工单按 `待处理→已解决`），与前端图例颜色顺序绑定（§6.6）
 - `product_category`：`GROUP BY category ORDER BY COUNT(*) DESC`
 - 状态分布即使某状态计数为 0 **也要返回该项**（值为 0），否则图例会随数据消失
 
@@ -678,7 +682,8 @@ class OrderCreate(BaseModel):
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: str = Field("处理中", pattern=r"^(处理中|已发货|已送达)$")
+    status: str = Field("处理中", pattern=r"^(处理中|已发货|已签收|售后处理中|已退款·交易关闭)$")
+    # 2026-09-28 起上面这行已从订单接口移除:状态改由运单状态纯派生,传 status/signed_date 一律 422(extra="forbid")
     order_date: Optional[date] = None
 ```
 
@@ -1202,7 +1207,7 @@ class OrderCreate(BaseModel):
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: str = Field("处理中", pattern=r"^(处理中|已发货|已送达)$")
+    status: str = Field("处理中", pattern=r"^(处理中|已发货|已签收|售后处理中|已退款·交易关闭)$")
     order_date: Optional[date] = None
 
 
@@ -1211,8 +1216,11 @@ class OrderUpdate(BaseModel):
     buyer_code: Optional[str] = Field(None, max_length=20)
     user_id: Optional[int] = None
     amount: Optional[Decimal] = Field(None, gt=0)
-    status: Optional[str] = Field(None, pattern=r"^(处理中|已发货|已送达)$")
+    status: Optional[str] = Field(None, pattern=r"^(处理中|已发货|已签收|售后处理中|已退款·交易关闭)$")
     order_date: Optional[date] = None
+
+# 2026-09-28 订正:上面 OrderCreate / OrderUpdate 的 status 字段均已移除
+# (状态改由运单状态纯派生,订单接口传 status/signed_date 一律 422)
 
 
 class KnowledgeCommit(BaseModel):
@@ -1595,7 +1603,7 @@ onMounted(() => {
 >
 > **"同风格"的判据**（与 §6.4.6 逐项对齐，实现时两页应当肉眼看上去是一套）：同一套表头样式（`bg-gray-50 text-gray-500 text-xs`）、同样的行高与 `border-b hover:bg-gray-50`、同样的 `StatusBadge` 徽章、同样的文字按钮操作列、同样的分页条。**订单表不加商品缩略图**——工单表是纯文本，加了图行高就不一致了，会破坏"相同风格"。
 
-**工具条**：搜索框（placeholder「搜索订单号/商品名/买家」）+ 状态下拉（全部/处理中/已发货/已送达）+ 「查询」绿按钮 + 「新增订单」绿按钮。
+**工具条**：搜索框（placeholder「搜索订单号/商品名/买家」）+ 状态下拉（全部/处理中/已发货/已签收/售后处理中/已退款·交易关闭）+ 「查询」绿按钮 + 「新增订单」绿按钮。
 
 **表格**：
 
@@ -1606,7 +1614,7 @@ onMounted(() => {
 | 3 | 品类 | `w-28` | `category` | 对应工单表的「类别」列 |
 | 4 | 买家 | `w-32` | `buyer_name` + 空格 + `buyer_code`（如「沈七 P001」）；`buyer_code` 为空只显示姓名 | 对应工单表的「用户原话」列位置 |
 | 5 | 金额 | `w-24` | `¥{Number(amount).toFixed(2)}`，**红色加粗**（对齐参考图卡片的价格样式） | |
-| 6 | 状态 | `w-24` | `StatusBadge`：处理中(amber) / 已发货(blue) / 已送达(green) | 对应工单表的「状态」列 |
+| 6 | 状态 | `w-24` | `StatusBadge`：处理中(amber) / 已发货(blue) / 已签收(teal) / 售后处理中(red) / 已退款·交易关闭(gray) | 对应工单表的「状态」列 |
 | 7 | 下单日期 | `w-28` | `order_date`（`Date` 列，`isoformat()` 直接就是 `YYYY-MM-DD`） | 对应工单表的「创建时间」列 |
 | 8 | 操作 | `w-28` | 「编辑」「删除」文字按钮（编辑主色、删除红色） | 对应工单表的「处理」列 |
 
@@ -1620,7 +1628,7 @@ onMounted(() => {
 | 买家姓名 | input | 必填 | 必填 |
 | 买家编码 | input + placeholder「P001」 | 选填 | 选填 |
 | 金额 | number input | 留空则取商品当前价 | 必填 |
-| 状态 | select 处理中/已发货/已送达 | 默认处理中 | 必填 |
+| 状态 | ~~select 处理中/已发货/已送达~~ | ~~默认处理中~~ | ~~必填~~ **2026-09-28 起该字段已从弹窗移除**（状态由运单派生，订单页不再有状态编辑入口） |
 | 下单日期 | `<input type="date">` | 默认今天 | 必填 |
 
 **分页条**：`共 {total} 条` + 每页条数下拉（12/24/48）+ 上一页/页码/下一页，右下角。边界规则见 §6.4.7。
@@ -2167,7 +2175,7 @@ echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, Leg
 | 用途 | 颜色 |
 |---|---|
 | 订单线 / 会话线 | 主色 `#16a34a`（订单）+ `#3b82f6`（会话） |
-| 订单状态（处理中/已发货/已送达） | `#f59e0b` / `#3b82f6` / `#10b981` |
+| 订单状态（处理中/已发货/已签收/售后处理中/已退款·交易关闭） | `#f59e0b` / `#3b82f6` / `#14b8a6` / `#ef4444` / `#6b7280` |
 | 工单状态（待处理/已解决） | `#ef4444` / `#10b981` |
 | 商品品类柱 | 主色 `#16a34a`（单色，参考图也是单色柱） |
 
@@ -2329,7 +2337,7 @@ function cleanBody(body) {
 | 买家名 | 从固定名单轮转：`沈七, 蒋六, 卫五, 楚四, 陈三, 冯二, 郑一, 吴十, 周九, 孙八, 钱七, 赵六, 李四, 王五, 张伟, 刘敏, 陈静, 杨帆` |
 | 买家编码 | `P{序号:03d}`，与买家名一一对应（`沈七→P001`） |
 | `user_id` | **现查**轮转：`SELECT id FROM users ORDER BY id LIMIT 4`，第 n 条填 `ids[n % len(ids)]`；查不到任何用户时填 `NULL`。**不写死 `[3,4,5,6]`**——那 4 个 id 今天存在，但库一旦重建/清过，写死会让 `orders.user_id` 外键直接报错、整个种子失败 |
-| 状态 | 均匀分布：`处理中` / `已发货` / `已送达` 各 6 条（保证控制台环形图三色都有） |
+| 状态 | 订单由 `seed_orders.py` **全建为「处理中」**，状态随后由 `seed_shipments.py` 按运单派生。实测分布：处理中 7 / 已发货 6 / 已签收 2 / 售后处理中 2 / 已退款·交易关闭 1（保证控制台环形图**五色**都有） |
 | 下单日期 | 从 **`datetime.now(timezone.utc).date()`** 往前推 `(index % 14)` 天——基准必须与 §5.4(a) 的图表日期轴完全一致（都用 UTC），否则折线错位一天。**必须落在近 14 天内**，否则控制台"近 7 日趋势"折线全是 0 |
 | 订单号 | `ORD-{index+1:03d}` → `ORD-001` … `ORD-018` |
 | 幂等策略 | **upsert 覆盖，不是"已存在则跳过"**：`INSERT ... ON CONFLICT (order_no) DO UPDATE SET order_date=EXCLUDED.order_date, status=EXCLUDED.status` |
@@ -2626,7 +2634,7 @@ assert stats["tickets"]["pending"] == await db_count(Ticket, Ticket.status == "�
 | `charts.trend.days` 长度 | `== 7`；`chart?days=14` → `== 14` |
 | `trend.orders` / `trend.conversations` 长度 | `== len(days)`（**补零逻辑**） |
 | `trend.days[-1]` | `== datetime.now(timezone.utc).strftime("%m-%d")` —— **必须写 UTC**。若测试侧用本地 `datetime.now()` 构造"今天"，在 UTC+8 的本地 00:00~08:00 窗口内两者差一天 → 该用例每天随机变红（后端按 §5.4a 用 UTC 生成日期轴） |
-| `order_status` 含全部 3 个状态 | 即使某状态 0 条也返回该项 |
+| `order_status` 含全部 5 个状态 | 即使某状态 0 条也返回该项 |
 | `ticket_status` 含全部 2 个状态 | 同上 |
 | `product_category` 按数量降序 | 首项是数量最多的品类 |
 | `days=0` / `days=31` | `422` |

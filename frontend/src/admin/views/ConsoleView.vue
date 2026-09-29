@@ -48,8 +48,11 @@ import LineChart from '../components/charts/LineChart.vue';
 import BarChart from '../components/charts/BarChart.vue';
 import DonutChart from '../components/charts/DonutChart.vue';
 
-// 颜色按后端保证的固定顺序绑定(spec §6.6)
-const ORDER_COLORS = ['#f59e0b', '#3b82f6', '#10b981', '#14b8a6'];   // 处理中/已发货/已送达/已签收
+// 颜色按后端保证的固定顺序绑定,与 ORDER_STATUSES(app/services/order_status.py)
+// 严格同序、同长度 —— 按下标取色,错位没有任何测试能发现。
+// ⚠️ 是【替换】不是追加:原下标 2 的 green(#10b981) 已随「已送达」删除。
+const ORDER_COLORS = ['#f59e0b', '#3b82f6', '#14b8a6', '#ef4444', '#6b7280'];
+//                     处理中      已发货     已签收     售后处理中  已退款·交易关闭
 const TICKET_COLORS = ['#ef4444', '#10b981'];             // 待处理/已解决
 
 const stats = ref(null);
